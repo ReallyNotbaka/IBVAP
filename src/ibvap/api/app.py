@@ -70,15 +70,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # optional frontend mount - existence checked at runtime (Phase 7 will always mount)
     try:
         from pathlib import Path
+        from typing import Any
 
         from fastapi.staticfiles import StaticFiles
+        from starlette.exceptions import HTTPException
 
         dist = Path("frontend/dist")
         if dist.exists() and (dist / "index.html").exists():
+
+            class SPAStaticFiles(StaticFiles):
+                async def get_response(self, path: str, scope: Any) -> Any:
+                    try:
+                        return await super().get_response(path, scope)
+                    except HTTPException as ex:
+                        if ex.status_code == 404 and not Path(path).suffix:
+                            return await super().get_response("index.html", scope)
+                        raise
+
             # mount after API routes so /api/* takes precedence
-            app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+            app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="frontend")
     except Exception:
         pass
+
 
     return app
 
