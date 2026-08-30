@@ -10,9 +10,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+JSON_TYPE = MutableDict.as_mutable(JSON().with_variant(JSONB, "postgresql"))
+UUID_TYPE = Uuid(as_uuid=True).with_variant(PG_UUID(as_uuid=True), "postgresql")
 
 
 class Base(DeclarativeBase):
@@ -33,7 +38,7 @@ def _uuid7() -> uuid.UUID:
 
 class Organization(Base):
     __tablename__ = "organizations"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -42,8 +47,8 @@ class Organization(Base):
 
 class Site(Base):
     __tablename__ = "sites"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
+    organization_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -56,8 +61,8 @@ class Site(Base):
 
 class Camera(Base):
     __tablename__ = "cameras"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    site_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
+    site_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="smartphone_ip_webcam")
     # endpoint WITHOUT credentials - credentials via credential_references
@@ -67,7 +72,7 @@ class Camera(Base):
     stream_epoch: Mapped[int] = mapped_column(default=0, nullable=False)
     desired_state: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
     observed_state: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
-    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -82,9 +87,9 @@ class Camera(Base):
 # PG outbox skeleton - full fields per ADR-0005 added in migration 0002
 class Outbox(Base):
     __tablename__ = "outbox"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
     topic: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
     dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -93,8 +98,8 @@ class Outbox(Base):
 
 class CredentialReference(Base):
     __tablename__ = "credential_references"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
     username_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -105,21 +110,21 @@ class CredentialReference(Base):
 
 class ConnectionTest(Base):
     __tablename__ = "connection_tests"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    camera_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID | None] = mapped_column(UUID_TYPE, ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True)
     endpoint: Mapped[str] = mapped_column(Text, nullable=False)
     protocol: Mapped[str | None] = mapped_column(String(32), nullable=True)
     result: Mapped[str] = mapped_column(String(32), nullable=False)
     reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     safe_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    probe: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    probe: Mapped[dict[str, Any] | None] = mapped_column(JSON_TYPE, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class CameraHealthSample(Base):
     __tablename__ = "camera_health_samples"
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID] = mapped_column(UUID_TYPE, ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
     stream_epoch: Mapped[int] = mapped_column(nullable=False)
     observed_state: Mapped[str] = mapped_column(String(32), nullable=False)
     last_frame_age_ms: Mapped[int | None] = mapped_column(nullable=True)

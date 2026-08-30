@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,8 +25,8 @@ class AppConfig(BaseModel):
 
 
 class DBConfig(BaseModel):
-    # asyncpg URL - must not contain credentials in logs
-    # Example: postgresql+asyncpg://user:pass@host:5432/ibvap
+    # asyncpg or aiosqlite URL - must not contain credentials in logs
+    # Example: postgresql+asyncpg://user:pass@host:5432/ibvap or sqlite+aiosqlite:///:memory:
     url: str = Field(
         default="postgresql+asyncpg://ibvap:ibvap@localhost:5432/ibvap",
         description="SQLAlchemy async DB URL",
@@ -34,6 +34,18 @@ class DBConfig(BaseModel):
     pool_size: int = Field(default=10, ge=1, le=100)
     max_overflow: int = Field(default=10, ge=0, le=100)
     echo: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        valid_prefixes = ("postgresql+asyncpg://", "sqlite+aiosqlite://", "sqlite://", "postgresql://")
+        if not any(v.startswith(prefix) for prefix in valid_prefixes):
+            raise ValueError(f"Database URL must start with one of {valid_prefixes}, got: {v}")
+        return v
+
+    @property
+    def is_sqlite(self) -> bool:
+        return "sqlite" in self.url
 
 
 class MediaConfig(BaseModel):

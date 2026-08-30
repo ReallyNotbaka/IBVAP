@@ -1,4 +1,4 @@
-"""PostgreSQL async engine + session factory - IBVAP durable store."""
+"""PostgreSQL and SQLite async engine + session factory - IBVAP durable store."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool, StaticPool
 
 from ibvap.config import Settings
 
@@ -22,13 +23,32 @@ def get_engine(settings: Settings | None = None) -> AsyncEngine:
     if _engine is not None:
         return _engine
     cfg = (settings or Settings()).db
-    _engine = create_async_engine(
-        cfg.url,
-        pool_size=cfg.pool_size,
-        max_overflow=cfg.max_overflow,
-        echo=cfg.echo,
-        future=True,
-    )
+    if "sqlite" in cfg.url:
+        connect_args = {"check_same_thread": False}
+        if ":memory:" in cfg.url or "mode=memory" in cfg.url:
+            _engine = create_async_engine(
+                cfg.url,
+                poolclass=StaticPool,
+                connect_args=connect_args,
+                echo=cfg.echo,
+                future=True,
+            )
+        else:
+            _engine = create_async_engine(
+                cfg.url,
+                poolclass=NullPool,
+                connect_args=connect_args,
+                echo=cfg.echo,
+                future=True,
+            )
+    else:
+        _engine = create_async_engine(
+            cfg.url,
+            pool_size=cfg.pool_size,
+            max_overflow=cfg.max_overflow,
+            echo=cfg.echo,
+            future=True,
+        )
     return _engine
 
 

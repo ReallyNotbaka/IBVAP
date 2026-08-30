@@ -33,9 +33,7 @@ def test_model_artifact_exists_and_valid(model_name: str, expected_info: dict[st
     size = model_path.stat().st_size
     min_size = int(expected_info["min_size"])
     max_size = int(expected_info["max_size"])
-    assert (
-        min_size <= size <= max_size
-    ), f"Model {model_name} size {size} not within [{min_size}, {max_size}]"
+    assert min_size <= size <= max_size, f"Model {model_name} size {size} not within [{min_size}, {max_size}]"
 
     hasher = hashlib.sha256()
     with open(model_path, "rb") as f:
@@ -43,6 +41,4 @@ def test_model_artifact_exists_and_valid(model_name: str, expected_info: dict[st
             hasher.update(chunk)
     actual_hash = hasher.hexdigest().lower()
 
-    assert (
-        actual_hash == expected_info["sha256"]
-    ), f"Model {model_name} hash mismatch: got {actual_hash}, expected {expected_info['sha256']}"
+    assert actual_hash == expected_info["sha256"], f"Model {model_name} hash mismatch: got {actual_hash}, expected {expected_info['sha256']}"
