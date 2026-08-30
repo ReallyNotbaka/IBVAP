@@ -75,3 +75,6 @@ frontend/node_modules/
 data/uploads/
 data/quarantine/
 
+
+data/evidence/
+
