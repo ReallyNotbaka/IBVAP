@@ -6,11 +6,12 @@ Spec 6: Bounded queues + sampling. This slice proves one video creates one persi
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-from ibvap.core.detector import MockPersonDetector
+from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.tracker import CentroidTracker
 from ibvap.core.zone_engine import DEFAULT_ZONE, is_intrusion
@@ -18,12 +19,22 @@ from ibvap.events.outbox import transactional_write
 
 
 class MiniPipeline:
-    """Camera-scoped pipeline - proves E2E slice without YOLO weights."""
+    """Camera-scoped pipeline - proves E2E slice with ONNX detector or mock detector."""
 
-    def __init__(self, camera_id: str, stream_epoch: int = 0) -> None:
+    def __init__(
+        self,
+        camera_id: str,
+        stream_epoch: int = 0,
+        detector: DetectorProvider | None = None,
+    ) -> None:
         self.camera_id = camera_id
         self.stream_epoch = stream_epoch
-        self.detector = MockPersonDetector()
+        if detector is not None:
+            self.detector = detector
+        elif Path("models/yolo26n.onnx").exists():
+            self.detector = ONNXDetectorProvider("models/yolo26n.onnx")
+        else:
+            self.detector = MockPersonDetector()
         self.tracker = CentroidTracker()
         self.tracker.stream_epoch = stream_epoch
         self.zone = DEFAULT_ZONE
@@ -48,7 +59,15 @@ class MiniPipeline:
 
         # detect
         detections = self.detector.detect(frame, self.frame_idx)
-        det_dicts = [{"bbox_norm": d.bbox_norm, "class_name": d.class_name, "class_id": d.class_id, "confidence": d.confidence} for d in detections]
+        det_dicts = [
+            {
+                "bbox_norm": d.bbox_norm,
+                "class_name": d.class_name,
+                "class_id": d.class_id,
+                "confidence": d.confidence,
+            }
+            for d in detections
+        ]
         tracks, new_entries, _ = self.tracker.update(det_dicts, timestamp=time.time())
 
         # zone check - bottom-center footpoint

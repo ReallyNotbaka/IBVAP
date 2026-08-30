@@ -6,13 +6,14 @@ import tempfile
 import cv2
 import numpy as np
 
+from ibvap.core.detector import MockPersonDetector
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.events.outbox import clear_all, list_events
 
 
 def test_pipeline_synthetic_frames_create_one_event() -> None:
     clear_all()
-    pipe = MiniPipeline(camera_id="cam-test-1", stream_epoch=0)
+    pipe = MiniPipeline(camera_id="cam-test-1", stream_epoch=0, detector=MockPersonDetector())
     # feed 30 synthetic frames - mock detector will fire between 5-20 and intrusion at central zone
     events = []
     for i in range(30):
@@ -53,7 +54,7 @@ def test_pipeline_from_real_video_file() -> None:
             writer.write(frame)
         writer.release()
         assert os.path.exists(tmp.name)
-        pipe = MiniPipeline(camera_id="cam-video-1")
+        pipe = MiniPipeline(camera_id="cam-video-1", detector=MockPersonDetector())
         evs = pipe.process_video_file(tmp.name, max_frames=16)
         # should have at least one intrusion as avatar crosses central zone
         assert len(evs) >= 1
