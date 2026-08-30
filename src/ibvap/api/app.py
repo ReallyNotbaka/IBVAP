@@ -9,7 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from ibvap.api.routes.cameras import router as cameras_router
+from ibvap.api.routes.events import router as events_router
 from ibvap.api.routes.health import router as health_router
+from ibvap.api.routes.sites import router as sites_router
+from ibvap.api.routes.uploads import router as uploads_router
+from ibvap.api.routes.ws import router as ws_router
 from ibvap.config import Settings
 from ibvap.logging_setup import setup_logging
 
@@ -56,6 +61,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(health_router)
+    app.include_router(cameras_router)
+    app.include_router(sites_router)
+    app.include_router(uploads_router)
+    app.include_router(events_router)
+    app.include_router(ws_router)
 
     # optional frontend mount - existence checked at runtime (Phase 7 will always mount)
     try:

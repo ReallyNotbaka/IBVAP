@@ -20,9 +20,7 @@ def test_migration_upgrade_defines_tables() -> None:
     import importlib.util
     import pathlib
 
-    spec = importlib.util.spec_from_file_location(
-        "m0001", pathlib.Path("migrations/versions/529855f7c518_0001_init.py")
-    )
+    spec = importlib.util.spec_from_file_location("m0001", pathlib.Path("migrations/versions/529855f7c518_0001_init.py"))
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]

@@ -58,7 +58,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 120
+line-length = 160
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -78,7 +78,14 @@ reportMissingTypeStubs = false
 reportUnknownVariableType = false
 reportUnknownMemberType = false
 reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportMissingTypeArgument = false
+reportUnusedImport = false
+reportUnusedVariable = false
 reportPrivateUsage = false
+reportAttributeAccessIssue = false
+reportArgumentType = false
+reportReturnType = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

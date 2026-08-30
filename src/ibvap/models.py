@@ -43,9 +43,7 @@ class Organization(Base):
 class Site(Base):
     __tablename__ = "sites"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
-    organization_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
-    )
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -71,9 +69,7 @@ class Camera(Base):
     observed_state: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
     meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     site: Mapped[Site] = relationship(back_populates="cameras")
 
@@ -93,3 +89,45 @@ class Outbox(Base):
     dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CredentialReference(Base):
+    __tablename__ = "credential_references"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
+    username_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    __table_args__ = (UniqueConstraint("camera_id", name="uq_cred_camera"),)
+
+
+class ConnectionTest(Base):
+    __tablename__ = "connection_tests"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    protocol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    safe_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    probe: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CameraHealthSample(Base):
+    __tablename__ = "camera_health_samples"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False)
+    stream_epoch: Mapped[int] = mapped_column(nullable=False)
+    observed_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    last_frame_age_ms: Mapped[int | None] = mapped_column(nullable=True)
+    source_fps: Mapped[float | None] = mapped_column(nullable=True)
+    analysis_fps: Mapped[float | None] = mapped_column(nullable=True)
+    decode_errors: Mapped[int] = mapped_column(default=0, nullable=False)
+    reconnect_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    queue_drops: Mapped[int] = mapped_column(default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (Index("ix_health_camera_time", "camera_id", "created_at"),)

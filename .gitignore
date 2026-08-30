@@ -71,3 +71,7 @@ compose.override.yaml
 frontend/tsconfig.tsbuildinfo
 frontend/node_modules/
 
+
+data/uploads/
+data/quarantine/
+
