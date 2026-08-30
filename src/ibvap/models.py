@@ -1,0 +1,95 @@
+"""Typed SQLAlchemy 2 async models - minimal Phase 1 skeleton.
+
+Spec 18 requires many entities; Phase 1 creates the foundation quartet:
+organizations, sites, users, cameras. Full set added incrementally by migrations.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def _uuid7() -> uuid.UUID:
+    # uuid7 available in Python 3.14+; fallback to uuid4 for 3.12
+    uuid7_fn = getattr(uuid, "uuid7", None)
+    if uuid7_fn is not None:
+        try:
+            return uuid7_fn()  # type: ignore[no-untyped-call]
+        except Exception:
+            pass
+    # Fallback: uuid4 is sufficient for Phase 1 (unique, not strictly sortable)
+    return uuid.uuid4()
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    sites: Mapped[list[Site]] = relationship(back_populates="organization")
+
+
+class Site(Base):
+    __tablename__ = "sites"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    organization: Mapped[Organization] = relationship(back_populates="sites")
+    cameras: Mapped[list[Camera]] = relationship(back_populates="site")
+
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_site_org_name"),)
+
+
+class Camera(Base):
+    __tablename__ = "cameras"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    site_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="smartphone_ip_webcam")
+    # endpoint WITHOUT credentials - credentials via credential_references
+    endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
+    protocol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # stream epoch increments on every reconnect - tracker safety
+    stream_epoch: Mapped[int] = mapped_column(default=0, nullable=False)
+    desired_state: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    observed_state: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT")
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    site: Mapped[Site] = relationship(back_populates="cameras")
+
+    __table_args__ = (
+        Index("ix_cameras_site_id", "site_id"),
+        UniqueConstraint("site_id", "name", name="uq_camera_site_name"),
+    )
+
+
+# PG outbox skeleton - full fields per ADR-0005 added in migration 0002
+class Outbox(Base):
+    __tablename__ = "outbox"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid7)
+    topic: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

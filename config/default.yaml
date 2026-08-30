@@ -1,0 +1,21 @@
+app:
+  name: IBVAP
+  version: 0.1.0
+  host: 0.0.0.0
+  port: 8000
+  data_dir: data
+  models_dir: models
+  log_dir: data/logs
+  log_level: INFO
+  frontend_url: http://localhost:5173
+  cors_origins:
+    - http://localhost:5173
+    - http://localhost:8000
+db:
+  url: postgresql+asyncpg://ibvap:ibvap@localhost:5432/ibvap
+  pool_size: 10
+  max_overflow: 10
+  echo: false
+media:
+  mediamtx_api_url: http://localhost:9997
+  site_cidr_allowlist: []

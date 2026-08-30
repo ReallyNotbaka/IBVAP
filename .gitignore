@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
+# uv
+.uv/
+
+# Env
+.env
+*.env.local
+
+# Data / runtime - keep committed placeholders, ignore generated
+data/db/*.db
+data/db/*.db-*
+data/frames/*.jpg
+data/frames/*.mp4
+data/logs/*.log*
+*.part
+*.pt
+*.onnx
+!models/.gitkeep
+!data/.gitkeep
+
+# Secrets
+config/local.yaml
+.config/secrets/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.parcel-cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+
+# Pyright
+pyrightconfig.json
+
+# Frontend typecheck
+frontend/tsbuildinfo
+
+# Compose overrides
+compose.override.yaml
+
+# Frontend tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+frontend/node_modules/
+
