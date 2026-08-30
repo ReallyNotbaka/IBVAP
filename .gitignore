@@ -25,6 +25,7 @@ data/logs/*.log*
 *.part
 *.pt
 *.onnx
+!models/*.onnx
 !models/.gitkeep
 !data/.gitkeep
 
