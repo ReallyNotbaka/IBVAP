@@ -56,6 +56,7 @@ class ONNXDetectorProvider:
         conf_threshold: float = 0.35,
         iou_threshold: float = 0.45,
         input_size: int = 640,
+        providers: list[str] | None = None,
     ) -> None:
         self._model_path = model_path
         self._conf_threshold = conf_threshold
@@ -65,19 +66,23 @@ class ONNXDetectorProvider:
 
         available = ort.get_available_providers()
         try:
-            if "DmlExecutionProvider" in available:
+            if providers is not None:
+                self._session = ort.InferenceSession(
+                    self._model_path,
+                    providers=providers,
+                )
+            elif "DmlExecutionProvider" in available:
                 self._session = ort.InferenceSession(
                     self._model_path,
                     providers=["DmlExecutionProvider", "CPUExecutionProvider"],
                 )
-                active = self._session.get_providers()
-                self._runtime = "directml" if "DmlExecutionProvider" in active else "cpu"
             else:
                 self._session = ort.InferenceSession(
                     self._model_path,
                     providers=["CPUExecutionProvider"],
                 )
-                self._runtime = "cpu"
+            active = self._session.get_providers()
+            self._runtime = "directml" if "DmlExecutionProvider" in active else "cpu"
         except Exception:
             self._session = ort.InferenceSession(
                 self._model_path,
