@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 
 type Event = { id: string; camera_id: string; event_type: string; zone_id?: string; confidence?: number };
+type Camera = { id: string; name: string; endpoint: string; observed_state: string; stream_epoch: number };
 
 export function Monitor() {
   const [events, setEvents] = useState<Event[]>([]);
+  const [cameras, setCameras] = useState<Camera[]>([]);
   const [overlay, setOverlay] = useState<"minimal" | "operational" | "diagnostic">("operational");
 
   useEffect(() => {
@@ -11,7 +13,15 @@ export function Monitor() {
       .then((r) => r.json())
       .then((data) => setEvents(Array.isArray(data) ? data : []))
       .catch(() => {});
+
+    fetch("/api/v1/cameras")
+      .then((r) => r.json())
+      .then((data) => setCameras(Array.isArray(data) ? data : []))
+      .catch(() => {});
   }, []);
+
+  const activeCam = cameras[0];
+  const streamUrl = activeCam?.endpoint || "";
 
   return (
     <main className="min-h-screen bg-slate-50">
@@ -30,15 +40,23 @@ export function Monitor() {
       <div className="mx-auto max-w-6xl p-6 grid grid-cols-3 gap-6">
         {/* dominant player */}
         <div className="col-span-2">
-          <div data-testid="live-player" className="aspect-video rounded-2xl bg-slate-900 grid place-items-center text-white">
-            <div className="text-center">
-              <div className="text-sm">Live player — WHEP/HLS when MediaMTX available</div>
-              <div className="mt-1 text-xs text-slate-400">Synthetic preview in Phase 3 (real frame decoded)</div>
-              <div className="mt-2 text-xs">Overlay: {overlay} • Zone: Restricted • Track IDs • Direction</div>
-            </div>
+          <div data-testid="live-player" className="aspect-video rounded-2xl bg-slate-900 overflow-hidden relative grid place-items-center text-white">
+            {streamUrl.startsWith("http") ? (
+              <img
+                src={streamUrl}
+                alt={activeCam?.name || "Live Camera"}
+                className="w-full h-full object-contain"
+              />
+            ) : (
+              <div className="text-center">
+                <div className="text-sm">Live player — WHEP/HLS when MediaMTX available</div>
+                <div className="mt-1 text-xs text-slate-400">Synthetic preview in Phase 3 (real frame decoded)</div>
+                <div className="mt-2 text-xs">Overlay: {overlay} • Zone: Restricted • Track IDs • Direction</div>
+              </div>
+            )}
           </div>
           <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-            <span>Camera: Entrance phone • STREAMING • epoch 0</span>
+            <span>Camera: {activeCam?.name || "Entrance phone"} • {activeCam?.observed_state || "STREAMING"} • epoch {activeCam?.stream_epoch ?? 0}</span>
             <span>Last frame 120ms • Analysis 12 FPS • Inference 18ms</span>
           </div>
         </div>

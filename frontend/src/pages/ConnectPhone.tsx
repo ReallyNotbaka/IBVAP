@@ -25,8 +25,14 @@ export function ConnectPhone() {
       const res = await fetch("/api/v1/cameras/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint: url, username: username || undefined, password: password || undefined }),
+        body: JSON.stringify({
+          endpoint: url,
+          username: username || undefined,
+          password: password || undefined,
+          site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+        }),
       });
+
       const data = (await res.json()) as TestResult;
       setResult(data);
       if (data.result === "ok") setStep(4);
@@ -170,28 +176,39 @@ export function ConnectPhone() {
 
         {step === 4 && result?.probe && (
           <section className="rounded-2xl border border-slate-200 bg-white p-6">
-            <h2 className="text-base font-semibold">Confirm preview</h2>
-            <div className="mt-3 rounded-xl bg-slate-900 text-white p-4 text-sm">
-              <div>Codec: {result.probe.codec}</div>
-              <div>
-                Resolution: {result.probe.width}×{result.probe.height}
+            <h2 className="text-base font-semibold">Confirm live preview</h2>
+            <div className="mt-3 rounded-xl bg-slate-900 text-white p-4 text-sm space-y-3">
+              {url.startsWith("http") && (
+                <div className="overflow-hidden rounded-lg bg-black flex items-center justify-center border border-slate-800">
+                  <img
+                    src={url}
+                    alt="Live Phone Camera Preview"
+                    className="max-h-72 w-full object-contain"
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-2 text-xs pt-1 border-t border-slate-800">
+                <div><span className="text-slate-400">Codec:</span> {result.probe.codec}</div>
+                <div><span className="text-slate-400">Resolution:</span> {result.probe.width}×{result.probe.height}</div>
+                <div><span className="text-slate-400">FPS:</span> {result.probe.fps ?? "Live"}</div>
               </div>
-              <div>FPS: {result.probe.fps ?? "unknown"}</div>
-              <div className="mt-2 text-xs text-slate-400">Preview would show real decoded frame here (no placeholder).</div>
             </div>
-            <a
-              href="/"
-              className="mt-4 inline-flex h-10 items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-medium text-white"
-              data-testid="continue"
-            >
-              Continue
-            </a>
-            <button onClick={() => setStep(2)} className="ml-3 text-sm underline">
-              Edit connection
-            </button>
+            <div className="mt-4 flex items-center gap-3">
+              <a
+                href="/monitor"
+                className="inline-flex h-10 items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-medium text-white hover:bg-teal-800"
+                data-testid="continue"
+              >
+                Go to Monitoring
+              </a>
+              <button onClick={() => setStep(2)} className="text-sm text-slate-600 underline">
+                Edit connection
+              </button>
+            </div>
           </section>
         )}
       </div>
     </main>
   );
 }
+
