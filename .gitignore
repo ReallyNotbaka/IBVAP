@@ -22,6 +22,7 @@ data/db/*.db-*
 data/frames/*.jpg
 data/frames/*.mp4
 data/logs/*.log*
+data/bin/
 *.part
 *.pt
 *.onnx
