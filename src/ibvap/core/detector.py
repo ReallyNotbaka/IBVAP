@@ -117,20 +117,14 @@ class ONNXDetectorProvider:
         dw = (self._input_size - new_unpad_w) / 2.0
         dh = (self._input_size - new_unpad_h) / 2.0
 
-        resized = (
-            cv2.resize(frame, (new_unpad_w, new_unpad_h), interpolation=cv2.INTER_LINEAR)
-            if (orig_w, orig_h) != (new_unpad_w, new_unpad_h)
-            else frame
-        )
+        resized = cv2.resize(frame, (new_unpad_w, new_unpad_h), interpolation=cv2.INTER_LINEAR) if (orig_w, orig_h) != (new_unpad_w, new_unpad_h) else frame
 
         top = int(round(dh - 0.1))
         bottom = self._input_size - new_unpad_h - top
         left = int(round(dw - 0.1))
         right = self._input_size - new_unpad_w - left
 
-        letterboxed = cv2.copyMakeBorder(
-            resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
-        )
+        letterboxed = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
         rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
         blob = rgb.astype(np.float32) / 255.0
         blob = np.transpose(blob, (2, 0, 1))
@@ -190,9 +184,7 @@ class ONNXDetectorProvider:
             boxes_for_nms.append([float(x1_lb[i]), float(y1_lb[i]), float(w[i]), float(h[i])])
 
         scores_for_nms = valid_scores.tolist()
-        indices = cv2.dnn.NMSBoxes(
-            boxes_for_nms, scores_for_nms, self._conf_threshold, self._iou_threshold
-        )
+        indices = cv2.dnn.NMSBoxes(boxes_for_nms, scores_for_nms, self._conf_threshold, self._iou_threshold)
         if len(indices) == 0:
             return []
 

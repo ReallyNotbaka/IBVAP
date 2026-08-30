@@ -115,9 +115,7 @@ class FaceDetector:
             bbox_norm = (float(x1), float(y1), float(x2), float(y2))
 
             # 5 facial landmarks: right eye, left eye, nose tip, right mouth corner, left mouth corner
-            landmarks: list[tuple[float, float]] = [
-                (float(face[4 + 2 * j]), float(face[5 + 2 * j])) for j in range(5)
-            ]
+            landmarks: list[tuple[float, float]] = [(float(face[4 + 2 * j]), float(face[5 + 2 * j])) for j in range(5)]
 
             # Quality metrics: crop ROI
             px1 = max(0, int(round(x)))

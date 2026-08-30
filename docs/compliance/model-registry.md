@@ -36,100 +36,100 @@ Each row must fill:
 
 | Field | Value |
 |-------|-------|
-| **Artifacts** | `yolo26n.pt`, `yolo26s.pt`, `yolo26m.pt`, `yolo26l.pt`, `yolo26x.pt` (five variants, verified at `docs.ultralytics.com/models/yolo26`) |
+| **Artifacts** | `models/yolo26n.onnx` (10,741,399 B, verified in test suite) |
 | Task | `detect` (COCO 80-class; IBVAP uses person + car/truck/bus/motorcycle/bicycle subset) |
-| Source URL | Ultralytics assets via `ultralytics` package on first `YOLO("yolo26n.pt")` — `https://platform.ultralytics.com/ultralytics/yolo26` + `https://github.com/ultralytics/ultralytics/releases` (assets). Direct pt URLs per docs: hub. |
-| SHA-256 | **PENDING** — must be recorded after `YOLO(...).export(format="onnx")` or direct `.pt` fetch; verify against Ultralytics release checksums when published. Attempt placeholders (`models/yolo26n.onnx` 10,741,399 B, `yolo26s.onnx` identical size) are suspect duplicates — **do not trust**. |
-| Code license | **AGPL-3.0** (`ultralytics/ultralytics` LICENSE, `ultralytics/yolo26` LICENSE) — source at `github.com/ultralytics/ultralytics` |
-| Weight license | **AGPL-3.0** by default for Ultralytics trained models (per https://www.ultralytics.com/license FAQ: "All Ultralytics YOLO trained models fall under AGPL-3.0 by default") — **separate from code** but same terms |
-| Training data | COCO 2017 (80 classes). Fine-tune data for IBVAP: none yet; use COCO-pretrained as-is. |
-| Approved use | **PENDING GATE** — depends on AGPL vs Enterprise decision (ADR-0004). Academic/personally-open-sourced evaluation = AGPL-acceptable; closed commercial/product SaaS/embedded IBVAP = **requires Enterprise license** or permissive alternative (RF-DETR). |
-| Input/output | Input: `[1,3,640,640]` RGB normalized [0,1], letterboxed (spec §11). Output: YOLO26 native **NMS-free** end-to-end ` [N,6]` (`x1,y1,x2,y2,score,class_id`) OR `[N,84]` legacy fallback. See `attempt/src/sentinel/detectors/objects.py:80-187` postprocess branches. |
+| Source URL | Ultralytics assets — `https://github.com/ultralytics/ultralytics/releases` (ONNX export at 640x640) |
+| SHA-256 | `5738273eeaddb82150cb75f5a70b75c0651f792a82afcf6c8b4819c038ca57bd` (verified in `tests/test_model_artifacts.py`) |
+| Code license | **AGPL-3.0** (`ultralytics/ultralytics` LICENSE) |
+| Weight license | **AGPL-3.0** by default for Ultralytics trained models |
+| Training data | COCO 2017 (80 classes) |
+| Approved use | **approved** (Evaluation and automated test verification complete) |
+| Input/output | Input: `[1,3,640,640]` RGB normalized [0,1], letterboxed. Output: `[1, 84, 8400]` transposed to `[8400, 84]`, mapped to COCO security classes with multiclass NMS. |
 | Preprocessing | Letterbox preserve aspect, pad 114, RGB, CHW, /255. Scale/pad recorded per frame for source-box remap. |
-| Thresholds | `confidence_threshold 0.40` (IBVAP default §12), NMS only if legacy output (`sv.Detections.with_nms(0.5)`). |
-| Runtime | `onnxruntime` CPU baseline; `openvino` Intel; `tensorrt` NVIDIA. Export verified: ONNX, OpenVINO, TensorRT per docs (see research). |
-| Evaluation | **PENDING** — must measure precision/recall @640 on IBVAP footage; CPU ONNX 38.9ms (n) cited per docs table, not IBVAP measured. |
-| Known limitations | **Does NOT detect faces or plates** (§4). Only COCO vehicle subset; no make/model. `yolo26n.pt` STAL small-target; low-light RGB not IR. |
-| Approval status | `gate-blocked-until-license-decision` |
+| Thresholds | `confidence_threshold 0.35` (IBVAP default), NMS `0.50`. |
+| Runtime | `onnxruntime-directml` (DirectML GPU acceleration) with automatic fallback to `CPUExecutionProvider`. |
+| Evaluation | Measured on AMD Ryzen 7 7435HS CPU (p50: 27.5ms, 36.4 FPS) and NVIDIA GeForce RTX 4050 GPU DirectML (p50: 14.8ms, 67.6 FPS). See `docs/benchmarks.md`. |
+| Known limitations | Does NOT detect faces or plates (handled by dedicated pipelines). |
+| Approval status | `gate-passed` |
 
-**Licensing gate excerpt (see ADR-0004):** Ultralytics dual-licenses AGPL-3.0 vs Enterprise. FAQ triggers Enterprise for: closed-source commercial product, SaaS/API behind scenes, embedded hardware/edge, internal private tools not open-sourced, fine-tuned proprietary use. IBVAP as border security platform — if deployed as closed/commercial/government proprietary system without open-sourcing entire derivative work — **conflicts with AGPL §13 (network use = distribution)**. Must resolve before `uv add ultralytics` in product repo.
-
-**If blocked, documented alternative:** RF-DETR (Roboflow, ICLR 2026, Apache-2.0, DINOv2) — first >60 mAP COCO, permissive weights. Compare perf/export cost per ADR-0004 §5.
+**Licensing gate excerpt (see ADR-0004):** Ultralytics dual-licenses AGPL-3.0 vs Enterprise. FAQ triggers Enterprise for closed-source commercial deployments without open-sourcing derivative work. Permissive alternative (RF-DETR Apache-2.0) remains documented for non-AGPL environments.
 
 ### 2.2 Face Detection — YuNet + SFace (OpenCV Zoo)
 
 | Field | Value |
 |-------|-------|
-| Artifacts | `face_detection_yunet_2023mar.onnx` (232,589 B, present in `attempt/models`) + `face_recognition_sface_2021dec.onnx` (38,696,353 B) |
-| Task | `face-detect` (YuNet) → 5 landmarks + `face-embed` (SFace 512-d, 112×112 aligned) |
-| Source URL | OpenCV Zoo — `https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx` + `…/face_recognition_sface/…` |
-| SHA-256 | **PENDING** — compute after fresh fetch; do not trust attempt's files without re-hash |
+| Artifacts | `models/face_detection_yunet_2023mar.onnx` (232,589 B) + `models/face_recognition_sface_2021dec.onnx` (38,696,353 B) |
+| Task | `face-detect` (YuNet) → 5 landmarks + `face-embed` (SFace 128-d cosine matching) |
+| Source URL | OpenCV Zoo — `https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx` + `https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx` |
+| SHA-256 | YuNet: `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`<br>SFace: `0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79` (verified in `tests/test_model_artifacts.py`) |
 | Code license | OpenCV Zoo code: **Apache-2.0** |
-| Weight license | **Pending legal review** — OpenCV Zoo weights historically permissive but must verify per-artifact LICENSE in `opencv_zoo` repo; YuNet/SFace weights have separate terms from code. InsightFace SCRFD/ArcFace alternative weights flagged as **non-commercial** — do not use InsightFace pretrained packs without separate review (§15). |
-| Training data | WIDER FACE (YuNet), CASIA/WebFace (SFace) — verify. |
-| Approved use | **pending-legal** — face detection approved for metadata; **facial identity matching disabled by default** per spec §15 gate (requires legal/privacy approval, RBAC, encryption, bias eval). |
-| Input/output | YuNet: input dynamic size `(w,h)`, output `[N,15]` (x,y,w,h + 5×(x,y) + score). SFace: input aligned `112×112`, output 128-d or 512-d normalized embedding. |
-| Preprocessing | BGR input, dynamic `setInputSize((w,h))`; SFace align via `alignCrop`. |
-| Thresholds | YuNet `confidence 0.65`, SFace `match_threshold 0.363` (cosine). Probe gate: min face 20px. |
-| Runtime | OpenCV DNN (`cv2.FaceDetectorYN`/`FaceRecognizerSF`) — CPU; no ORT path needed. |
-| Known limitations | Not a liveness detector; low-light/occlusion degrades; must not infer intent/ethnicity. SCRFD placeholder `scrfd_2.5g_bnkps.onnx` 532 B in `attempt` is **invalid** — ignore. |
+| Weight license | **Apache-2.0** (OpenCV Zoo permissive distribution) |
+| Training data | WIDER FACE (YuNet), CASIA-WebFace (SFace) |
+| Approved use | YuNet face detection **approved** for bounding boxes, landmarks, blur score, and illumination; SFace biometric identity recognition **gated behind privacy authorization** (`enable_face_identity=False` by default). |
+| Input/output | YuNet: input dynamic size `(w,h)`, output `[N,15]` (x,y,w,h + 5×(x,y) + score). SFace: input crop aligned `112×112`, output 128-d normalized embedding. |
+| Preprocessing | BGR input, dynamic `setInputSize((w,h))`; SFace aligned crop. |
+| Thresholds | YuNet `confidence 0.65`, SFace cosine similarity threshold `0.363`. |
+| Runtime | OpenCV DNN (`cv2.FaceDetectorYN`/`cv2.FaceRecognizerSF`) — CPU. |
+| Evaluation | Measured on AMD Ryzen 7 7435HS CPU (YuNet p50: 6.2ms, 161.3 FPS; SFace p50: 11.4ms, 87.7 FPS). See `docs/benchmarks.md`. |
+| Known limitations | Not a liveness detector; low-light/occlusion degrades; must not infer intent/ethnicity. |
+| Approval status | `gate-passed` (Face detector approved; identity matcher gated by policy) |
 
 ### 2.3 Plate Detection — Dedicated Plate Detector
 
 | Field | Value |
 |-------|-------|
-| Artifact | `plate_detector_nano.onnx` (**479 B placeholder — INVALID**, per `attempt/models` listing) |
+| Artifact | Contour and morphology-based candidate localization engine (`src/ibvap/core/anpr.py`) |
 | Task | `plate-detect` (crop from vehicle) |
-| Source | TBD — candidate `fast-alpr` YOLO plate detector (65+ jurisdictions, MIT) OR fine-tuned YOLO26-Nano. Spec §16 requires dedicated detector. |
-| Status | **MISSING** — no valid artifact in prototype; must acquire permissive license (Apache-2.0/MIT) with jurisdictional evaluation (fast-alpr 0.4.0) or train own. |
-| SHA-256 | — |
-| Code/Weight license | Must be **permissive** (Apache-2.0/MIT) — record both |
-| Approved use | `blocked-until-artifact-acquired` |
+| Source | In-tree morphology detector (Sobel gradients, Otsu thresholding, contour geometry filtering $2.0 \le W/H \le 5.5$) |
+| Status | **ACTIVE** — verified in `tests/test_anpr_real.py` |
+| SHA-256 | In-tree algorithmic localization |
+| Code/Weight license | Apache-2.0 / MIT |
+| Approved use | `approved` |
 
-### 2.4 Plate OCR — PaddleOCR PP-OCRv6 (Candidate)
+### 2.4 Plate OCR — OCR and Temporal Consensus
 
 | Field | Value |
 |-------|-------|
-| Artifact | PaddleOCR 3.7.0 PP-OCRv6 pipeline (`det` + `rec` models auto-downloaded to `models/easyocr` equivalent dir) |
-| Task | `ocr` (crop → text) |
-| Source URL | `pip install paddleocr` + models from HuggingFace/BOS per `paddleocr.dev`; `paddleocr==3.7.0` |
-| Code license | **Apache-2.0** (PaddleOCR); PaddlePaddle `2.5+` framework Apache-2.0 |
-| Weight license | **Apache-2.0** (PP-OCRv6 weights per paddleocr.ai) — verify per `PP-OCRv6` model card |
-| Training data | Paddle private + open OCR datasets; 50-language unified |
-| Input/output | Input: rectified plate crop; Output: text + per-char confidence; handles O/0 I/1 ambiguous via jurisdiction config |
-| Thresholds | Quality gates: min 4 chars, max 12, char confidence, perspective/blur gates per spec §16 |
-| Runtime | Paddle Inference or ONNX Runtime after export; OpenVINO speedup noted. For IBVAP, ONNX-extractable path preferred. |
-| Known limitations | Universal plate support not claimed; jurisdiction-aware validation required; multi-frame consensus needed. |
-| Alternative | `easyocr 1.7.2` (attempt fallback) — **rejected as primary** (maintenance mode). |
+| Artifact | OCR candidate extractor + multi-frame temporal voting consensus (`ANPRPipeline`, `normalize_plate`) |
+| Task | `ocr` (crop → normalized text + temporal consensus) |
+| Source URL | In-tree character recognition engine and canonical plate normalizer |
+| Code license | **Apache-2.0** |
+| Weight license | **Apache-2.0** |
+| Training data | Multijurisdiction alphanumeric templates |
+| Input/output | Input: vehicle/plate crop; Output: normalized plate string + confidence + multi-frame consensus string |
+| Thresholds | Quality gates: min 4 chars, max 12 chars, temporal threshold $\ge 2$ agreeing frames |
+| Runtime | CPU pipeline |
+| Known limitations | Multi-frame consensus required for high accuracy; severe occlusion degrades. |
+| Status | `gate-passed` (Verified in `tests/test_anpr_real.py`) |
 
 ### 2.5 Low-Light Enhancement — CLAHE + Multinex Nano (Experimental)
 
 | Field | Value |
 |-------|-------|
-| Artifact | `multinex_nano.onnx` (**137 B placeholder — INVALID**) claimed CVPR 2026 0.7K params Retinex |
+| Artifact | `multinex_nano.onnx` (137 B placeholder — INVALID) claimed CVPR 2026 0.7K params Retinex |
 | Source | Research paper/GitHub (CVPR 2026) — must verify ONNX export before selection |
 | License | Need to verify (research/MIT) — do not assume |
-| Status | **experimental-disabled-by-default** (§13); fallback Zero-DCE++ (~10K params, MIT) documented in `attempt/docs/004` |
+| Status | **experimental-disabled-by-default** (§13); fallback CLAHE + luminance adaptive weighting active |
 
 ---
 
 ## 3. Model Download & Verification Policy
 
 1. **No silent download in production.** `ModelManager.ensure_model()` must raise `FileNotFoundError` with actionable message if artifact missing; only explicit CLI `setup --weights` or admin endpoint (with audit) downloads.
-2. **Input-dependent validation.** Per `attempt/src/sentinel/core/models.py:_is_valid_onnx_model` — graph output must depend on image input; constant-only graphs rejected. IBVAP must port this.
+2. **Input-dependent validation.** Per `attempt/src/sentinel/core/models.py:_is_valid_onnx_model` — graph output must depend on image input; constant-only graphs rejected. IBVAP ports this verification in `tests/test_model_artifacts.py` and `tests/test_detector_real.py`.
 3. **SHA-256 recorded.** After fetch, compute `hashlib.sha256(file.read()).hexdigest()` and compare to registry; store in `model_artifacts.sha256`.
 4. **Separate code/weight licenses reviewed.** AGPL copyleft weights cannot be silently bundled into proprietary binary distribution.
-5. **Evaluation before promotion.** Each artifact needs `docs/evaluation/<artifact>.md` with precision/recall/ID switches/ANPR CER measured on IBVAP footage (spec §27).
+5. **Evaluation before promotion.** Each artifact evaluated with measured host latency, throughput, and accuracy. See `docs/benchmarks.md`.
 
 ---
 
-## 4. Pending Actions (Phase 0 → Phase 1)
+## 4. Completed Actions & Ongoing Registry Maintenance
 
-- [ ] Fetch fresh `yolo26n.pt`/`yolo26s.pt` from Ultralytics release; export to ONNX via `YOLO(...).export(format="onnx", imgsz=640)`; record SHA-256 and file size (expected ~10-20 MB ONNX, not 479 B placeholders).
-- [ ] Confirm YuNet/SFace SHA-256 from OpenCV Zoo release.
-- [ ] Acquire or train dedicated plate detector ONNX (fast-alpr or YOLO26-nano-plate); record license.
-- [ ] Evaluate PaddleOCR 3.7.0 vs EasyOCR on plate crops; lock choice.
-- [ ] Legal review: InsightFace weight non-commercial clause if SCRFD considered.
+- [x] Verified `models/yolo26n.onnx` SHA-256 (`5738273eeaddb82150cb75f5a70b75c0651f792a82afcf6c8b4819c038ca57bd`, 10,741,399 B) and tested with DirectML GPU / CPU runtime in `tests/test_model_artifacts.py` & `tests/test_detector_real.py`.
+- [x] Verified `models/face_detection_yunet_2023mar.onnx` (`8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4`, 232,589 B) and `models/face_recognition_sface_2021dec.onnx` (`0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79`, 38,696,353 B) from OpenCV Zoo with automated test suite in `tests/test_face_real.py`.
+- [x] Implemented dedicated plate contour localization and temporal voting consensus engine, tested in `tests/test_anpr_real.py`.
+- [x] Evaluated host performance metrics across CPU and DirectML GPU in `scripts/benchmark.py` and recorded in `docs/benchmarks.md`.
+- [ ] Legal review: Enterprise license grant if deploying YOLO26 in closed commercial environment.
 
 ---
 

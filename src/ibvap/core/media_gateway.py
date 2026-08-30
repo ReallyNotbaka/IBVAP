@@ -192,11 +192,11 @@ class MockMediaMTXServer:
                         "items": items,
                     }
                 elif method == "POST" and raw_path.startswith("/v3/config/paths/add/"):
-                    name = unquote(raw_path[len("/v3/config/paths/add/"):])
+                    name = unquote(raw_path[len("/v3/config/paths/add/") :])
                     self.paths[name] = body_json
                     resp_data = {"status": "ok", "name": name, "item": body_json}
                 elif method in ("POST", "DELETE") and raw_path.startswith("/v3/config/paths/delete/"):
-                    name = unquote(raw_path[len("/v3/config/paths/delete/"):])
+                    name = unquote(raw_path[len("/v3/config/paths/delete/") :])
                     existed = self.paths.pop(name, None) is not None
                     if existed:
                         resp_data = {"status": "ok", "name": name}
@@ -204,7 +204,7 @@ class MockMediaMTXServer:
                         status_code = 404
                         resp_data = {"error": f"path '{name}' not found"}
                 elif method == "GET" and raw_path.startswith("/v3/paths/get/"):
-                    name = unquote(raw_path[len("/v3/paths/get/"):])
+                    name = unquote(raw_path[len("/v3/paths/get/") :])
                     if name in self.paths:
                         resp_data = {"name": name, **self.paths[name]}
                     else:
