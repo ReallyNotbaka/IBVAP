@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ibvap.config import Settings
+from ibvap.config import DBConfig, Settings
 
 
 def test_default_settings_load() -> None:
+    # Internal defaults check
+    db_default = DBConfig()
+    assert db_default.url.startswith("postgresql+asyncpg://")
+    assert "localhost:5432" in db_default.url
+
     s = Settings()
     assert s.app.name == "IBVAP"
     assert s.app.version == "0.1.0"
     assert s.app.port == 8000
-    assert s.db.url.startswith("postgresql+asyncpg://")
-    assert "localhost:5432" in s.db.url
+    assert s.db.url.startswith("postgresql+asyncpg://") or s.db.url.startswith("sqlite+aiosqlite://")
     assert s.media.mediamtx_api_url.startswith("http://")
 
 
@@ -40,4 +44,5 @@ def test_missing_yaml_returns_defaults(tmp_path: Path) -> None:
 def test_cors_origins_not_wildcard() -> None:
     s = Settings()
     assert "*" not in s.app.cors_origins
+
     assert len(s.app.cors_origins) >= 1
