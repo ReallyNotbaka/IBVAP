@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export function EmptyState() {
+export function EmptyState({ onConnect }: { onConnect?: () => void }) {
   const [otherOpen, setOtherOpen] = useState(false);
 
   return (
@@ -30,13 +30,24 @@ export function EmptyState() {
 
           {/* Exactly two prominent actions — per spec */}
           <div className="mt-8 grid gap-3">
-            <a
-              href="/connect/phone"
-              data-testid="cta-connect-phone"
-              className="inline-flex h-12 items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-medium text-white hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2"
-            >
-              Connect phone camera
-            </a>
+            {onConnect ? (
+              <button
+                type="button"
+                onClick={onConnect}
+                data-testid="cta-connect-phone"
+                className="inline-flex h-12 items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-medium text-white hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2"
+              >
+                Connect phone camera
+              </button>
+            ) : (
+              <a
+                href="/connect/phone"
+                data-testid="cta-connect-phone"
+                className="inline-flex h-12 items-center justify-center rounded-xl bg-teal-700 px-6 text-sm font-medium text-white hover:bg-teal-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 focus-visible:ring-offset-2"
+              >
+                Connect phone camera
+              </a>
+            )}
             <a
               href="/use/footage"
               data-testid="cta-use-footage"
