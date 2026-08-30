@@ -51,9 +51,19 @@ def probe_url(
     Raises ProbeError on unsupported codec / no video track / timeout.
     """
     start = time.monotonic()
-    opts: dict[str, str] = {"timeout": str(int(timeout * 1_000_000))}  # ffmpeg us
+    # FFmpeg-level network timeout in microseconds.
+    # Do NOT pass timeout= kwarg to av.open() — PyAV's I/O callback
+    # triggers AVERROR_EXIT on continuous MJPEG streams before negotiation
+    # completes, since multipart/x-mixed-replace has no finite container end.
+    us = str(int(timeout * 1_000_000))
+    opts: dict[str, str] = {
+        "timeout": us,          # generic ffmpeg I/O timeout (microseconds)
+        "stimeout": us,         # RTSP socket timeout (microseconds)
+        "analyzeduration": us,  # limit format analysis time
+        "probesize": "500000",  # 500KB probe buffer (enough for MJPEG headers)
+    }
     try:
-        container = av.open(url, options=opts, timeout=timeout)  # type: ignore[call-arg]
+        container = av.open(url, options=opts)
     except Exception as e:
         raise ProbeError(f"Failed to open: {e}", code="open_failed") from e
 
