@@ -59,6 +59,9 @@ htmlcov/
 coverage.xml
 *.cover
 .hypothesis/
+frontend/test-results/
+frontend/playwright-report/
+
 
 # Pyright
 pyrightconfig.json
