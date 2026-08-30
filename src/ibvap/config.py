@@ -22,6 +22,7 @@ class AppConfig(BaseModel):
     frontend_url: str = "http://localhost:5173"
     # CORS allowlist - comma-separated origins, validated at startup
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
+    enable_face_identity: bool = False
 
 
 class DBConfig(BaseModel):
