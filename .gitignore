@@ -35,6 +35,8 @@ models/yolo26[smlx]*.onnx
 server*.log
 *.log
 frontend/ui-inspection-output/
+frontend/scripts/
+docs/superpowers/
 
 # Secrets
 config/local.yaml

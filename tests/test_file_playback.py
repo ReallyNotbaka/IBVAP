@@ -49,8 +49,8 @@ def cleanup_cameras():
 
 def test_file_playback_native_fps_and_continuous_looping() -> None:
     """Video file playback must decode at real-time FPS and loop continuously past EOF."""
-    test_video = Path("data/test_upload_face.mp4")
-    assert test_video.exists(), "Test video data/test_upload_face.mp4 must exist"
+    test_video = Path("tests/fixtures/test_upload_face.mp4")
+    assert test_video.exists(), "Test video tests/fixtures/test_upload_face.mp4 must exist"
 
     cam_id = "test-cam-playback-loop"
     _CAMERAS[cam_id] = {
@@ -90,7 +90,7 @@ def test_file_playback_native_fps_and_continuous_looping() -> None:
 
 def test_decoupled_analysis_does_not_block_decode_loop() -> None:
     """Simulated slow inference must not choke video playback FPS."""
-    test_video = Path("data/test_upload_face.mp4")
+    test_video = Path("tests/fixtures/test_upload_face.mp4")
     cam_id = "test-cam-slow-inference"
     _CAMERAS[cam_id] = {
         "id": cam_id,
@@ -125,7 +125,7 @@ def test_decoupled_analysis_does_not_block_decode_loop() -> None:
 @pytest.mark.asyncio
 async def test_camera_stream_delivers_mjpeg_with_headers() -> None:
     """Endpoint camera_stream must deliver multipart MJPEG frames with no-cache headers."""
-    test_video = Path("data/test_upload_face.mp4")
+    test_video = Path("tests/fixtures/test_upload_face.mp4")
     cam_id = "test-cam-stream-endpoint"
     _CAMERAS[cam_id] = {
         "id": cam_id,
@@ -177,7 +177,7 @@ def test_critical_target_in_file_footage_observations() -> None:
     )
 
     try:
-        test_video = Path("data/test_upload_face.mp4")
+        test_video = Path("tests/fixtures/test_upload_face.mp4")
         _CAMERAS[cam_id] = {
             "id": cam_id,
             "name": "Critical Target Cam",
@@ -208,7 +208,7 @@ def test_critical_target_in_file_footage_observations() -> None:
 
 def test_analysis_worker_resilient_to_inference_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
     """Analysis thread must survive sporadic inference exceptions and resume updating observations."""
-    test_video = Path("data/test_upload_face.mp4")
+    test_video = Path("tests/fixtures/test_upload_face.mp4")
     cam_id = "test-cam-exception-resilience"
     _CAMERAS[cam_id] = {
         "id": cam_id,

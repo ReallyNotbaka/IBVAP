@@ -8,7 +8,6 @@ import { ModelSelectorModal } from "./components/ModelSelectorModal";
 import { Alerts } from "./pages/Alerts";
 import { EmptyState } from "./pages/EmptyState";
 import { Health } from "./pages/Health";
-import { Overview } from "./pages/Overview";
 import { Monitor } from "./pages/Monitor";
 import { Cockpit } from "./pages/Cockpit";
 import { UseFootage } from "./pages/UseFootage";
@@ -78,7 +77,7 @@ function AppShell() {
           <Route path="/health" element={<Health />} />
           <Route path="/use/footage" element={<UseFootage />} />
           <Route path="/monitor-legacy" element={<Monitor />} />
-          <Route path="/overview-legacy" element={<Overview />} />
+          <Route path="/overview-legacy" element={<Navigate to="/" replace />} />
           <Route
             path="*"
             element={

@@ -1,6 +1,6 @@
 """Profiling script for IBVAP GPU optimization investigation.
 
-Measures exact millisecond breakdowns on real video footage (data/test_upload_face.mp4):
+Measures exact millisecond breakdowns on real video footage (tests/fixtures/test_upload_face.mp4):
 - Decoding latency (PyAV)
 - Detector preprocessing latency
 - Detector ONNX inference latency (DirectML vs CPU)
@@ -26,7 +26,7 @@ from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.tracker import CentroidTracker
 
 
-def profile_real_video(video_path: str = "data/test_upload_face.mp4", loops: int = 5, max_frames: int = 50):
+def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", loops: int = 5, max_frames: int = 50):
     print(f"=== Profiling Real Video: {video_path} ({loops} passes) ===")
     p = Path(video_path)
     if not p.exists():

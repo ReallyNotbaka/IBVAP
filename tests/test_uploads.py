@@ -48,7 +48,7 @@ def test_upload_rejects_html_masquerading_as_mp4() -> None:
 
 def test_video_footage_can_be_tested_and_saved() -> None:
     c = _client()
-    video_path = Path("data/test-footage.mp4")
+    video_path = Path("tests/fixtures/test-footage.mp4")
     video_path.parent.mkdir(parents=True, exist_ok=True)
     writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
     assert writer.isOpened()

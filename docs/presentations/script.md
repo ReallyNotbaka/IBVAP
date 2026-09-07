@@ -79,7 +79,7 @@ This table maps directly to the official judging rubric:
 1. **[0:55] INPUT:**  
    * Navigate your browser to: `http://localhost:8000/use/footage`  
    * The page shows: *"Use video footage — Upload a local MP4 clip and analyze it as a camera source."*  
-   * Click **Browse**, select `data/test-footage.mp4` (or any surveillance MP4 clip in your project folder), and click **"Use footage"**.
+   * Click **Browse**, select `tests/fixtures/test-footage.mp4` (or any surveillance MP4 clip in your project folder), and click **"Use footage"**.
 2. **[1:08] PROCESSING:**  
    * The app automatically validates the footage and redirects directly to the **Cockpit** (`http://localhost:8000`).
    * The video footage begins playing on the screen.
