@@ -287,14 +287,14 @@ export function OverlayCanvas({
                   fontSize={isFace ? 1.3 : b.isAlert ? 1.9 : 1.8}
                   fontWeight={b.isAlert ? 700 : 600}
                   letterSpacing="0.02em"
-                  fontFamily="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                  fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif"
                 >
                   <tspan fill={b.isAlert ? "#ffffff" : theme.accent} data-testid={b.isAlert ? "target-name-text" : undefined}>
                     {formattedLabel}
                   </tspan>
-                  {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"}> #{b.trackId}</tspan>}
+                  {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"> #{b.trackId}</tspan>}
                   {showConfidence && b.confidence !== undefined && (
-                    <tspan fill={b.isAlert ? "#fed7aa" : "#cbd5e1"} fontSize={isFace ? 1.1 : 1.5}>
+                    <tspan fill={b.isAlert ? "#fed7aa" : "#cbd5e1"} fontSize={isFace ? 1.1 : 1.5} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
                       {" "}
                       {Math.round(b.confidence * 100)}%
                     </tspan>

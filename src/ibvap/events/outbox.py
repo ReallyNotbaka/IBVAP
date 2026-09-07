@@ -66,6 +66,12 @@ def mark_delivered(outbox_id: str) -> None:
             break
 
 
+def clear_events() -> int:
+    count = len(_EVENTS)
+    _EVENTS.clear()
+    return count
+
+
 def clear_all() -> None:
     _EVENTS.clear()
     _OUTBOX.clear()

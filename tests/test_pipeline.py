@@ -63,3 +63,36 @@ def test_pipeline_from_real_video_file() -> None:
 
         with contextlib.suppress(Exception):
             os.unlink(tmp.name)
+
+
+def test_pipeline_zone_intrusion_and_exit_events() -> None:
+    """Verify zone intrusion followed by zone exit produces debounced events without spam."""
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-zone-test", stream_epoch=1, detector=MockPersonDetector())
+
+    # Feed frames 5..20 where mock detector produces box entering central zone
+    for i in range(25):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        if 5 <= i <= 20:
+            x = int(100 + i * 10)
+            cv2.rectangle(frame, (x, 100), (x + 60, 250), (255, 255, 255), -1)
+        pipe.process_frame(frame)
+
+    events = list_events()
+    event_types = [e["event_type"] for e in events]
+    assert "zone_intrusion" in event_types, f"Expected zone_intrusion in {event_types}"
+
+    # Now feed blank frames so the target moves out or terminates
+    for _ in range(35):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        pipe.process_frame(frame)
+
+    events_after = list_events()
+    event_types_after = [e["event_type"] for e in events_after]
+    assert "zone_exit" in event_types_after, f"Expected zone_exit in {event_types_after}"
+    # Ensure neither zone_intrusion nor zone_exit flooded hundreds of events
+    intrusion_count = sum(1 for e in events_after if e["event_type"] == "zone_intrusion")
+    exit_count = sum(1 for e in events_after if e["event_type"] == "zone_exit")
+    assert intrusion_count == 1, f"Expected 1 debounced intrusion, got {intrusion_count}"
+    assert exit_count == 1, f"Expected 1 debounced exit, got {exit_count}"
+

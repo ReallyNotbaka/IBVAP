@@ -10,6 +10,7 @@ import {
   CrosshairIcon,
   UserIcon,
   FaceIcon,
+  MoonIcon,
 } from "./Icons";
 
 export interface TargetInspectData {
@@ -117,6 +118,7 @@ export function CameraTile({
   });
   const imgRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const smoothedCoordsRef = useRef<Map<string, [number, number, number, number]>>(new Map());
 
   useEffect(() => {
     const el = containerRef.current;
@@ -193,7 +195,23 @@ export function CameraTile({
       return isIdentified || item.confidence >= 0.50;
     })
     .map((item) => {
-      const [x1, y1, x2, y2] = item.bbox_norm;
+      const rawBbox = item.bbox_norm;
+      const trackKey = "track_id" in item && item.track_id !== undefined ? `track-${item.track_id}` : `det-${item.class_name}`;
+      const prev = smoothedCoordsRef.current.get(trackKey);
+      let smoothed = rawBbox;
+      if (prev) {
+        // Temporal box smoothing (EMA filter, alpha = 0.42) across observation ticks
+        const alpha = 0.42;
+        smoothed = [
+          (1 - alpha) * prev[0] + alpha * rawBbox[0],
+          (1 - alpha) * prev[1] + alpha * rawBbox[1],
+          (1 - alpha) * prev[2] + alpha * rawBbox[2],
+          (1 - alpha) * prev[3] + alpha * rawBbox[3],
+        ];
+      }
+      smoothedCoordsRef.current.set(trackKey, smoothed);
+
+      const [x1, y1, x2, y2] = smoothed;
       const width = x2 - x1;
       const tightened = item.class_name === "person" ? width * 0.88 : width;
       const trackItem =
@@ -265,8 +283,22 @@ export function CameraTile({
             (face.confidence ?? 0) >= minFaceConf &&
             (face as { quality_passed?: boolean }).quality_passed !== false
         )
-        .map((face) => {
-          const [x1, y1, x2, y2] = face.bbox_norm;
+        .map((face, fIdx) => {
+          const rawBbox = face.bbox_norm;
+          const faceKey = `face-${fIdx}`;
+          const prev = smoothedCoordsRef.current.get(faceKey);
+          let smoothed = rawBbox;
+          if (prev) {
+            const alpha = 0.45;
+            smoothed = [
+              (1 - alpha) * prev[0] + alpha * rawBbox[0],
+              (1 - alpha) * prev[1] + alpha * rawBbox[1],
+              (1 - alpha) * prev[2] + alpha * rawBbox[2],
+              (1 - alpha) * prev[3] + alpha * rawBbox[3],
+            ];
+          }
+          smoothedCoordsRef.current.set(faceKey, smoothed);
+          const [x1, y1, x2, y2] = smoothed;
           return {
             x: x1,
             y: y1,
@@ -398,6 +430,30 @@ export function CameraTile({
         </div>
 
         <div className="flex items-center gap-2">
+          {observations?.night?.is_night && (
+            <div
+              className="flex items-center gap-1.5 bg-indigo-950/80 border border-indigo-500/40 rounded-full px-2.5 py-1 backdrop-blur-md text-[10px] font-mono text-indigo-200 shadow-sm"
+              title={`Night / IR Mode Active (illumination: ${
+                (observations.night.illumination_score ?? 0) > 1
+                  ? Math.round(((observations.night.illumination_score ?? 0) / 255) * 100)
+                  : Math.round((observations.night.illumination_score ?? 0) * 100)
+              }%, limitation: ${observations.night.limitation || "none"})`}
+            >
+              <MoonIcon className="w-3 h-3 text-indigo-300 animate-pulse" />
+              <span>IR NIGHT</span>
+            </div>
+          )}
+
+          {observations?.night?.limitation && observations.night.limitation.includes("low visibility") && (
+            <div
+              className="flex items-center gap-1.5 bg-amber-950/80 border border-amber-500/40 rounded-full px-2.5 py-1 backdrop-blur-md text-[10px] font-mono text-amber-200 shadow-sm"
+              title={observations.night.limitation}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />
+              <span>LOW LIGHT</span>
+            </div>
+          )}
+
           {targetCount > 0 && (
             <div className="flex items-center gap-1.5 bg-black/70 border border-white/10 rounded-full px-2.5 py-1 backdrop-blur-md text-[11px] font-mono text-slate-200 shadow-sm">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />

@@ -27,6 +27,13 @@ from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.probe import ProbeError, probe_url
 from ibvap.core.ssrf import SSRFError, SSRFPolicy, resolve_and_validate, validate_endpoint  # noqa: F401 - re-export
 
+import sys
+
+if sys.platform == "win32":
+    with contextlib.suppress(Exception):
+        import ctypes
+        ctypes.windll.winmm.timeBeginPeriod(1)
+
 router = APIRouter(prefix="/api/v1/cameras", tags=["cameras"])
 
 
@@ -183,8 +190,15 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                     raise RuntimeError("No video stream found in file")
 
                 cam["observed_state"] = "STREAMING"
-                raw_fps = float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0
-                fps = max(5.0, min(raw_fps, 60.0))
+                detected_fps = None
+                for r in (stream.average_rate, stream.guessed_rate, stream.base_rate):
+                    if r and r.denominator:
+                        val = float(r)
+                        if val > 0:
+                            detected_fps = val
+                            break
+                fps = detected_fps if detected_fps is not None else 30.0
+                fps = max(5.0, min(fps, 60.0))
                 frame_interval = 1.0 / fps
 
                 while not stop.is_set():
@@ -315,8 +329,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             samples.append(
                 {
                     "last_frame_age_ms": 0,
-                    "source_fps": float(stream.average_rate) if stream.average_rate else None,
-                    "analysis_fps": round(last_analysis_fps or 12.0, 1),
+                    "source_fps": float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0,
+                    "analysis_fps": round(last_analysis_fps or 30.0, 1),
                     "inference_ms": round(last_inference_ms, 1),
                     "queue_drops": 0,
                     "decode_errors": 0,
@@ -361,8 +375,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 samples.append(
                     {
                         "last_frame_age_ms": 0,
-                        "source_fps": float(stream.average_rate) if stream.average_rate else None,
-                        "analysis_fps": round(last_analysis_fps or 12.0, 1),
+                        "source_fps": float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0,
+                        "analysis_fps": round(last_analysis_fps or 30.0, 1),
                         "inference_ms": round(last_inference_ms, 1),
                         "queue_drops": 0,
                         "decode_errors": 0,
@@ -706,7 +720,9 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
                     if frame:
                         last_version = current_version
                         yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
-                await asyncio.sleep(0.010)
+                        await asyncio.sleep(0.001)
+                        continue
+                await asyncio.sleep(0.002)
         except (asyncio.CancelledError, GeneratorExit):
             pass
 

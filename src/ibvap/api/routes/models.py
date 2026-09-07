@@ -163,3 +163,34 @@ async def upload_model_file(
         "size_bytes": len(content),
         "target_path": str(target_path),
     }
+
+
+@router.delete("/{model_name}/weights")
+def delete_model_weights(model_name: str) -> dict[str, Any]:
+    if model_name == "yolo26n":
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete base default model 'yolo26n'.",
+        )
+    meta = YOLO_MODELS_MANIFEST.get(model_name)
+    if not meta:
+        raise HTTPException(status_code=400, detail=f"Unknown model variant: {model_name}")
+
+    handle = get_shared_detector_handle()
+    if handle.active_model_name == model_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{model_name}' is currently the active engine. Switch to another model before deleting.",
+        )
+
+    manager = get_download_manager()
+    try:
+        deleted = manager.delete_model_weights(model_name)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex)) from ex
+
+    return {
+        "status": "deleted" if deleted else "not_found",
+        "model_name": model_name,
+        "filename": meta["filename"],
+    }

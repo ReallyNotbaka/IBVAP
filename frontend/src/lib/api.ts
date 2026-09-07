@@ -88,16 +88,54 @@ export type CameraObservations = {
   night?: { is_night: boolean; illumination_score: number; motion_area: number; confidence: number; limitation: string };
 };
 
-export async function fetchHealth(): Promise<{ status: string; version: string }> {
+export type SystemTelemetry = {
+  gpu_accelerator: string;
+  directml_available: boolean;
+  cuda_available: boolean;
+  active_providers: string[];
+  memory_total_mb: number;
+  memory_avail_mb: number;
+  memory_used_mb: number;
+  memory_percent: number;
+  active_model: string;
+  active_runtime: string;
+  process_uptime_seconds: number;
+};
+
+export type FullHealthResponse = {
+  status: string;
+  version: string;
+  timestamp: string;
+  checks: Record<string, string>;
+  system?: SystemTelemetry;
+};
+
+export async function fetchHealth(): Promise<FullHealthResponse> {
   const r = await fetch(base("/api/v1/health"));
   if (!r.ok) throw new Error(`health ${r.status}`);
-  return (await r.json()) as { status: string; version: string };
+  return (await r.json()) as FullHealthResponse;
+}
+
+export function useSystemHealth() {
+  return useQuery({
+    queryKey: ["system-health"],
+    queryFn: fetchHealth,
+    refetchInterval: 2500,
+  });
 }
 
 export async function fetchCapabilities(): Promise<unknown> {
   const r = await fetch(base("/api/v1/capabilities"));
   if (!r.ok) throw new Error(`capabilities ${r.status}`);
   return await r.json();
+}
+
+export function useCapabilities() {
+  return useQuery({
+    queryKey: ["capabilities"],
+    queryFn: fetchCapabilities,
+    staleTime: 60000,
+  });
 }
 
 export async function fetchCameras(): Promise<Camera[]> {
@@ -144,13 +182,54 @@ export async function createCamera(payload: {
   return (await r.json()) as Camera;
 }
 
-export async function fetchEvents(limit = 5): Promise<Array<{ id: string; camera_id: string; event_type: string; zone_id?: string; confidence?: number }>> {
-  const r = await fetch(base(`/api/v1/events?limit=${limit}`));
+export type EventItem = {
+  id: string;
+  camera_id: string;
+  stream_epoch?: number;
+  event_type: string;
+  zone_id?: string;
+  track_id?: number;
+  bbox_norm?: [number, number, number, number];
+  confidence?: number;
+  explanation?: {
+    rule?: string;
+    zone?: string;
+    observed?: string;
+    threshold?: string;
+    suspect_id?: string;
+    suspect_name?: string;
+    threat_level?: string;
+    score?: number;
+    tier?: string;
+  };
+  model_id?: string;
+  created_at?: number;
+  dedup_key?: string;
+};
+
+export async function fetchEvents(
+  opts: { limit?: number; tab?: string; camera_id?: string; event_type?: string } | number = 50,
+): Promise<EventItem[]> {
+  const params = new URLSearchParams();
+  if (typeof opts === "number") {
+    params.set("limit", String(opts));
+  } else {
+    if (opts.limit) params.set("limit", String(opts.limit));
+    if (opts.tab && opts.tab !== "all") params.set("tab", opts.tab);
+    if (opts.camera_id) params.set("camera_id", opts.camera_id);
+    if (opts.event_type) params.set("event_type", opts.event_type);
+  }
+  const r = await fetch(base(`/api/v1/events?${params.toString()}`));
   if (!r.ok) throw new Error(`events ${r.status}`);
   const j = await r.json();
-  if (Array.isArray(j)) return j;
-  if (j && Array.isArray((j as { items?: unknown }).items)) return (j as { items: never[] }).items;
+  if (Array.isArray(j)) return j as EventItem[];
   return [];
+}
+
+export async function clearEvents(): Promise<{ status: string; deleted_count: number }> {
+  const r = await fetch(base("/api/v1/events"), { method: "DELETE" });
+  if (!r.ok) throw new Error(`clear events ${r.status}`);
+  return await r.json();
 }
 
 export async function uploadFootage(file: File): Promise<{ upload_id: string; filename: string; size: number; sha256: string; status: string }> {
@@ -196,10 +275,49 @@ export async function analyzeUpload(
   return (await r.json()) as never;
 }
 
-export async function fetchCameraHealth(id: string): Promise<{ last_frame_age_ms?: number; analysis_fps?: number; inference_ms?: number; queue_drops?: number; last_frame_age?: number; fps?: number; samples?: Array<{ last_frame_age_ms?: number; analysis_fps?: number; inference_ms?: number; queue_drops?: number }> }> {
+export type CameraHealthSample = {
+  last_frame_age_ms?: number;
+  source_fps?: number;
+  analysis_fps?: number;
+  inference_ms?: number;
+  queue_drops?: number;
+  decode_errors?: number;
+  reconnect_count?: number;
+  stream_epoch?: number;
+  faces_analyzed?: number;
+  frames_skipped?: number;
+};
+
+export type CameraHealthData = {
+  camera_id: string;
+  observed_state?: string;
+  stream_epoch?: number;
+  retry_count?: number;
+  is_disabled?: boolean;
+  last_frame_age_ms?: number;
+  analysis_fps?: number;
+  source_fps?: number;
+  inference_ms?: number;
+  queue_drops?: number;
+  decode_errors?: number;
+  reconnect_count?: number;
+  fps?: number;
+  last_frame_age?: number;
+  samples?: CameraHealthSample[];
+};
+
+export async function fetchCameraHealth(id: string): Promise<CameraHealthData> {
   const r = await fetch(base(`/api/v1/cameras/${id}/health`));
   if (!r.ok) throw new Error(`camera health ${r.status}`);
-  return (await r.json()) as never;
+  return (await r.json()) as CameraHealthData;
+}
+
+export async function reconnectCamera(id: string): Promise<Camera> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/reconnect`), {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`reconnect ${r.status}`);
+  return (await r.json()) as Camera;
 }
 
 export async function fetchCameraObservations(id: string): Promise<CameraObservations> {
@@ -212,8 +330,15 @@ export function useCameras() {
   return useQuery({ queryKey: ["cameras"], queryFn: fetchCameras, refetchInterval: 5000, retry: 3 });
 }
 
-export function useEvents(limit = 5) {
-  return useQuery({ queryKey: ["events", limit], queryFn: () => fetchEvents(limit), refetchInterval: 5000 });
+export function useEvents(
+  opts: { limit?: number; tab?: string; camera_id?: string } | number = 50,
+) {
+  const key = typeof opts === "number" ? ["events", opts] : ["events", opts.limit ?? 50, opts.tab ?? "all", opts.camera_id ?? ""];
+  return useQuery({
+    queryKey: key,
+    queryFn: () => fetchEvents(opts),
+    refetchInterval: 2500,
+  });
 }
 
 export function useCreateCamera() {
@@ -309,4 +434,13 @@ export function useModels() {
     queryFn: fetchModels,
     refetchInterval: 3000,
   });
+}
+
+export async function deleteModelWeights(modelName: string): Promise<{ status: string; model_name: string }> {
+  const r = await fetch(base(`/api/v1/models/${modelName}/weights`), {
+    method: "DELETE",
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || `Delete weights failed (${r.status})`);
+  return data;
 }

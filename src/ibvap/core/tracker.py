@@ -195,13 +195,13 @@ def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, flo
 class CentroidTracker:
     """Camera-scoped tracker - IDs reset on stream_epoch bump."""
 
-    def __init__(self, iou_threshold: float = 0.3, max_age: int = 30) -> None:
+    def __init__(self, iou_threshold: float = 0.20, max_age: int = 30) -> None:
         self.iou_threshold = iou_threshold
         self.max_age = max_age
         self.tracks: dict[int, Track] = {}
         self._next_id = 1
         self.stream_epoch = 0
-        self.smoothing = 0.35
+        self.smoothing = 0.65
 
     def reset_epoch(self, new_epoch: int) -> None:
         self.stream_epoch = new_epoch
@@ -221,7 +221,7 @@ class CentroidTracker:
         new_entries: list[Track] = []
         unmatched_dets: list[dict[str, Any]] = []
 
-        # Stage 1: match same class with IoU
+        # Stage 1: match same class with IoU (with centroid proximity fallback for fast motion)
         for det in detections:
             bbox = det["bbox_norm"]
             best_id: int | None = None
@@ -235,6 +235,23 @@ class CentroidTracker:
                 if iou > best_iou:
                     best_iou = iou
                     best_id = tid
+
+            # Centroid proximity fallback for same class if box shifted quickly
+            if best_id is None:
+                det_cx = (bbox[0] + bbox[2]) / 2.0
+                det_cy = (bbox[1] + bbox[3]) / 2.0
+                best_dist = 0.14
+                for tid, trk in self.tracks.items():
+                    if tid in matched:
+                        continue
+                    if trk.class_name != det["class_name"]:
+                        continue
+                    trk_cx, trk_cy = trk.center
+                    dist = ((det_cx - trk_cx) ** 2 + (det_cy - trk_cy) ** 2) ** 0.5
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_id = tid
+
             if best_id is not None:
                 trk = self.tracks[best_id]
                 previous = trk.bbox_norm
@@ -280,6 +297,14 @@ class CentroidTracker:
                 trk.age = 0
                 trk.hits += 1
                 trk.last_seen = timestamp
+                previous = trk.bbox_norm
+                trk.bbox_norm = tuple(
+                    (1.0 - self.smoothing) * old + self.smoothing * new
+                    for old, new in zip(previous, bbox)
+                )  # type: ignore[assignment]
+                trk.trajectory.append(trk.center)
+                if len(trk.trajectory) > 64:
+                    trk.trajectory.pop(0)
                 matched.add(overlapping_tid)
                 continue
 

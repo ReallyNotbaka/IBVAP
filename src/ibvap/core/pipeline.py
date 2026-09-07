@@ -61,6 +61,9 @@ class MiniPipeline:
         self.events_created = 0
         self.alerted_tracks: set[int] = set()
         self.watchlist_alerted_tracks: set[int] = set()
+        self._track_outside_count: dict[int, int] = {}
+        self._last_intrusion_alert_time: dict[tuple[str, int], float] = {}
+        self._last_exit_alert_time: dict[int, float] = {}
         self.last_detections: list[dict] = []
         self.last_tracks: list = []
         # --- face optimisation ---
@@ -217,15 +220,20 @@ class MiniPipeline:
         primary_event: dict | None = None
         intrusion_track_ids: set[int] = set()
 
-        # 1. Restricted Zone Intrusion (alert once per continuous presence in zone)
+        now_ts = time.time()
+        # 1. Restricted Zone Intrusion (with hysteresis and debounce cooldown)
         for trk in tracks:
             if trk.class_name not in {"person", "car", "truck", "bus", "motorcycle"}:
                 continue
             if is_intrusion(trk.footpoint, self.zone):
                 intrusion_track_ids.add(trk.track_id)
-                if trk.track_id not in self.alerted_tracks:
+                self._track_outside_count[trk.track_id] = 0
+                last_alert = self._last_intrusion_alert_time.get((self.zone.id, trk.track_id), 0.0)
+                # Debounce: alert once per continuous presence, or after at least 4s cooldown
+                if trk.track_id not in self.alerted_tracks and (now_ts - last_alert) >= 4.0:
                     self.alerted_tracks.add(trk.track_id)
-                    dedup = f"{self.camera_id}:{self.zone.id}:{trk.track_id}:{self.stream_epoch}"
+                    self._last_intrusion_alert_time[(self.zone.id, trk.track_id)] = now_ts
+                    dedup = f"{self.camera_id}:{self.zone.id}:{trk.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
                     event = {
                         "camera_id": self.camera_id,
                         "stream_epoch": self.stream_epoch,
@@ -237,17 +245,48 @@ class MiniPipeline:
                         "explanation": {
                             "rule": "restricted_zone_intrusion",
                             "zone": self.zone.name,
-                            "observed": f"track {trk.track_id} footpoint {trk.footpoint} inside polygon",
+                            "observed": f"track {trk.track_id} footpoint inside polygon",
                             "threshold": "inside restricted zone",
                         },
-                        "model_id": self.detector.model_id,
+                        "model_id": getattr(self, "model_id", "yolo26n"),
                     }
                     transactional_write(event, dedup_key=dedup)
                     self.events_created += 1
                     if primary_event is None:
                         primary_event = event
             else:
-                self.alerted_tracks.discard(trk.track_id)
+                # Track is outside zone - if previously alerted for intrusion, track sustained exit
+                if trk.track_id in self.alerted_tracks:
+                    count = self._track_outside_count.get(trk.track_id, 0) + 1
+                    self._track_outside_count[trk.track_id] = count
+                    if count >= 15:
+                        self.alerted_tracks.discard(trk.track_id)
+                        last_exit = self._last_exit_alert_time.get((self.zone.id, trk.track_id), 0.0)
+                        if (now_ts - last_exit) >= 3.0:
+                            self._last_exit_alert_time[(self.zone.id, trk.track_id)] = now_ts
+                            dedup = f"{self.camera_id}:{self.zone.id}:exit:{trk.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
+                            ev_exit = {
+                                "camera_id": self.camera_id,
+                                "stream_epoch": self.stream_epoch,
+                                "event_type": "zone_exit",
+                                "zone_id": self.zone.id,
+                                "track_id": trk.track_id,
+                                "bbox_norm": trk.bbox_norm,
+                                "confidence": trk.confidence,
+                                "explanation": {
+                                    "rule": "restricted_zone_exit",
+                                    "zone": self.zone.name,
+                                    "observed": f"track {trk.track_id} exited restricted zone",
+                                    "threshold": "outside restricted zone",
+                                },
+                                "model_id": getattr(self, "model_id", "yolo26n"),
+                            }
+                            transactional_write(ev_exit, dedup_key=dedup)
+                            self.events_created += 1
+                            if primary_event is None:
+                                primary_event = ev_exit
+                else:
+                    self._track_outside_count[trk.track_id] = 0
 
         # 2. Target entered FOV (only for tracks with confidence >= 0.48 not already reported as zone intrusions)
         for entry in new_entries:
@@ -267,7 +306,7 @@ class MiniPipeline:
                         "observed": f"{entry.class_name} #{entry.track_id} entered camera field of view",
                         "threshold": "fov_entry",
                     },
-                    "model_id": self.detector.model_id,
+                    "model_id": getattr(self, "model_id", "yolo26n"),
                 }
                 transactional_write(ev_enter, dedup_key=dedup)
                 self.events_created += 1
@@ -302,11 +341,44 @@ class MiniPipeline:
                 if primary_event is None:
                     primary_event = ev_watchlist
 
-        # 4. Target exited FOV (only for tracks that were confirmed with >= 2 hits)
+        # 4. Target exited FOV / Zone Exit on Termination
         for term in terminated:
+            was_zone_alerted = term.track_id in self.alerted_tracks
             self.alerted_tracks.discard(term.track_id)
             self.watchlist_alerted_tracks.discard(term.track_id)
-            if term.hits >= 2 and term.confidence >= 0.45:
+            self._track_outside_count.pop(term.track_id, None)
+
+            # If track was inside restricted zone when it terminated, emit zone_exit
+            if was_zone_alerted:
+                last_exit = self._last_exit_alert_time.get((self.zone.id, term.track_id), 0.0)
+                if (now_ts - last_exit) >= 3.0:
+                    self._last_exit_alert_time[(self.zone.id, term.track_id)] = now_ts
+                    dedup = f"{self.camera_id}:{self.zone.id}:exit:{term.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
+                    ev_exit = {
+                        "camera_id": self.camera_id,
+                        "stream_epoch": self.stream_epoch,
+                        "event_type": "zone_exit",
+                        "zone_id": self.zone.id,
+                        "track_id": term.track_id,
+                        "bbox_norm": term.bbox_norm,
+                        "confidence": term.confidence,
+                        "explanation": {
+                            "rule": "restricted_zone_exit",
+                            "zone": self.zone.name,
+                            "observed": f"track {term.track_id} exited restricted zone",
+                            "threshold": "outside restricted zone",
+                        },
+                        "model_id": getattr(self, "model_id", "yolo26n"),
+                    }
+                    transactional_write(ev_exit, dedup_key=dedup)
+                    self.events_created += 1
+                    if primary_event is None:
+                        primary_event = ev_exit
+
+            # FOV exit for confirmed tracks
+            last_fov_exit = self._last_exit_alert_time.get((-1, term.track_id), 0.0)
+            if term.hits >= 3 and term.confidence >= 0.45 and (now_ts - last_fov_exit) >= 3.0:
+                self._last_exit_alert_time[(-1, term.track_id)] = now_ts
                 dedup = f"{self.camera_id}:exited:{term.track_id}:{self.stream_epoch}"
                 ev_exit = {
                     "camera_id": self.camera_id,
@@ -322,7 +394,7 @@ class MiniPipeline:
                         "observed": f"{term.class_name} #{term.track_id} exited camera field of view",
                         "threshold": "fov_exit",
                     },
-                    "model_id": self.detector.model_id,
+                    "model_id": getattr(self, "model_id", "yolo26n"),
                 }
                 transactional_write(ev_exit, dedup_key=dedup)
                 self.events_created += 1

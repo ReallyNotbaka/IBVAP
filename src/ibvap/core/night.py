@@ -34,28 +34,58 @@ class NightDetector:
         return self._mode
 
     def _luminance(self, frame: np.ndarray) -> float:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return float(np.mean(gray))
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.ndim == 3 and frame.shape[2] == 4:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        else:
+            gray = frame
+
+        mean_lum = float(np.mean(gray))
+        # Percentile and histogram analysis to resist headlight/streetlight skew
+        p10 = float(np.percentile(gray, 10))
+        p50 = float(np.percentile(gray, 50))
+        p90 = float(np.percentile(gray, 90))
+
+        # Gamma / contrast assessment: ratio of pixels in lower quartile
+        dark_pixel_ratio = float(np.count_nonzero(gray < 45)) / max(1, gray.size)
+
+        # Composite illumination score:
+        # If the majority of the frame is dark (>60% dark pixels), headlights/torches shouldn't fool it into day
+        if dark_pixel_ratio > 0.65:
+            composite = 0.50 * p10 + 0.35 * p50 + 0.15 * mean_lum
+        else:
+            composite = 0.40 * p50 + 0.35 * mean_lum + 0.25 * p10
+
+        return float(np.clip(composite, 0.0, 255.0))
 
     def update(self, frame: np.ndarray, timestamp: float | None = None) -> NightResult:
         lum = self._luminance(frame)
         now = timestamp if timestamp is not None else 0.0
-        if self._mode == "day" and lum < self.night_threshold and (now - self._last_switch) > self.temporal_seconds:
+        if self._mode == "day" and lum < self.night_threshold and (now - self._last_switch) >= self.temporal_seconds:
             self._mode = "night"
             self._last_switch = now
-        elif self._mode == "night" and lum > self.day_threshold and (now - self._last_switch) > self.temporal_seconds:
+        elif self._mode == "night" and lum > self.day_threshold and (now - self._last_switch) >= self.temporal_seconds:
             self._mode = "day"
             self._last_switch = now
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.ndim == 3 and frame.shape[2] == 4:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        else:
+            gray = frame
+
         gray_f = gray.astype(np.float32)
-        if self._bg is None:
+        if self._bg is None or self._bg.shape != gray_f.shape:
             self._bg = gray_f
         else:
             cv2.accumulateWeighted(gray_f, self._bg, 0.02)
 
         diff = cv2.absdiff(gray_f, self._bg)  # type: ignore[arg-type]
-        _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+        # In night mode, adapt threshold to prevent sensor grain noise
+        threshold_val = 30 if self._mode == "night" else 25
+        _, thresh = cv2.threshold(diff, threshold_val, 255, cv2.THRESH_BINARY)
         cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         motion_pixels = int(np.count_nonzero(cleaned))
         total = frame.shape[0] * frame.shape[1]
@@ -65,12 +95,22 @@ class NightDetector:
             self._motion_history.pop(0)
         persistence = sum(1 for v in self._motion_history if v > 0.005)
         camera_motion = 0.0
-        confidence = 0.6 if motion_area > 0.01 and persistence >= 3 else 0.2 if motion_area > 0 else 0.0
-        limitation = "low visibility" if self._mode == "night" and lum < 30 else "none"
+        confidence = 0.7 if motion_area > 0.01 and persistence >= 3 else 0.3 if motion_area > 0 else 0.0
+        
+        if self._mode == "night":
+            if lum < 15.0:
+                limitation = "severe low visibility (<15 lux)"
+            elif lum < 30.0:
+                limitation = "low visibility (<30 lux)"
+            else:
+                limitation = "night operational"
+        else:
+            limitation = "none"
+
         return NightResult(
             is_night=self._mode == "night",
-            illumination_score=lum,
-            motion_area=motion_area,
+            illumination_score=round(lum, 1),
+            motion_area=round(motion_area, 4),
             motion_persistence=persistence,
             camera_motion=camera_motion,
             confidence=confidence,

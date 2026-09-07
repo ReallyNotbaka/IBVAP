@@ -213,6 +213,27 @@ class ModelDownloadManager:
         prog.total_bytes = len(content)
         return target
 
+    def delete_model_weights(self, model_name: str) -> bool:
+        """Safely delete downloaded weights from disk. Base default model cannot be deleted."""
+        if model_name == "yolo26n":
+            raise ValueError("Base default model 'yolo26n' cannot be deleted.")
+        meta = YOLO_MODELS_MANIFEST.get(model_name)
+        filename = meta["filename"] if meta else f"{model_name}.onnx"
+        target = self.models_dir / filename
+        with self._lock:
+            self._progress.pop(model_name, None)
+        if target.exists():
+            try:
+                target.unlink(missing_ok=True)
+                return True
+            except OSError:
+                import gc
+                gc.collect()
+                time.sleep(0.05)
+                target.unlink(missing_ok=True)
+                return True
+        return False
+
     async def start_download(self, model_name: str, url: str | None = None) -> None:
         meta = YOLO_MODELS_MANIFEST.get(model_name)
         if not meta:

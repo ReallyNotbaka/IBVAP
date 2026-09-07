@@ -5,11 +5,12 @@ import {
   startModelDownload,
   fetchDownloadProgress,
   uploadModel,
+  deleteModelWeights,
   type ModelItem,
   type DownloadProgress,
 } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
-import { CpuIcon, SparkIcon, CrosshairIcon, AlertTriangleIcon, CloseIcon, DownloadIcon } from "./Icons";
+import { CpuIcon, SparkIcon, CrosshairIcon, AlertTriangleIcon, CloseIcon, DownloadIcon, UploadIcon, TrashIcon } from "./Icons";
 
 interface ModelSelectorModalProps {
   isOpen: boolean;
@@ -28,11 +29,13 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [actionError, setActionError] = useState("");
   const [activating, setActivating] = useState(false);
+  const [deletingModel, setDeletingModel] = useState<string | null>(null);
 
   // USB Upload state
   const [uploadTargetVariant, setUploadTargetVariant] = useState("yolo26s");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Polling for download progress
   useEffect(() => {
@@ -95,6 +98,31 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
     } catch (err: unknown) {
       setDownloadingModel(null);
       setActionError(err instanceof Error ? err.message : "Failed to start download");
+    }
+  };
+
+  const handleDeleteWeights = async (model: ModelItem) => {
+    if (model.name === "yolo26n") {
+      setActionError("Base default model 'yolo26n' cannot be deleted.");
+      return;
+    }
+    if (model.is_active) {
+      setActionError("Cannot delete active model weights. Switch to another model first.");
+      return;
+    }
+    if (!confirm(`Are you sure you want to delete downloaded weights for ${model.name}?`)) {
+      return;
+    }
+
+    setDeletingModel(model.name);
+    setActionError("");
+    try {
+      await deleteModelWeights(model.name);
+      await qc.invalidateQueries({ queryKey: ["models"] });
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Failed to delete model weights");
+    } finally {
+      setDeletingModel(null);
     }
   };
 
@@ -273,7 +301,7 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
                         </div>
                       </div>
 
-                      <div>
+                      <div className="flex items-center gap-2">
                         {isActive ? (
                           <button
                             disabled
@@ -282,13 +310,27 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
                             Active
                           </button>
                         ) : m.is_installed ? (
-                          <button
-                            onClick={() => handleSelectModel(m)}
-                            disabled={activating}
-                            className="rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors shadow-xs cursor-pointer"
-                          >
-                            {activating ? "Switching..." : "Activate"}
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleSelectModel(m)}
+                              disabled={activating || deletingModel === m.name}
+                              className="rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors shadow-xs cursor-pointer"
+                            >
+                              {activating ? "Switching..." : "Activate"}
+                            </button>
+                            {m.name !== "yolo26n" && (
+                              <button
+                                onClick={() => handleDeleteWeights(m)}
+                                disabled={deletingModel === m.name || activating}
+                                data-testid={`delete-weights-${m.name}`}
+                                title={`Delete downloaded weights for ${m.name}`}
+                                className="flex items-center gap-1.5 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 px-3 py-2 text-xs font-semibold text-rose-700 dark:text-rose-300 transition-colors cursor-pointer"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                                <span>{deletingModel === m.name ? "Deleting..." : "Delete Weights"}</span>
+                              </button>
+                            )}
+                          </>
                         ) : (
                           <button
                             onClick={() => handleSelectModel(m)}
@@ -308,11 +350,11 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
             <form onSubmit={handleUsbUpload} className="space-y-4">
               <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3.5 text-xs text-slate-600 dark:text-slate-400 space-y-1">
                 <div className="font-semibold text-slate-800 dark:text-slate-200">
-                  Air-Gapped Installation Mode
+                  Air-Gapped / USB Weight Installation
                 </div>
                 <p>
                   For installations without internet connectivity, copy verified{" "}
-                  <code>.onnx</code> weights to a USB drive and upload them directly.
+                  <code>.onnx</code> weights from your USB storage device and upload them directly.
                 </p>
               </div>
 
@@ -334,15 +376,85 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Select ONNX File (*.onnx)
+                  ONNX Weight File
                 </label>
-                <input
-                  type="file"
-                  accept=".onnx"
-                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950 px-3 py-2 text-xs text-slate-900 dark:text-slate-100 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:bg-slate-900 file:text-white dark:file:bg-white dark:file:text-slate-950 hover:file:opacity-90 cursor-pointer"
-                  required
-                />
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      if (!file.name.toLowerCase().endsWith(".onnx")) {
+                        setActionError("Only .onnx model files are supported.");
+                        return;
+                      }
+                      setUploadFile(file);
+                      setActionError("");
+                      // Auto-select target variant based on file name if recognized
+                      const lower = file.name.toLowerCase();
+                      if (lower.includes("yolo26s")) setUploadTargetVariant("yolo26s");
+                      else if (lower.includes("yolo26m")) setUploadTargetVariant("yolo26m");
+                      else if (lower.includes("yolo26l")) setUploadTargetVariant("yolo26l");
+                      else if (lower.includes("yolo26x")) setUploadTargetVariant("yolo26x");
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-6 text-center transition-all cursor-pointer ${
+                    isDragging
+                      ? "border-slate-900 dark:border-white bg-slate-100/80 dark:bg-slate-800/80"
+                      : uploadFile
+                      ? "border-emerald-500/50 bg-emerald-50/30 dark:bg-emerald-950/20"
+                      : "border-slate-300 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 bg-slate-50/40 dark:bg-slate-950/30"
+                  }`}
+                  onClick={() => document.getElementById("usb-file-input")?.click()}
+                >
+                  <input
+                    id="usb-file-input"
+                    type="file"
+                    accept=".onnx"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setUploadFile(file);
+                        setActionError("");
+                        const lower = file.name.toLowerCase();
+                        if (lower.includes("yolo26s")) setUploadTargetVariant("yolo26s");
+                        else if (lower.includes("yolo26m")) setUploadTargetVariant("yolo26m");
+                        else if (lower.includes("yolo26l")) setUploadTargetVariant("yolo26l");
+                        else if (lower.includes("yolo26x")) setUploadTargetVariant("yolo26x");
+                      }
+                    }}
+                  />
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                      <UploadIcon className="w-5 h-5" />
+                    </div>
+                    {uploadFile ? (
+                      <div>
+                        <p className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                          {uploadFile.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {(uploadFile.size / (1024 * 1024)).toFixed(2)} MB — Click or drop another to replace
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                          Click to select or drag & drop USB .onnx weights here
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          Supported architectures: YOLO26s, YOLO26m, YOLO26l, YOLO26x
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -358,7 +470,7 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
                   disabled={uploading || !uploadFile}
                   className="rounded-xl bg-slate-900 dark:bg-white hover:bg-black dark:hover:bg-slate-100 px-5 py-2 text-xs font-semibold text-white dark:text-slate-950 disabled:opacity-50 transition-all shadow-sm cursor-pointer"
                 >
-                  {uploading ? "Saving Weights..." : "Import Model Weights"}
+                  {uploading ? "Importing Weights..." : "Import Model Weights"}
                 </button>
               </div>
             </form>
