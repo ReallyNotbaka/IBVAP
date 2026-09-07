@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { flushSync } from "react-dom";
 
 interface ThemeToggleProps {
   idPrefix?: string;
@@ -32,15 +33,30 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
   }, []);
 
   const toggleTheme = () => {
-    setIsDark((prev) => {
-      const next = !prev;
+    const next = !isDark;
+    const root = document.documentElement;
+    const button = document.querySelector<HTMLButtonElement>(`[data-testid="theme-toggle"]`);
+    const bounds = button?.getBoundingClientRect();
+
+    if (bounds) {
+      root.style.setProperty("--theme-transition-x", `${bounds.left + bounds.width / 2}px`);
+      root.style.setProperty("--theme-transition-y", `${bounds.top + bounds.height / 2}px`);
+    }
+
+    const updateTheme = () => {
+      flushSync(() => setIsDark(next));
       try {
         localStorage.setItem("ibvap-theme", next ? "dark" : "light");
       } catch {
         // LocalStorage disabled or quota exceeded
       }
-      return next;
-    });
+    };
+
+    if ("startViewTransition" in document && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      document.startViewTransition(updateTheme);
+    } else {
+      updateTheme();
+    }
   };
 
   const maskId = `theme-moon-mask-${idPrefix}`;
