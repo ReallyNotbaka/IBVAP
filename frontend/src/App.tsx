@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Topbar } from "./components/Topbar";
 import { ConnectModal } from "./components/ConnectModal";
 import { WatchlistModal } from "./components/WatchlistModal";
@@ -25,12 +25,10 @@ function SourceState({ error, onRetry }: { error?: boolean; onRetry?: () => void
           <VideoIcon className={`h-5 w-5 ${error ? "" : "animate-pulse"}`} />
         </div>
         <h1 className="mt-5 text-lg font-semibold text-slate-900 dark:text-slate-100">
-          {error ? "Sources are temporarily unavailable" : "Preparing your operations view"}
+          Sources are temporarily unavailable
         </h1>
         <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500 dark:text-slate-400">
-          {error
-            ? "The source list could not be reached. Your footage is safe; try again when the service is ready."
-            : "Syncing your video source and getting the workspace ready."}
+          The source list could not be reached. Your footage is safe; try again when the service is ready.
         </p>
         {error && onRetry && (
           <button
@@ -41,26 +39,24 @@ function SourceState({ error, onRetry }: { error?: boolean; onRetry?: () => void
             Try again
           </button>
         )}
-        {!error && <div className="mx-auto mt-6 h-1.5 w-24 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-slate-700 dark:bg-slate-200" /></div>}
       </div>
     </div>
   );
 }
 
 function AppShell() {
-  const { data: cameras, isLoading, isFetching, isError, refetch } = useCameras();
+  const { data: cameras, isError, refetch } = useCameras();
   const navigate = useNavigate();
+  const location = useLocation();
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
   const [initialTarget, setInitialTarget] = useState<TargetInspectData | null>(null);
 
   const cameraList = cameras ?? [];
-  const showSourceLoading = !isError && (isLoading || (isFetching && cameraList.length === 0));
   const showSourceError = isError && cameraList.length === 0;
-  const showOnboarding = !showSourceLoading && !showSourceError && cameraList.length === 0;
+  const showOnboarding = !showSourceError && cameraList.length === 0;
 
   const renderSourceRoute = (modalOpen = false) => {
-    if (showSourceLoading) return <SourceState />;
     if (showSourceError) return <SourceState error onRetry={() => void refetch()} />;
     if (showOnboarding) return <EmptyState onConnect={() => navigate("/connect/phone")} />;
     return (
@@ -90,7 +86,8 @@ function AppShell() {
         onOpenModels={() => setModelsOpen(true)}
       />
       <main className="content-area">
-        <Routes>
+        <div key={location.pathname} className="page-transition">
+          <Routes>
           <Route
             path="/"
             element={renderSourceRoute()}
@@ -110,7 +107,8 @@ function AppShell() {
             path="*"
             element={renderSourceRoute()}
           />
-        </Routes>
+          </Routes>
+        </div>
       </main>
       <ConnectModal />
       <WatchlistModal
