@@ -83,7 +83,7 @@ export type CameraObservations = {
     identity_locked?: boolean;
   }>;
   frame_at: number | null;
-  faces?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; quality_passed: boolean; track_id?: number | null }>;
+  faces?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; quality_passed: boolean }>;
   plates?: Array<{ text: string; confidence: number }>;
   night?: { is_night: boolean; illumination_score: number; motion_area: number; confidence: number; limitation: string };
 };

@@ -118,6 +118,7 @@ export function CameraTile({
   });
   const imgRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const smoothedCoordsRef = useRef<Map<string, [number, number, number, number]>>(new Map());
 
   useEffect(() => {
     const el = containerRef.current;
@@ -159,7 +160,7 @@ export function CameraTile({
   const { data: observations } = useQuery({
     queryKey: ["camera-observations", camera.id],
     queryFn: () => fetchCameraObservations(camera.id),
-    refetchInterval: 40,
+    refetchInterval: 80,
   });
 
   const effectiveAspect =
@@ -195,7 +196,22 @@ export function CameraTile({
     })
     .map((item) => {
       const rawBbox = item.bbox_norm;
-      const [x1, y1, x2, y2] = rawBbox;
+      const trackKey = "track_id" in item && item.track_id !== undefined ? `track-${item.track_id}` : `det-${item.class_name}`;
+      const prev = smoothedCoordsRef.current.get(trackKey);
+      let smoothed = rawBbox;
+      if (prev) {
+        // Temporal box smoothing (EMA filter, alpha = 0.42) across observation ticks
+        const alpha = 0.42;
+        smoothed = [
+          (1 - alpha) * prev[0] + alpha * rawBbox[0],
+          (1 - alpha) * prev[1] + alpha * rawBbox[1],
+          (1 - alpha) * prev[2] + alpha * rawBbox[2],
+          (1 - alpha) * prev[3] + alpha * rawBbox[3],
+        ];
+      }
+      smoothedCoordsRef.current.set(trackKey, smoothed);
+
+      const [x1, y1, x2, y2] = smoothed;
       const width = x2 - x1;
       const tightened = item.class_name === "person" ? width * 0.88 : width;
       const trackItem =
@@ -267,9 +283,22 @@ export function CameraTile({
             (face.confidence ?? 0) >= minFaceConf &&
             (face as { quality_passed?: boolean }).quality_passed !== false
         )
-        .map((face) => {
+        .map((face, fIdx) => {
           const rawBbox = face.bbox_norm;
-          const [x1, y1, x2, y2] = rawBbox;
+          const faceKey = `face-${fIdx}`;
+          const prev = smoothedCoordsRef.current.get(faceKey);
+          let smoothed = rawBbox;
+          if (prev) {
+            const alpha = 0.45;
+            smoothed = [
+              (1 - alpha) * prev[0] + alpha * rawBbox[0],
+              (1 - alpha) * prev[1] + alpha * rawBbox[1],
+              (1 - alpha) * prev[2] + alpha * rawBbox[2],
+              (1 - alpha) * prev[3] + alpha * rawBbox[3],
+            ];
+          }
+          smoothedCoordsRef.current.set(faceKey, smoothed);
+          const [x1, y1, x2, y2] = smoothed;
           return {
             x: x1,
             y: y1,
@@ -277,7 +306,6 @@ export function CameraTile({
             h: y2 - y1,
             label: "face",
             confidence: face.confidence,
-            trackId: face.track_id !== null && face.track_id !== undefined ? String(face.track_id) : undefined,
             isAlert: false,
           };
         })
@@ -317,139 +345,11 @@ export function CameraTile({
   }
 
   const allBoxes = deduped.slice(0, 32);
-
-  // --------------------------------------------------------------------------
-  // 60 FPS RequestAnimationFrame Continuous Interpolation Engine
-  // Eliminates box jumpiness, lag, and stair-stepping across observation ticks
-  // --------------------------------------------------------------------------
-  const [displayedBoxes, setDisplayedBoxes] = useState<Box[]>([]);
-  const animMapRef = useRef<
-    Map<
-      string,
-      {
-        current: [number, number, number, number];
-        target: [number, number, number, number];
-        box: Box;
-        lastSeen: number;
-      }
-    >
-  >(new Map());
-  const rafIdRef = useRef<number | null>(null);
-  const lastRafTimeRef = useRef<number>(performance.now());
-  const animateRef = useRef<() => void>(() => {});
-
-  animateRef.current = () => {
-    const now = performance.now();
-    const dt = Math.min(33, Math.max(8, now - lastRafTimeRef.current));
-    lastRafTimeRef.current = now;
-
-    // Velocity-adaptive lerp: smooth gliding tracking video motion (~0.38 per 16.6ms)
-    const blend = 1 - Math.exp(-dt / 32);
-
-    let hasMovement = false;
-    const currentBoxes: Box[] = [];
-
-    for (const [key, item] of animMapRef.current.entries()) {
-      // Retain tracks for up to 180ms across dropped detection frames
-      if (now - item.lastSeen > 180) {
-        animMapRef.current.delete(key);
-        hasMovement = true;
-        continue;
-      }
-
-      const [cx, cy, cw, ch] = item.current;
-      const [tx, ty, tw, th] = item.target;
-
-      const nx = cx + (tx - cx) * blend;
-      const ny = cy + (ty - cy) * blend;
-      const nw = cw + (tw - cw) * blend;
-      const nh = ch + (th - ch) * blend;
-
-      if (
-        Math.abs(tx - cx) > 0.00005 ||
-        Math.abs(ty - cy) > 0.00005 ||
-        Math.abs(tw - cw) > 0.00005 ||
-        Math.abs(th - ch) > 0.00005
-      ) {
-        hasMovement = true;
-      }
-
-      item.current = [nx, ny, nw, nh];
-      currentBoxes.push({
-        ...item.box,
-        x: nx,
-        y: ny,
-        w: nw,
-        h: nh,
-      });
-    }
-
-    if (hasMovement || currentBoxes.length > 0) {
-      currentBoxes.sort((a, b) => {
-        if (Boolean(a.isCritical) !== Boolean(b.isCritical)) return a.isCritical ? -1 : 1;
-        if (Boolean(a.isAlert) !== Boolean(b.isAlert)) return a.isAlert ? -1 : 1;
-        return (b.confidence ?? 0) - (a.confidence ?? 0);
-      });
-      setDisplayedBoxes(currentBoxes);
-    } else if (animMapRef.current.size === 0) {
-      setDisplayedBoxes([]);
-    }
-
-    if (animMapRef.current.size > 0) {
-      rafIdRef.current = requestAnimationFrame(() => animateRef.current());
-    } else {
-      rafIdRef.current = null;
-    }
-  };
-
-  useEffect(() => {
-    const now = performance.now();
-    for (const b of allBoxes) {
-      const isFace = b.label.toLowerCase() === "face";
-      const key = b.trackId
-        ? (isFace ? `face-track-${b.trackId}` : `track-${b.trackId}`)
-        : isFace
-        ? `face-${Math.round(b.x * 20)}_${Math.round(b.y * 20)}`
-        : `det-${b.label}-${Math.round(b.x * 20)}_${Math.round(b.y * 20)}`;
-
-      const targetCoords: [number, number, number, number] = [b.x, b.y, b.w, b.h];
-      const existing = animMapRef.current.get(key);
-      if (!existing) {
-        // Zero-lag instant snap for new targets
-        animMapRef.current.set(key, {
-          current: [...targetCoords],
-          target: targetCoords,
-          box: b,
-          lastSeen: now,
-        });
-      } else {
-        existing.target = targetCoords;
-        existing.box = b;
-        existing.lastSeen = now;
-      }
-    }
-
-    // Start RAF loop if not running
-    if (animMapRef.current.size > 0 && rafIdRef.current === null) {
-      lastRafTimeRef.current = performance.now();
-      rafIdRef.current = requestAnimationFrame(() => animateRef.current());
-    }
-  }, [allBoxes]);
-
-  useEffect(() => {
-    return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-    };
-  }, []);
-
-  const renderedBoxes = displayedBoxes.length > 0 ? displayedBoxes : allBoxes;
-  const targetCount = renderedBoxes.length;
+  const targetCount = allBoxes.length;
 
   // Active selected box dynamically follows moving target if trackId matches
   const activeSelectedBox = selectedBox?.trackId
-    ? renderedBoxes.find((b) => b.trackId === selectedBox.trackId) || selectedBox
+    ? allBoxes.find((b) => b.trackId === selectedBox.trackId) || selectedBox
     : selectedBox;
 
   const cropTarget = (box: Box): string => {
@@ -620,7 +520,7 @@ export function CameraTile({
 
           {/* HUD SVG Overlays */}
           <OverlayCanvas
-            boxes={renderedBoxes}
+            boxes={allBoxes}
             mode={mode}
             preset={preset}
             showPeople={showPeople}

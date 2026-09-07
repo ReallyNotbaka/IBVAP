@@ -152,12 +152,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         for track in pipeline.last_tracks
                     ],
                     "faces": [
-                        {
-                            "bbox_norm": f["bbox_norm"],
-                            "confidence": f["confidence"],
-                            "quality_passed": f.get("quality_passed", True),
-                            "track_id": f.get("track_id"),
-                        }
+                        {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
                         for f in pipeline.last_faces
                     ],
                     "plates": plates,
