@@ -30,7 +30,7 @@ function SourceState({ error, onRetry }: { error?: boolean; onRetry?: () => void
         <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500 dark:text-slate-400">
           {error
             ? "The source list could not be reached. Your footage is safe; try again when the service is ready."
-            : "Syncing your video source and getting the live workspace ready."}
+            : "Syncing your video source and getting the workspace ready."}
         </p>
         {error && onRetry && (
           <button

@@ -28,7 +28,7 @@ export function Monitor() {
       <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-3 flex items-center justify-between">
         <h1 className="text-sm font-semibold">Monitoring workspace</h1>
         <div className="flex items-center gap-2 text-xs">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" /> Live
+          <span className="h-2 w-2 rounded-full bg-emerald-500" /> Connected
           <select value={overlay} onChange={(e) => setOverlay(e.target.value as never)} className="ml-3 rounded border px-2 py-1">
             <option value="minimal">Minimal</option>
             <option value="operational">Operational</option>
@@ -44,12 +44,12 @@ export function Monitor() {
             {streamUrl.startsWith("http") ? (
               <img
                 src={streamUrl}
-                alt={activeCam?.name || "Live Camera"}
+                alt={activeCam?.name || "Camera feed"}
                 className="w-full h-full object-contain"
               />
             ) : (
               <div className="text-center">
-                <div className="text-sm">Live player feed</div>
+                <div className="text-sm">Camera feed</div>
                 <div className="mt-1 text-xs text-slate-400">Waiting for video stream signal</div>
                 <div className="mt-2 text-xs">Overlay: {overlay} • Zone: Restricted • Track IDs • Direction</div>
               </div>

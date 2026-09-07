@@ -49,7 +49,7 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
       setActiveTab("enroll");
       setName(initialTarget.trackId ? `Person #${initialTarget.trackId}` : "Subject");
       setNotes(
-        `Flagged from live monitoring feed (Track #${initialTarget.trackId || "N/A"})${
+        `Flagged from source feed (Track #${initialTarget.trackId || "N/A"})${
           initialTarget.confidence
             ? ` - ${Math.round(initialTarget.confidence * 100)}% detection confidence`
             : ""

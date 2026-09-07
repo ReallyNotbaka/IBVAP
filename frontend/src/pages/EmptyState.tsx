@@ -25,8 +25,8 @@ export function EmptyState({
               <CpuIcon className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">Neural Engine</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">YOLO26 & DirectML</div>
+              <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">Detection</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">YOLO26</div>
             </div>
           </div>
 
@@ -35,8 +35,8 @@ export function EmptyState({
               <CrosshairIcon className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">Biometrics</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">SFace Target ID</div>
+              <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">Watchlist</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">Target matching</div>
             </div>
           </div>
         </div>
@@ -102,12 +102,12 @@ export function EmptyState({
       <footer className="mt-8 text-center text-xs text-slate-400 dark:text-slate-500 flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
         <span className="inline-flex items-center gap-1.5">
           <CpuIcon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-          <span>Real-time Vision Analytics</span>
+          <span>Video monitoring</span>
         </span>
         <span className="hidden sm:inline">·</span>
         <span className="inline-flex items-center gap-1.5">
           <CrosshairIcon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500" />
-          <span>Biometric Target Identification</span>
+          <span>Target matching</span>
         </span>
         <span className="hidden sm:inline">·</span>
         <span>IBVAP Platform</span>

@@ -59,7 +59,7 @@ export function Cockpit({
           <div className="flex items-center gap-2.5">
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)] animate-pulse" />
             <h1 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100 uppercase">
-              Operations Cockpit
+              Camera overview
             </h1>
           </div>
           <span className="text-xs font-mono font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 rounded-full px-3 py-0.5">
@@ -79,7 +79,7 @@ export function Cockpit({
 
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-500 dark:text-slate-400 font-medium hidden md:inline">
-            Active Neural Engine:
+            Model:
           </span>
           <span className="font-mono text-xs font-bold uppercase px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
             {activeModel}
@@ -114,7 +114,7 @@ export function Cockpit({
         {/* Video Control Pill Bar */}
         {n > 0 && (
           <div className="control-pill-bar mt-3 w-full max-w-[1200px] flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-2xl bg-white/85 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-white/10 shadow-md transition-colors">
-            {/* Left: Exit Solo mode when active, or Live Overlay label */}
+            {/* Left: Exit Solo mode when active, or overlay label */}
             <div className="flex items-center gap-2">
               {soloCamera ? (
                 <button
@@ -128,7 +128,7 @@ export function Cockpit({
               ) : (
                 <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Live Overlay
+                  Overlay
                 </span>
               )}
             </div>
@@ -261,7 +261,7 @@ export function Cockpit({
             No Video Feeds Connected
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Add a camera or smartphone feed from the top bar to begin live operations.
+            Add a camera or smartphone feed from the top bar to begin monitoring.
           </p>
         </div>
       )}
@@ -291,7 +291,7 @@ export function Cockpit({
                 <div>
                   <h2 className="text-sm font-bold tracking-tight">Alerts & Watchlist</h2>
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Real-time alerts and operational activity
+                    Alerts and recent activity
                   </p>
                 </div>
               </div>
@@ -365,7 +365,7 @@ export function Cockpit({
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                   Perimeter Events ({eventList.length})
                 </span>
-                <span className="text-[10px] text-slate-400 font-mono">Live Feed</span>
+                <span className="text-[10px] text-slate-400 font-mono">Latest</span>
               </div>
 
               {eventList.length === 0 ? (

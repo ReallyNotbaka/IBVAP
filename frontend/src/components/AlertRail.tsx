@@ -28,7 +28,7 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
             }`}
           />
           <h3 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Operational Alerts & Activity
+            Alerts & activity
           </h3>
           <span className="rounded-full bg-slate-200/70 dark:bg-slate-800 px-2 py-0.5 text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
             {events.length} {events.length === 1 ? "Event" : "Events"}
