@@ -474,3 +474,85 @@ class TestObservationsAPIWithCriticalTarget:
             _CAMERAS.pop(cam_id, None)
             _OBSERVATIONS.pop(cam_id, None)
 
+
+class TestCriticalTargetPrecedenceInPipeline:
+    def test_pipeline_critical_target_overrides_locked_non_critical_target(self, tmp_path: Path) -> None:
+        """A locked non-critical track must be overridable by a subsequent CRITICAL target detection."""
+        store = get_watchlist_store()
+        store.storage_path = tmp_path / "watchlist.json"
+        store._entries.clear()
+
+        std_vector = _make_unit_vector(101)
+        crit_vector = _make_unit_vector(202)
+
+        store.add_entry(
+            WatchlistEntry(
+                id="std-001",
+                name="Standard Subject",
+                threat_level=ThreatLevel.HIGH,
+                notes="Standard suspect",
+                gallery=[std_vector],
+                created_at=time.time(),
+            )
+        )
+        store.add_entry(
+            WatchlistEntry(
+                id="crit-002",
+                name="Critical Operative",
+                threat_level=ThreatLevel.CRITICAL,
+                notes="Highest threat priority",
+                gallery=[crit_vector],
+                created_at=time.time(),
+            )
+        )
+
+        det = MockPersonDetector(bbox_norm=(0.3, 0.2, 0.6, 0.85))
+        f_det = MockFaceDetector(face_bbox_norm=(0.4, 0.22, 0.5, 0.35))
+        f_rec = MockFaceRecognizer(feature_vector=std_vector)
+
+        pipeline = MiniPipeline(
+            camera_id="cam-crit-precedence",
+            stream_epoch=1,
+            detector=det,
+            face_detector=f_det,
+            face_recognizer=f_rec,
+            enable_face=True,
+            sample_stride=1,
+            face_stride=1,
+        )
+
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        # Frame 1: Matches standard subject (tentative)
+        pipeline.process_frame(frame)
+        trk = pipeline.last_tracks[0]
+        assert trk.identity is not None
+        assert trk.identity["name"] == "Standard Subject"
+
+        # Frame 7 (cadence passes for unlocked track): 2nd match locks standard subject
+        pipeline.frame_idx = 7
+        pipeline.process_frame(frame)
+        trk = pipeline.last_tracks[0]
+        assert trk.identity_locked is True
+        assert trk.identity["name"] == "Standard Subject"
+        assert trk.identity["threat_level"] == "HIGH"
+
+        # Now switch recognizer feature vector to CRITICAL target
+        f_rec.feature_vector = crit_vector
+
+        # Frame 15: Within 30-frame throttle window for non-critical locked track, so skipped
+        pipeline.frame_idx = 15
+        pipeline.process_frame(frame)
+        trk = pipeline.last_tracks[0]
+        assert trk.identity["name"] == "Standard Subject"
+
+        # Frame 38: Cadence window (>= 30 frames since last bio at frame 7) expires!
+        # SFace executes and CRITICAL target overrides the locked non-critical target!
+        pipeline.frame_idx = 38
+        pipeline.process_frame(frame)
+        trk = pipeline.last_tracks[0]
+        assert trk.identity_locked is True
+        assert trk.identity["name"] == "Critical Operative"
+        assert trk.identity["threat_level"] == "CRITICAL"
+
+

@@ -109,7 +109,18 @@ def benchmark_onnx_detector(
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
     providers = [provider] if provider else None
-    session = ort.InferenceSession(model_path, providers=providers)
+    sess_options = ort.SessionOptions()
+    sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_options.enable_mem_pattern = True
+    sess_options.enable_cpu_mem_arena = True
+    avail = ort.get_available_providers()
+    if provider == "DmlExecutionProvider" or (provider is None and "DmlExecutionProvider" in avail):
+        if providers is None:
+            providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
+        prov_options = [{"device_id": 0} if p == "DmlExecutionProvider" else {} for p in providers]
+    else:
+        prov_options = None
+    session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers, provider_options=prov_options)
     active_provider = session.get_providers()[0]
 
     input_name = session.get_inputs()[0].name

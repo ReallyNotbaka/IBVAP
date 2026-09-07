@@ -91,8 +91,11 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     last_analysis_fps_calc = time.perf_counter()
     last_inference_ms = 0.0
 
+    last_night_result = None
+    last_night_time = 0.0
+
     def analyze() -> None:
-        nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc, last_inference_ms
+        nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc, last_inference_ms, last_night_result, last_night_time
         while not stop.is_set():
             if not analysis_ready.wait(timeout=0.5):
                 continue
@@ -123,8 +126,12 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         if plate and plate.consensus:
                             plates.append({"text": plate.consensus, "confidence": plate.quality})
 
-                thumb = cv2.resize(current, (320, 180), interpolation=cv2.INTER_NEAREST)
-                night = night_detector.update(thumb, timestamp=time.time())
+                now_ts = time.time()
+                if last_night_result is None or (now_ts - last_night_time) >= 0.5:
+                    thumb = cv2.resize(current, (320, 180), interpolation=cv2.INTER_NEAREST)
+                    last_night_result = night_detector.update(thumb, timestamp=now_ts)
+                    last_night_time = now_ts
+                night = last_night_result
 
                 _OBSERVATIONS[camera_id] = {
                     "runtime": getattr(pipeline, "runtime", getattr(pipeline.detector, "runtime", "cpu")),

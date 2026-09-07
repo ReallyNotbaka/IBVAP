@@ -241,7 +241,11 @@ class FaceDetector:
 
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceDetectorYN"):
+            if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
             try:
+                backend = cv2.dnn.DNN_BACKEND_OPENCV
+                target = cv2.dnn.DNN_TARGET_OPENCL if cv2.ocl.haveOpenCL() else cv2.dnn.DNN_TARGET_CPU
                 self._detector = cv2.FaceDetectorYN.create(
                     str(p),
                     "",
@@ -249,9 +253,21 @@ class FaceDetector:
                     score_threshold=conf_threshold,
                     nms_threshold=0.3,
                     top_k=5000,
+                    backend_id=backend,
+                    target_id=target,
                 )
             except Exception:
-                self._detector = None
+                try:
+                    self._detector = cv2.FaceDetectorYN.create(
+                        str(p),
+                        "",
+                        (320, 320),
+                        score_threshold=conf_threshold,
+                        nms_threshold=0.3,
+                        top_k=5000,
+                    )
+                except Exception:
+                    self._detector = None
 
     def detect(self, frame: np.ndarray) -> list[FaceDetection]:
         """Detect faces in frame and return normalized bounding boxes and quality metrics."""
@@ -337,6 +353,8 @@ class FaceRecognizer:
 
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceRecognizerSF"):
+            if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
             try:
                 self._recognizer = cv2.FaceRecognizerSF.create(str(p), "")
             except Exception:

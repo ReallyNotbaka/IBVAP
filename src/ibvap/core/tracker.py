@@ -27,6 +27,7 @@ class Track:
     identity: dict[str, Any] | None = None
     identity_locked: bool = False
     match_history: list[dict[str, Any]] = field(default_factory=list)
+    last_bio_frame: int = -999
 
     @property
     def center(self) -> tuple[float, float]:

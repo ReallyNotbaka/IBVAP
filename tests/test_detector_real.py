@@ -129,3 +129,67 @@ def test_pipeline_explicit_detector_injection() -> None:
     assert ev is not None
     assert ev["event_type"] == "zone_intrusion"
     assert len(list_events()) == 1
+
+
+def test_onnx_detector_class_aware_nms_preserves_colocated_classes() -> None:
+    """Class-aware NMS must preserve co-located person and vehicle without inter-class suppression."""
+    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+
+    # Mock output with:
+    # 1. Person at cx=320, cy=320, w=100, h=200, conf=0.92
+    # 2. Duplicate Person at cx=322, cy=320, w=100, h=200, conf=0.70 (should be suppressed by box 1)
+    # 3. Car at same location cx=320, cy=320, w=100, h=200, conf=0.88 (MUST NOT be suppressed by person)
+    mock_out = np.zeros((1, 84, 8400), dtype=np.float32)
+
+    # Box 1: Person (class 0 -> index 4)
+    mock_out[0, :4, 0] = [320.0, 320.0, 100.0, 200.0]
+    mock_out[0, 4, 0] = 0.92
+
+    # Box 2: Duplicate Person (class 0 -> index 4)
+    mock_out[0, :4, 1] = [322.0, 320.0, 100.0, 200.0]
+    mock_out[0, 4, 1] = 0.70
+
+    # Box 3: Car (class 2 -> index 6)
+    mock_out[0, :4, 2] = [320.0, 320.0, 100.0, 200.0]
+    mock_out[0, 6, 2] = 0.88
+
+    orig_run = detector._session.run
+    detector._session.run = MagicMock(return_value=[mock_out])
+    try:
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        dets = detector.detect(frame, frame_id=1)
+
+        # Must have exactly 2 detections: 1 person and 1 car (duplicate person suppressed, car preserved!)
+        assert len(dets) == 2
+        classes = [d.class_name for d in dets]
+        assert classes.count("person") == 1
+        assert classes.count("car") == 1
+    finally:
+        detector._session.run = orig_run
+
+
+def test_onnx_detector_preprocessing_aspect_ratios_buffer_reuse() -> None:
+    """Reusable canvas buffer must handle dynamic aspect ratios and frame sizes seamlessly."""
+    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+
+    # 1. 1080p landscape
+    frame_1080 = np.ones((1080, 1920, 3), dtype=np.uint8) * 50
+    blob1, scale1, pad_x1, pad_y1 = detector._preprocess(frame_1080)
+    assert blob1.shape == (1, 3, 640, 640)
+    assert pad_x1 == 0.0
+    assert pad_y1 == 140.0
+
+    # 2. 480p landscape
+    frame_480 = np.ones((480, 640, 3), dtype=np.uint8) * 100
+    blob2, scale2, pad_x2, pad_y2 = detector._preprocess(frame_480)
+    assert blob2.shape == (1, 3, 640, 640)
+    assert pad_x2 == 0.0
+    assert pad_y2 == 80.0
+
+    # 3. Portrait 9:16
+    frame_portrait = np.ones((1280, 720, 3), dtype=np.uint8) * 150
+    blob3, scale3, pad_x3, pad_y3 = detector._preprocess(frame_portrait)
+    assert blob3.shape == (1, 3, 640, 640)
+    assert pad_x3 == 140.0
+    assert pad_y3 == 0.0
+

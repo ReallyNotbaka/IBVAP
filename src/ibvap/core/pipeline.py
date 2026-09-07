@@ -40,7 +40,7 @@ class MiniPipeline:
         enable_face: bool = True,
         face_stride: int = 3,
         sample_stride: int = 1,
-        max_face_size: int = 1280,
+        max_face_size: int | None = None,
     ) -> None:
         self.camera_id = camera_id
         self.stream_epoch = stream_epoch
@@ -158,14 +158,15 @@ class MiniPipeline:
             sampled_idx = self.frame_idx // self.sample_stride if self.sample_stride > 1 else self.frame_idx
             if (sampled_idx % self.face_stride) == 0:
                 try:
-                    # Downscale huge frames for face (normalized bbox is resolution-invariant, so no remap needed)
+                    # Native resolution processing (do not drop resolution for maximum detection accuracy)
                     fd_frame = frame
-                    h, w = frame.shape[:2]
-                    if max(h, w) > self.max_face_size:
-                        scale = self.max_face_size / float(max(h, w))
-                        nw, nh = int(w * scale), int(h * scale)
-                        if nw > 0 and nh > 0:
-                            fd_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+                    if self.max_face_size is not None and self.max_face_size > 0:
+                        h, w = frame.shape[:2]
+                        if max(h, w) > self.max_face_size:
+                            scale = self.max_face_size / float(max(h, w))
+                            nw, nh = int(w * scale), int(h * scale)
+                            if nw > 0 and nh > 0:
+                                fd_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
                     raw_faces = self.face_detector.detect(fd_frame)  # type: ignore[union-attr]
                     self._last_face_frame = fd_frame
                     self.last_faces = [
@@ -199,8 +200,21 @@ class MiniPipeline:
                     target_track = next((t for t in tracks if t.track_id == trk_id), None)
                     if target_track is None:
                         continue
+                    # Check locked state and threat level
+                    is_locked = getattr(target_track, "identity_locked", False)
+                    curr_threat = getattr(target_track, "identity", {}).get("threat_level") if target_track.identity else None
+                    # If already locked to a CRITICAL target, identity cannot be overridden; skip redundant extraction
+                    if is_locked and curr_threat == "CRITICAL":
+                        continue
+                    # For non-critical locked tracks, poll at a lower cadence (every 30 frames) to allow CRITICAL target override
+                    # For unlocked tracks, check at most once every 6 frames
+                    last_bio = getattr(target_track, "last_bio_frame", -999)
+                    cadence = 30 if is_locked else 6
+                    if last_bio >= 0 and (self.frame_idx - last_bio) < cadence:
+                        continue
                     raw_f = face_info.get("_raw")
                     if raw_f is not None and getattr(getattr(raw_f, "quality", None), "passed", True):
+                        target_track.last_bio_frame = self.frame_idx
                         aligned = self.face_recognizer.align_crop(crop_frame, raw_f)
                         feat = self.face_recognizer.extract_feature(aligned).flatten()
                         match = wl_store.identify(feat)

@@ -63,32 +63,64 @@ class ONNXDetectorProvider:
         self._iou_threshold = iou_threshold
         self._input_size = input_size
         self._model_id = Path(model_path).stem
+        self._canvas: np.ndarray = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
+        self._last_pad_sig: tuple[int, int, int, int] | None = None
+
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_options.enable_mem_pattern = True
+        sess_options.enable_cpu_mem_arena = True
 
         available = ort.get_available_providers()
         try:
             if providers is not None:
+                dml_active = "DmlExecutionProvider" in providers
+                prov_options = [{"device_id": 0} if p == "DmlExecutionProvider" else {} for p in providers] if dml_active else None
                 self._session = ort.InferenceSession(
                     self._model_path,
+                    sess_options=sess_options,
                     providers=providers,
+                    provider_options=prov_options,
                 )
             elif "DmlExecutionProvider" in available:
                 self._session = ort.InferenceSession(
                     self._model_path,
+                    sess_options=sess_options,
                     providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+                    provider_options=[{"device_id": 0}, {}],
                 )
             else:
                 self._session = ort.InferenceSession(
                     self._model_path,
+                    sess_options=sess_options,
                     providers=["CPUExecutionProvider"],
                 )
             active = self._session.get_providers()
             self._runtime = "directml" if "DmlExecutionProvider" in active else "cpu"
         except Exception:
-            self._session = ort.InferenceSession(
-                self._model_path,
-                providers=["CPUExecutionProvider"],
-            )
-            self._runtime = "cpu"
+            try:
+                if "DmlExecutionProvider" in available:
+                    self._session = ort.InferenceSession(
+                        self._model_path,
+                        sess_options=sess_options,
+                        providers=["DmlExecutionProvider", "CPUExecutionProvider"],
+                        provider_options=[{"device_id": 0}, {}],
+                    )
+                    active = self._session.get_providers()
+                    self._runtime = "directml" if "DmlExecutionProvider" in active else "cpu"
+                else:
+                    self._session = ort.InferenceSession(
+                        self._model_path,
+                        sess_options=sess_options,
+                        providers=["CPUExecutionProvider"],
+                    )
+                    self._runtime = "cpu"
+            except Exception:
+                self._session = ort.InferenceSession(
+                    self._model_path,
+                    providers=["CPUExecutionProvider"],
+                )
+                self._runtime = "cpu"
 
         self._input_name = self._session.get_inputs()[0].name
         self._output_name = self._session.get_outputs()[0].name
@@ -117,19 +149,33 @@ class ONNXDetectorProvider:
         dw = (self._input_size - new_unpad_w) / 2.0
         dh = (self._input_size - new_unpad_h) / 2.0
 
-        resized = cv2.resize(frame, (new_unpad_w, new_unpad_h), interpolation=cv2.INTER_LINEAR) if (orig_w, orig_h) != (new_unpad_w, new_unpad_h) else frame
-
         top = int(round(dh - 0.1))
-        bottom = self._input_size - new_unpad_h - top
         left = int(round(dw - 0.1))
-        right = self._input_size - new_unpad_w - left
 
-        letterboxed = cv2.copyMakeBorder(resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
-        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
-        blob = rgb.astype(np.float32) / 255.0
-        blob = np.transpose(blob, (2, 0, 1))
-        blob = np.expand_dims(blob, axis=0)
-        blob = np.ascontiguousarray(blob)
+        if (
+            self._canvas is None
+            or self._canvas.shape != (self._input_size, self._input_size, 3)
+        ):
+            self._canvas = np.full((self._input_size, self._input_size, 3), 114, dtype=np.uint8)
+            self._last_pad_sig = None
+
+        pad_sig = (top, left, new_unpad_h, new_unpad_w)
+        if self._last_pad_sig != pad_sig:
+            self._canvas.fill(114)
+            self._last_pad_sig = pad_sig
+
+        target_slice = self._canvas[top : top + new_unpad_h, left : left + new_unpad_w]
+        if (orig_w, orig_h) == (new_unpad_w, new_unpad_h):
+            target_slice[:] = frame
+        else:
+            cv2.resize(frame, (new_unpad_w, new_unpad_h), dst=target_slice, interpolation=cv2.INTER_LINEAR)
+
+        blob = cv2.dnn.blobFromImage(
+            self._canvas,
+            scalefactor=1.0 / 255.0,
+            swapRB=True,
+            crop=False,
+        )
         return blob, scale, float(left), float(top)
 
     def detect(self, frame: np.ndarray, frame_id: int = 0) -> list[Detection]:
@@ -170,7 +216,7 @@ class ONNXDetectorProvider:
 
         valid_boxes = boxes[mask]
         valid_scores = best_sec_scores[mask]
-        valid_class_ids = [sec_class_ids[int(i)] for i in best_sec_local_idx[mask]]
+        valid_class_ids = np.array(sec_class_ids, dtype=np.int32)[best_sec_local_idx[mask]]
 
         cx = valid_boxes[:, 0]
         cy = valid_boxes[:, 1]
@@ -179,12 +225,11 @@ class ONNXDetectorProvider:
         x1_lb = cx - w / 2.0
         y1_lb = cy - h / 2.0
 
-        boxes_for_nms: list[list[float]] = []
-        for i in range(len(valid_scores)):
-            boxes_for_nms.append([float(x1_lb[i]), float(y1_lb[i]), float(w[i]), float(h[i])])
-
-        scores_for_nms = valid_scores.tolist()
-        indices = cv2.dnn.NMSBoxes(boxes_for_nms, scores_for_nms, self._conf_threshold, self._iou_threshold)
+        # Class-aware NMS: offset coordinates by class ID so detections of different security
+        # classes (e.g., person near a car or riding a bicycle) do not falsely suppress each other.
+        class_offsets = (valid_class_ids * 10000.0).astype(np.float32)
+        boxes_for_nms = np.column_stack((x1_lb + class_offsets, y1_lb, w, h))
+        indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, self._conf_threshold, self._iou_threshold)
         if len(indices) == 0:
             return []
 
