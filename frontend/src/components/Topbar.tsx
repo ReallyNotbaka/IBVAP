@@ -83,7 +83,7 @@ export function Topbar({
           data-testid="cta-connect-phone-topbar"
           className="inline-flex h-8 sm:h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-900 px-2.5 sm:px-3.5 text-xs font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-100 cursor-pointer"
           title="Add camera"
-          aria-label="Add camera"
+          aria-label="Add CCTV or IP camera"
         >
           <CameraIcon className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Add camera</span>

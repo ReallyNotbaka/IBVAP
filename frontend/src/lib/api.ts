@@ -11,6 +11,7 @@ export type Camera = {
   stream_epoch: number;
   source_type?: string;
   protocol?: string;
+  temporary?: boolean;
 };
 
 export type PlaybackState = {
@@ -181,6 +182,7 @@ export async function createCamera(payload: {
   name?: string;
   source_type?: string;
   protocol?: string;
+  temporary?: boolean;
 }): Promise<Camera> {
   const r = await fetch(base("/api/v1/cameras"), {
     method: "POST",

@@ -461,6 +461,7 @@ class CameraCreate(BaseModel):
     username: str | None = None
     password: str | None = None
     site_cidr_allowlist: list[str] | None = None
+    temporary: bool = False
 
 
 class CameraTestRequest(BaseModel):
@@ -731,6 +732,7 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
         "desired_state": "STREAMING",
         "observed_state": sm.state.value,
         "has_credentials": bool(enc_user or enc_pass),
+        "temporary": req.temporary,
         "created_at": time.time(),
     }
     _CAMERAS[cam_id] = data

@@ -14,7 +14,11 @@ export function ConnectModal() {
   const loc = useLocation();
   const qc = useQueryClient();
   const open = loc.pathname === "/connect/phone";
-  const [url, setUrl] = useState("");
+  const [address, setAddress] = useState("");
+  const [port, setPort] = useState("");
+  const [protocol, setProtocol] = useState("");
+  const [streamPath, setStreamPath] = useState("");
+  const [temporary, setTemporary] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showAuth, setShowAuth] = useState(false);
@@ -46,11 +50,18 @@ export function ConnectModal() {
   if (!open) return null;
 
   async function doTest() {
+    if (!address.trim() || !port.trim() || !protocol) {
+      setResult({ result: "error", safe_message: "Enter an address, port, and protocol before testing.", stages: [] });
+      setStep(2);
+      return;
+    }
+
+    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
     setLoading(true);
     setStep(3);
     try {
       const data = await testCamera({
-        endpoint: url,
+        endpoint,
         username: username || undefined,
         password: password || undefined,
         site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
@@ -65,21 +76,29 @@ export function ConnectModal() {
   }
 
   async function doSave() {
+    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
     setSaving(true);
     setSaveError("");
     try {
       await createCamera({
-        endpoint: url,
+        endpoint,
         site_id: "00000000-0000-0000-0000-000000000001",
         username: username || undefined,
         password: password || undefined,
         site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
         name: `Camera ${Date.now() % 1000}`,
+        source_type: "ip_camera",
+        protocol,
+        temporary,
       });
       await qc.invalidateQueries({ queryKey: ["cameras"] });
       setStep(1);
       setResult(null);
-      setUrl("");
+      setAddress("");
+      setPort("");
+      setProtocol("");
+      setStreamPath("");
+      setTemporary(true);
       nav("/");
     } catch {
       setSaveError("The camera could not be added. Check the connection and try again.");
@@ -111,7 +130,7 @@ export function ConnectModal() {
                 <span id="connect-camera-title">Connect Camera Source</span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Configure network camera, IP webcam, or mobile RTSP feed
+                Add a CCTV, IP camera, or network video source
               </p>
             </div>
           </div>
@@ -130,13 +149,18 @@ export function ConnectModal() {
           <>
             <div className="space-y-3">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Device Configuration Instructions
+                How should this source be kept?
               </h3>
-              <ol className="list-decimal pl-5 text-xs leading-5 text-slate-600 dark:text-slate-300 space-y-1.5">
-                <li>Start streaming service on device (e.g. DroidCam, IP Webcam, or hardware IP camera).</li>
-                <li>Ensure the camera device is connected to the same local network and powered.</li>
-                <li>Copy the stream endpoint URL provided by the application.</li>
-              </ol>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button type="button" onClick={() => setTemporary(true)} className={`rounded-xl border p-3 text-left transition-colors cursor-pointer ${temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
+                  <span className="block text-sm font-semibold">Temporary source</span>
+                  <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">Use it for this session without treating it as a saved camera.</span>
+                </button>
+                <button type="button" onClick={() => setTemporary(false)} className={`rounded-xl border p-3 text-left transition-colors cursor-pointer ${!temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
+                  <span className="block text-sm font-semibold">Saved camera</span>
+                  <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">Keep this source in the camera list with its address.</span>
+                </button>
+              </div>
             </div>
             <button
               onClick={() => setStep(2)}
@@ -144,22 +168,42 @@ export function ConnectModal() {
               className="primary-button mt-6 w-full cursor-pointer flex items-center justify-center gap-2"
             >
               <CameraIcon className="w-4 h-4" />
-              <span>Camera feed is ready</span>
+              <span>Enter camera details</span>
             </button>
           </>
         )}
         {step === 2 && (
           <>
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Stream Connection Parameters
+              Camera connection details
             </h3>
-            <input
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="http://192.168.1.10:4747/video"
-              data-testid="stream-url"
-              className="mt-3 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300"
-            />
+            <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_9rem]">
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                IP address or hostname
+                <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="e.g. 10.0.0.25" data-testid="camera-address" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                Port
+                <input value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} placeholder="e.g. 4747" inputMode="numeric" data-testid="camera-port" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
+              </label>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                Protocol
+                <select value={protocol} onChange={(e) => setProtocol(e.target.value)} data-testid="camera-protocol" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300">
+                  <option value="">Select protocol</option>
+                  <option value="http">HTTP / MJPEG</option>
+                  <option value="https">HTTPS</option>
+                  <option value="rtsp">RTSP</option>
+                  <option value="rtsps">RTSPS</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                Stream path <span className="font-normal text-slate-400">optional</span>
+                <input value={streamPath} onChange={(e) => setStreamPath(e.target.value)} placeholder="Optional path, e.g. video" data-testid="camera-path" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
+              </label>
+            </div>
+            <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">No address is preconfigured. Enter the values shown by your CCTV or network camera software.</p>
             <button
               onClick={() => setShowAuth((v) => !v)}
               data-testid="toggle-auth"
@@ -188,7 +232,7 @@ export function ConnectModal() {
             )}
             <button
               onClick={doTest}
-              disabled={!url || loading}
+              disabled={!address || !port || !protocol || loading}
               data-testid="test-connection"
               className="primary-button mt-4 w-full disabled:opacity-50 cursor-pointer"
             >
@@ -253,7 +297,7 @@ export function ConnectModal() {
               <span>{result.safe_message}</span>
             </div>
             <div className="mt-3 rounded-xl bg-slate-900 p-3 border border-slate-800">
-              {url.startsWith("http") && <img src={url} alt="Preview" className="max-h-72 w-full object-contain rounded-lg bg-black" />}
+              {protocol.startsWith("http") && <img src={`${protocol}://${address}:${port}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`} alt="Preview" className="max-h-72 w-full object-contain rounded-lg bg-black" />}
               <div className="grid grid-cols-3 gap-2 text-xs text-white mt-2 pt-2 border-t border-slate-800 font-mono">
                 <span>Codec: {result.probe.codec}</span>
                 <span>Res: {result.probe.width}×{result.probe.height}</span>
