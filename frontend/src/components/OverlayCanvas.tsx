@@ -9,6 +9,9 @@ export interface Box {
   confidence?: number;
   trackId?: string;
   isAlert?: boolean;
+  targetName?: string;
+  threatLevel?: string;
+  isCritical?: boolean;
 }
 
 interface ColorTheme {
@@ -19,14 +22,14 @@ interface ColorTheme {
   border: string;
 }
 
-function getColorTheme(label: string, isAlert?: boolean): ColorTheme {
-  if (isAlert) {
+function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean): ColorTheme {
+  if (isAlert || isCritical) {
     return {
-      primary: "#ef4444", // Vivid Crimson for true security alerts
-      halo: "rgba(0, 0, 0, 0.9)",
-      bg: "rgba(185, 28, 28, 0.94)",
-      accent: "#fecaca",
-      border: "rgba(239, 68, 68, 0.8)",
+      primary: "#ef4444", // Vivid Crimson for true security alerts & critical targets
+      halo: "rgba(0, 0, 0, 0.95)",
+      bg: "rgba(185, 28, 28, 0.96)", // Deep tactical crimson badge background
+      accent: "#ffffff",
+      border: "rgba(239, 68, 68, 0.9)",
     };
   }
 
@@ -107,10 +110,14 @@ export function OverlayCanvas({
         <filter id="selected-target-glow" x="-25%" y="-25%" width="150%" height="150%">
           <feDropShadow dx="0" dy="0" stdDeviation="1.2" floodColor="#ffffff" floodOpacity="0.9" />
         </filter>
+        {/* Unmistakable tactical crimson beacon glow for critical targets & alerts */}
+        <filter id="critical-target-glow" x="-25%" y="-25%" width="150%" height="150%">
+          <feDropShadow dx="0" dy="0" stdDeviation="1.6" floodColor="#ef4444" floodOpacity="0.85" />
+        </filter>
       </defs>
 
       {filteredBoxes.map((b, idx) => {
-        const theme = getColorTheme(b.label, b.isAlert);
+        const theme = getColorTheme(b.label, b.isAlert, b.isCritical);
         const bx = b.x * 100;
         const by = b.y * 100;
         const bw = b.w * 100;
@@ -123,23 +130,26 @@ export function OverlayCanvas({
           ? `track-${b.trackId}`
           : `det-${b.label}-${idx}`;
 
-        // Micro-badge sizing
-        const formattedLabel = b.isAlert
+        // Micro-badge sizing and text formatting: clearly display target's name
+        const formattedLabel = b.targetName
+          ? (b.isCritical ? `CRITICAL: [${b.targetName}]` : `[${b.targetName}]`)
+          : b.isAlert
           ? b.label
           : b.label.charAt(0).toUpperCase() + b.label.slice(1).toLowerCase();
+
         const charCount =
           formattedLabel.length +
           (hasTrack ? 3 : 0) +
           (showConfidence && b.confidence !== undefined ? 4 : 0);
         const badgeW = isFace
           ? Math.max(5.5, charCount * 0.95 + 1.2)
-          : Math.max(9.5, charCount * 1.3 + 1.8);
-        const badgeH = isFace ? 2.3 : 3.0;
+          : Math.max(9.5, charCount * 1.35 + 2.2);
+        const badgeH = isFace ? 2.3 : b.isAlert ? 3.4 : 3.0;
 
         const badgeY = by < badgeH + 1.2 ? by + 0.4 : by - (badgeH + 0.3);
         const badgeX = Math.max(0.5, Math.min(bx, 100 - badgeW - 0.5));
 
-        // Thin, elegant geometric corner brackets (no loud colored fill rectangles)
+        // Geometric corner brackets
         const cornerSize = Math.min(Math.max(0.3, Math.min(bw, bh) * 0.22), 3.5);
         const bracketPath = `
           M ${bx} ${by + cornerSize} L ${bx} ${by} L ${bx + cornerSize} ${by}
@@ -148,13 +158,20 @@ export function OverlayCanvas({
           M ${bx + bw - cornerSize} ${by + bh} L ${bx + bw} ${by + bh} L ${bx + bw} ${by + bh - cornerSize}
         `;
 
+        // Always render labels for critical target / alerts in all presets (clean, all, alerts)
         const renderLabels =
           b.isAlert || (showLabels && activePreset !== "clean");
+
+        const filterUrl = isSelected
+          ? "url(#selected-target-glow)"
+          : b.isAlert
+          ? "url(#critical-target-glow)"
+          : "url(#geometric-bracket-shadow)";
 
         return (
           <g
             key={elementKey}
-            filter={isSelected ? "url(#selected-target-glow)" : "url(#geometric-bracket-shadow)"}
+            filter={filterUrl}
           >
             {/* Interactive hit area for 1-click Quick Inspector trigger */}
             <rect
@@ -170,16 +187,30 @@ export function OverlayCanvas({
               }}
             />
 
-            {/* Subtle alert wash if and only if true security alert */}
+            {/* Unmistakable, high-visibility RED BOX for critical targets & alerts */}
             {b.isAlert && (
-              <rect
-                x={bx}
-                y={by}
-                width={bw}
-                height={bh}
-                fill="rgba(239, 68, 68, 0.08)"
-                rx={1}
-              />
+              <>
+                <rect
+                  x={bx}
+                  y={by}
+                  width={bw}
+                  height={bh}
+                  fill="rgba(239, 68, 68, 0.14)"
+                  rx={1}
+                />
+                <rect
+                  x={bx}
+                  y={by}
+                  width={bw}
+                  height={bh}
+                  fill="none"
+                  stroke="#ef4444"
+                  strokeWidth={2.0}
+                  rx={1}
+                  vectorEffect="non-scaling-stroke"
+                  data-testid="critical-target-box"
+                />
+              </>
             )}
 
             {/* Fine guideline in 'all' mode */}
@@ -198,12 +229,12 @@ export function OverlayCanvas({
               />
             )}
 
-            {/* Geometric Corner Brackets: Thin, clean, precise framing */}
+            {/* Geometric Corner Brackets: Thin, clean, precise framing; reinforced for alerts */}
             <path
               d={bracketPath}
               fill="none"
               stroke={isSelected ? "#ffffff" : theme.primary}
-              strokeWidth={isFace ? 1.4 : 1.5}
+              strokeWidth={b.isAlert ? 2.5 : isFace ? 1.4 : 1.5}
               strokeLinecap="round"
               strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
@@ -232,6 +263,7 @@ export function OverlayCanvas({
             {renderLabels && (
               <g
                 className="cursor-pointer pointer-events-auto"
+                data-testid={b.isAlert ? "critical-target-badge" : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectBox?.(b);
@@ -244,23 +276,25 @@ export function OverlayCanvas({
                   height={badgeH}
                   fill={theme.bg}
                   stroke={isSelected ? "#ffffff" : theme.border}
-                  strokeWidth={0.5}
+                  strokeWidth={b.isAlert ? 0.8 : 0.5}
                   rx={0.6}
                   vectorEffect="non-scaling-stroke"
                 />
                 <text
                   x={badgeX + (isFace ? 0.7 : 0.9)}
-                  y={badgeY + (isFace ? 1.55 : 2.05)}
+                  y={badgeY + (isFace ? 1.55 : b.isAlert ? 2.3 : 2.05)}
                   fill="#f8fafc"
-                  fontSize={isFace ? 1.3 : 1.8}
-                  fontWeight={600}
+                  fontSize={isFace ? 1.3 : b.isAlert ? 1.9 : 1.8}
+                  fontWeight={b.isAlert ? 700 : 600}
                   letterSpacing="0.02em"
                   fontFamily="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
                 >
-                  <tspan fill={theme.accent}>{formattedLabel}</tspan>
-                  {hasTrack && <tspan fill="#94a3b8"> #{b.trackId}</tspan>}
+                  <tspan fill={b.isAlert ? "#ffffff" : theme.accent} data-testid={b.isAlert ? "target-name-text" : undefined}>
+                    {formattedLabel}
+                  </tspan>
+                  {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"}> #{b.trackId}</tspan>}
                   {showConfidence && b.confidence !== undefined && (
-                    <tspan fill="#cbd5e1" fontSize={isFace ? 1.1 : 1.5}>
+                    <tspan fill={b.isAlert ? "#fed7aa" : "#cbd5e1"} fontSize={isFace ? 1.1 : 1.5}>
                       {" "}
                       {Math.round(b.confidence * 100)}%
                     </tspan>

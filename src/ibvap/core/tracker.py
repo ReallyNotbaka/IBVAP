@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ibvap.core.watchlist import ThreatLevel
+
 
 @dataclass
 class Track:
@@ -43,16 +45,22 @@ class Track:
         name: str,
         score: float,
         tier: str,
+        threat_level: str | ThreatLevel = ThreatLevel.HIGH,
     ) -> bool:
-        """Record face recognition match and apply 2-of-3 temporal confirmation latch.
+        """Record face recognition match and apply temporal confirmation latch.
         
+        - Critical targets (ThreatLevel.CRITICAL) lock immediately on RED tier match.
+        - Other suspects lock on 2-of-3 RED matches or retain existing lock.
+        - Sets identity immediately so UI displays target name and red box from frame 1.
         Returns True if identity is confirmed and locked.
         """
+        tl_str = threat_level.value if hasattr(threat_level, "value") else str(threat_level).upper()
         match_info = {
             "entry_id": entry_id,
             "name": name,
             "score": score,
             "tier": tier,
+            "threat_level": tl_str,
         }
         self.match_history.append(match_info)
         if len(self.match_history) > 6:
@@ -61,24 +69,110 @@ class Track:
         # Evaluate last 3 matches: require at least 2 RED tier matches for this suspect
         recent = self.match_history[-3:]
         red_matches = [m for m in recent if m["entry_id"] == entry_id and m["tier"] == "RED"]
-        
-        if len(red_matches) >= 2 or self.identity_locked:
+        is_critical = tl_str == "CRITICAL"
+
+        # If already locked to an identity:
+        if self.identity_locked and self.identity:
+            curr_entry_id = self.identity.get("entry_id")
+            curr_threat = self.identity.get("threat_level", "HIGH")
+
+            # Same suspect: maintain lock and update peak score
+            if curr_entry_id == entry_id:
+                if tier == "RED":
+                    self.identity["score"] = max(self.identity["score"], score)
+                return True
+
+            # Different suspect: protect the existing locked identity!
+            # AMBER matches NEVER overwrite a locked identity
+            if tier != "RED":
+                return True
+
+            # If currently locked to a CRITICAL target, non-critical matches cannot overwrite
+            if curr_threat == "CRITICAL" and not is_critical:
+                return True
+
+            # Precedence: CRITICAL target incoming over non-critical locked target
+            if is_critical and curr_threat != "CRITICAL":
+                self.identity = {
+                    "entry_id": entry_id,
+                    "name": name,
+                    "score": score,
+                    "tier": "RED",
+                    "threat_level": tl_str,
+                    "locked": True,
+                }
+                return True
+
+            # Both same tier: require 2 RED matches and strictly higher score to reassign
+            if len(red_matches) >= 2 and score > self.identity.get("score", 0.0):
+                self.identity = {
+                    "entry_id": entry_id,
+                    "name": name,
+                    "score": score,
+                    "tier": "RED",
+                    "threat_level": tl_str,
+                    "locked": True,
+                }
+                return True
+
+            return True
+
+        # Not locked yet:
+        # Critical target locks immediately on first RED tier match
+        if is_critical and tier == "RED":
             self.identity_locked = True
             self.identity = {
                 "entry_id": entry_id,
                 "name": name,
-                "score": max(score, self.identity["score"] if self.identity else score),
+                "score": score,
                 "tier": "RED",
+                "threat_level": tl_str,
                 "locked": True,
             }
             return True
 
-        if tier == "AMBER" and not self.identity_locked:
+        # Non-critical suspect confirmed on 2 of 3 RED matches
+        if len(red_matches) >= 2:
+            self.identity_locked = True
+            prev_score = (
+                self.identity["score"]
+                if (self.identity and self.identity.get("entry_id") == entry_id)
+                else score
+            )
+            self.identity = {
+                "entry_id": entry_id,
+                "name": name,
+                "score": max(score, prev_score),
+                "tier": "RED",
+                "threat_level": tl_str,
+                "locked": True,
+            }
+            return True
+
+        # First RED match of non-critical target: set tentative identity immediately
+        if tier == "RED":
+            # Don't overwrite an existing tentative CRITICAL match with a non-critical match
+            if self.identity and self.identity.get("threat_level") == "CRITICAL" and not is_critical:
+                return False
+
+            self.identity = {
+                "entry_id": entry_id,
+                "name": name,
+                "score": score,
+                "tier": "RED",
+                "threat_level": tl_str,
+                "locked": False,
+            }
+            return False
+
+        # AMBER match: only set if no RED identity exists yet
+        if tier == "AMBER" and not self.identity:
             self.identity = {
                 "entry_id": entry_id,
                 "name": name,
                 "score": score,
                 "tier": "AMBER",
+                "threat_level": tl_str,
                 "locked": False,
             }
 
@@ -176,9 +270,15 @@ class CentroidTracker:
             if overlapping_tid is not None:
                 trk = self.tracks[overlapping_tid]
                 # If new detection has higher confidence, promote its class
+                # Protect identified person tracks from class degradation (e.g. person -> motorcycle)
                 if conf > trk.confidence:
-                    trk.class_name = det["class_name"]
-                    trk.class_id = int(det["class_id"])
+                    has_person_identity = (
+                        trk.class_name == "person"
+                        and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
+                    )
+                    if not (has_person_identity and det["class_name"] != "person"):
+                        trk.class_name = det["class_name"]
+                        trk.class_id = int(det["class_id"])
                     trk.confidence = conf
                     trk.age = 0
                     trk.hits += 1

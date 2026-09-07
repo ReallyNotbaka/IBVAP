@@ -115,11 +115,11 @@ def associate_faces_to_tracks(
         hx = (tx1 + tx2) / 2.0
         hy = ty1 + 0.125 * th
 
-        # Permitted spatial boundary for the head center
-        min_x = tx1 - 0.10 * tw
-        max_x = tx2 + 0.10 * tw
+        # Permitted spatial boundary for the head center (supports full body, waist-up, and close-up framing)
+        min_x = tx1 - 0.15 * tw
+        max_x = tx2 + 0.15 * tw
         min_y = ty1 - 0.10 * th
-        max_y = ty1 + 0.35 * th
+        max_y = ty1 + 0.60 * th
 
         for j, face in enumerate(faces):
             fx1, fy1, fx2, fy2 = face["bbox_norm"]
@@ -133,16 +133,16 @@ def associate_faces_to_tracks(
             if not (min_x <= fcx <= max_x and min_y <= fcy <= max_y):
                 continue
 
-            # Scale ratio check (face height vs full body height)
+            # Scale ratio check (face height vs person bbox height: supports distant full-body to close-up/bust)
             ratio = fh / th
-            if ratio < 0.02 or ratio > 0.55:
+            if ratio < 0.02 or ratio > 0.85:
                 continue
 
             # Normalized distance from head anchor
             dx = abs(fcx - hx) / tw
             dy = abs(fcy - hy) / th
             dist = math.sqrt(dx * dx + dy * dy)
-            scale_penalty = 0.5 * abs(ratio - 0.15)
+            scale_penalty = 0.3 * abs(ratio - 0.18)
             cost_matrix[i, j] = dist + scale_penalty
 
     rows, cols = linear_sum_assignment_numpy(cost_matrix)

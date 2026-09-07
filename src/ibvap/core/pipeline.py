@@ -147,6 +147,7 @@ class MiniPipeline:
 
         # ---- face detection (optimized, sampled) ----
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
+        new_faces_detected = False
         if not hasattr(self, "last_faces"):
             self.last_faces = []
         if self.enable_face and self.face_detector is not None:
@@ -177,11 +178,12 @@ class MiniPipeline:
                         for f in raw_faces
                     ]
                     self.faces_analyzed += 1
+                    new_faces_detected = bool(self.last_faces)
                 except Exception:
                     pass
 
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
-        if self.last_faces and self.face_recognizer is not None:
+        if new_faces_detected and self.last_faces and self.face_recognizer is not None:
             try:
                 from ibvap.core.association import associate_faces_to_tracks
                 from ibvap.core.watchlist import get_watchlist_store
@@ -194,7 +196,7 @@ class MiniPipeline:
                     if target_track is None:
                         continue
                     raw_f = face_info.get("_raw")
-                    if raw_f is not None:
+                    if raw_f is not None and getattr(getattr(raw_f, "quality", None), "passed", True):
                         aligned = self.face_recognizer.align_crop(crop_frame, raw_f)
                         feat = self.face_recognizer.extract_feature(aligned).flatten()
                         match = wl_store.identify(feat)
@@ -204,6 +206,7 @@ class MiniPipeline:
                                 name=match.name,
                                 score=match.score,
                                 tier=match.tier,
+                                threat_level=match.threat_level,
                             )
                             if confirmed:
                                 wl_store.record_sighting(match.entry_id, time.time())
@@ -267,9 +270,11 @@ class MiniPipeline:
                 }
                 transactional_write(ev_enter, dedup_key=dedup)
                 self.events_created += 1
-        # 3. Watchlist Suspect Identified (tactical alert when track is locked to a suspect)
+        # 3. Watchlist Suspect Identified (tactical alert when track is locked to a suspect or critical target identified)
         for trk in tracks:
-            if getattr(trk, "identity_locked", False) and trk.identity and trk.track_id not in self.watchlist_alerted_tracks:
+            is_critical = trk.identity and trk.identity.get("threat_level") == "CRITICAL"
+            should_alert = (getattr(trk, "identity_locked", False) or is_critical) and trk.identity
+            if should_alert and trk.track_id not in self.watchlist_alerted_tracks:
                 self.watchlist_alerted_tracks.add(trk.track_id)
                 ident = trk.identity
                 dedup = f"{self.camera_id}:watchlist:{ident['entry_id']}:{trk.track_id}:{self.stream_epoch}"
@@ -285,7 +290,7 @@ class MiniPipeline:
                         "rule": "watchlist_biometric_match",
                         "suspect_id": ident["entry_id"],
                         "suspect_name": ident["name"],
-                        "threat_level": ident.get("tier", "RED"),
+                        "threat_level": ident.get("threat_level", ident.get("tier", "RED")),
                         "score": round(ident["score"], 3),
                         "tier": ident.get("tier", "RED"),
                     },
@@ -438,7 +443,17 @@ class MiniPipeline:
         """Helper for API layer: returns last frame observations including faces."""
         return {
             "detections": self.last_detections,
-            "tracks": [{"track_id": t.track_id, "class_name": t.class_name, "confidence": t.confidence, "bbox_norm": t.bbox_norm} for t in self.last_tracks],
+            "tracks": [
+                {
+                    "track_id": t.track_id,
+                    "class_name": t.class_name,
+                    "confidence": t.confidence,
+                    "bbox_norm": t.bbox_norm,
+                    "identity": getattr(t, "identity", None),
+                    "identity_locked": getattr(t, "identity_locked", False),
+                }
+                for t in self.last_tracks
+            ],
             "faces": self.last_faces,
             "frame_at": time.time(),
             "runtime": getattr(self.detector, "runtime", "mock"),

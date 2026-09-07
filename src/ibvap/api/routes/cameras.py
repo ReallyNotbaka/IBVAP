@@ -18,14 +18,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ibvap.core.anpr import ANPRPipeline
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
-from ibvap.core.probe import ProbeError, probe_url
-from ibvap.core.pipeline import MiniPipeline
-from ibvap.core.anpr import ANPRPipeline
-from ibvap.core.face import FaceDetector
-from ibvap.core.night import NightDetector
 from ibvap.core.model_manager import get_shared_detector_handle
+from ibvap.core.night import NightDetector
+from ibvap.core.pipeline import MiniPipeline
+from ibvap.core.probe import ProbeError, probe_url
 from ibvap.core.ssrf import SSRFError, SSRFPolicy, resolve_and_validate, validate_endpoint  # noqa: F401 - re-export
 
 router = APIRouter(prefix="/api/v1/cameras", tags=["cameras"])
@@ -62,208 +61,228 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
     # --- pipeline: wired to shared ThreadSafeDetectorHandle and Hungarian biometric tracking ---
     detector_handle = get_shared_detector_handle()
-    if is_file_source:
-        pipeline = MiniPipeline(
-            camera_id=camera_id,
-            stream_epoch=cam["stream_epoch"],
-            detector_handle=detector_handle,
-            enable_face=True,
-            face_stride=2,
-            sample_stride=2,
-        )
-    else:
-        pipeline = MiniPipeline(
-            camera_id=camera_id,
-            stream_epoch=cam["stream_epoch"],
-            detector_handle=detector_handle,
-            enable_face=True,
-            face_stride=2,
-            sample_stride=1,
-        )
-
+    pipeline = MiniPipeline(
+        camera_id=camera_id,
+        stream_epoch=cam["stream_epoch"],
+        detector_handle=detector_handle,
+        enable_face=True,
+        face_stride=2,
+        sample_stride=1,
+    )
     _ACTIVE_PIPELINES[camera_id] = pipeline
 
-    # plates/night still computed in worker thread for live; for file also reused
     anpr = ANPRPipeline()
     night_detector = NightDetector(temporal_seconds=0.0)
     condition = _FRAME_CONDITIONS.setdefault(camera_id, threading.Condition())
     frame_number = 0
 
-    # ---------- FILE FOOTAGE: optimized finite path with continuous looping ----------
+    analysis_frame: np.ndarray | None = None
+    analysis_lock = threading.Lock()
+    analysis_ready = threading.Event()
+    analysis_fps_counter = 0
+    last_analysis_fps = 0.0
+    last_analysis_fps_calc = time.perf_counter()
+    last_inference_ms = 0.0
+
+    def analyze() -> None:
+        nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc, last_inference_ms
+        while not stop.is_set():
+            if not analysis_ready.wait(timeout=0.5):
+                continue
+            analysis_ready.clear()
+            with analysis_lock:
+                current = analysis_frame
+                analysis_frame = None
+            if current is None:
+                continue
+
+            try:
+                t_infer_start = time.perf_counter()
+                pipeline.process_frame(current)
+                t_infer_end = time.perf_counter()
+                last_inference_ms = (t_infer_end - t_infer_start) * 1000.0
+
+                plates: list[dict[str, Any]] = []
+                if pipeline.last_detections:
+                    h_c, w_c = current.shape[:2]
+                    for detection in pipeline.last_detections:
+                        if detection["class_name"] not in {"car", "truck", "bus", "motorcycle"}:
+                            continue
+                        x1, y1, x2, y2 = detection["bbox_norm"]
+                        crop = current[int(y1 * h_c) : int(y2 * h_c), int(x1 * w_c) : int(x2 * w_c)]
+                        if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 35:
+                            continue
+                        plate = anpr.process_vehicle_crop(crop, vehicle_id=0)
+                        if plate and plate.consensus:
+                            plates.append({"text": plate.consensus, "confidence": plate.quality})
+
+                thumb = cv2.resize(current, (320, 180), interpolation=cv2.INTER_NEAREST)
+                night = night_detector.update(thumb, timestamp=time.time())
+
+                _OBSERVATIONS[camera_id] = {
+                    "runtime": getattr(pipeline, "runtime", getattr(pipeline.detector, "runtime", "cpu")),
+                    "active_model": getattr(pipeline, "model_id", "yolo26n"),
+                    "detections": pipeline.last_detections,
+                    "tracks": [
+                        {
+                            "track_id": track.track_id,
+                            "class_name": track.class_name,
+                            "confidence": track.confidence,
+                            "bbox_norm": track.bbox_norm,
+                            "identity": getattr(track, "identity", None),
+                            "identity_locked": getattr(track, "identity_locked", False),
+                        }
+                        for track in pipeline.last_tracks
+                    ],
+                    "faces": [
+                        {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
+                        for f in pipeline.last_faces
+                    ],
+                    "plates": plates,
+                    "night": {
+                        "is_night": night.is_night,
+                        "illumination_score": night.illumination_score,
+                        "motion_area": night.motion_area,
+                        "confidence": night.confidence,
+                        "limitation": night.limitation,
+                    },
+                    "frame_at": time.time(),
+                }
+
+                analysis_fps_counter += 1
+                now = time.perf_counter()
+                if now - last_analysis_fps_calc >= 1.0:
+                    last_analysis_fps = analysis_fps_counter / (now - last_analysis_fps_calc)
+                    analysis_fps_counter = 0
+                    last_analysis_fps_calc = now
+            except Exception:
+                # Protect analysis thread from termination so HUD and observations stay active
+                pass
+
+    analysis_thread = threading.Thread(target=analyze, daemon=True, name=f"analysis-{camera_id[:8]}")
+    analysis_thread.start()
+
+    # ---------- FILE FOOTAGE: decoupled native FPS playback with continuous looping ----------
     if is_file_source:
-        # File does not need separate analysis thread - decode is already paced by file FPS,
-        # inference is sampling-optimized inside pipeline (sample_stride 2 + face_stride 2)
+        file_path_str = endpoint.replace("file://", "", 1) if endpoint.startswith("file://") else endpoint
         container = None
-        try:
-            # Outer loop: reopen/seek on EOF for continuous playback
-            while not stop.is_set():
+        loop_count = 0
+        decode_errors = 0
+
+        while not stop.is_set():
+            try:
                 if container is not None:
                     with contextlib.suppress(Exception):
                         container.close()
-                container = av.open(endpoint, options={"timeout": "3000000", "stimeout": "3000000"})
+                container = av.open(file_path_str)
                 stream = next((s for s in container.streams if s.type == "video"), None)
                 if stream is None:
-                    raise RuntimeError("No video stream")
+                    raise RuntimeError("No video stream found in file")
+
                 cam["observed_state"] = "STREAMING"
                 raw_fps = float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0
                 fps = max(5.0, min(raw_fps, 60.0))
                 frame_interval = 1.0 / fps
-                for frame in container.decode(stream):
+
+                while not stop.is_set():
+                    next_frame_time = time.perf_counter()
+                    frames_in_pass = 0
+
+                    try:
+                        for frame in container.decode(stream):
+                            if stop.is_set():
+                                break
+
+                            image = frame.to_ndarray(format="bgr24")
+                            h, w = image.shape[:2]
+                            preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+
+                            ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                            if ok:
+                                frame_bytes = encoded.tobytes()
+                                with condition:
+                                    _FRAMES[camera_id] = frame_bytes
+                                    _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
+                                    condition.notify_all()
+
+                            # Asynchronously schedule analysis with the latest frame without blocking decode
+                            with analysis_lock:
+                                analysis_frame = image
+                            analysis_ready.set()
+
+                            frame_number += 1
+                            frames_in_pass += 1
+
+                            samples = _HEALTH.setdefault(camera_id, [])
+                            samples.append(
+                                {
+                                    "last_frame_age_ms": 0,
+                                    "source_fps": round(fps, 1),
+                                    "analysis_fps": round(last_analysis_fps or fps, 1),
+                                    "inference_ms": round(last_inference_ms, 1),
+                                    "queue_drops": 0,
+                                    "decode_errors": decode_errors,
+                                    "reconnect_count": loop_count,
+                                    "stream_epoch": cam["stream_epoch"],
+                                    "faces_analyzed": pipeline.faces_analyzed,
+                                    "frames_skipped": pipeline.frames_skipped,
+                                }
+                            )
+                            del samples[:-10]
+
+                            # Precise pacing to match native file FPS
+                            next_frame_time += frame_interval
+                            now = time.perf_counter()
+                            sleep_time = next_frame_time - now
+                            if sleep_time > 0:
+                                time.sleep(sleep_time)
+                            elif sleep_time < -0.2:
+                                next_frame_time = now
+
+                    except (av.error.EOFError, av.error.InvalidDataError):
+                        pass
+                    except Exception:
+                        decode_errors += 1
+
                     if stop.is_set():
                         break
-                    t_frame_start = time.perf_counter()
-                    image = frame.to_ndarray(format="bgr24")
-                    h, w = image.shape[:2]
-                    if w > 1280:
-                        preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        preview = image
-                    ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
-                    if ok:
-                        frame_bytes = encoded.tobytes()
-                        with condition:
-                            _FRAMES[camera_id] = frame_bytes
-                            _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
-                            condition.notify_all()
-                    # Synchronous analysis - pipeline handles sampling + face inside (no extra thread)
-                    pipeline.process_frame(image)
-                    # Plates only on sampled frames where detections exist - saves morphology cost
-                    plates: list[dict[str, Any]] = []
-                    if pipeline.last_detections:
-                        for detection in pipeline.last_detections:
-                            if detection["class_name"] not in {"car", "truck", "bus", "motorcycle"}:
-                                continue
-                            x1, y1, x2, y2 = detection["bbox_norm"]
-                            crop = image[int(y1 * h) : int(y2 * h), int(x1 * w) : int(x2 * w)]
-                            if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 35:
-                                continue
-                            plate = anpr.process_vehicle_crop(crop, vehicle_id=0)
-                            if plate and plate.consensus:
-                                plates.append({"text": plate.consensus, "confidence": plate.quality})
-                    # Lightweight night detector update on downscaled thumbnail
-                    thumb = cv2.resize(image, (320, 180), interpolation=cv2.INTER_NEAREST)
-                    night = night_detector.update(thumb, timestamp=time.time())
-                    _OBSERVATIONS[camera_id] = {
-                        "runtime": getattr(pipeline, "runtime", getattr(pipeline.detector, "runtime", "cpu")),
-                        "active_model": getattr(pipeline, "model_id", "yolo26n"),
-                        "detections": pipeline.last_detections,
-                        "tracks": [
-                            {
-                                "track_id": track.track_id,
-                                "class_name": track.class_name,
-                                "confidence": track.confidence,
-                                "bbox_norm": track.bbox_norm,
-                                "identity": getattr(track, "identity", None),
-                                "identity_locked": getattr(track, "identity_locked", False),
-                            }
-                            for track in pipeline.last_tracks
-                        ],
-                        "faces": [
-                            {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
-                            for f in pipeline.last_faces
-                        ],
-                        "plates": plates,
-                        "night": {
-                            "is_night": night.is_night,
-                            "illumination_score": night.illumination_score,
-                            "motion_area": night.motion_area,
-                            "confidence": night.confidence,
-                            "limitation": night.limitation,
-                        },
-                        "frame_at": time.time(),
-                    }
-                    frame_number += 1
-                    samples = _HEALTH.setdefault(camera_id, [])
-                    samples.append(
-                        {
-                            "last_frame_age_ms": 0,
-                            "source_fps": fps,
-                            "analysis_fps": fps / pipeline.sample_stride,
-                            "inference_ms": 0.0,
-                            "queue_drops": pipeline.q_demux_to_sample.dropped + pipeline.q_sample_to_infer.dropped,
-                            "decode_errors": 0,
-                            "reconnect_count": 0,
-                            "stream_epoch": cam["stream_epoch"],
-                            "faces_analyzed": pipeline.faces_analyzed,
-                            "frames_skipped": pipeline.frames_skipped,
-                        }
-                    )
-                    del samples[:-10]
-                    # Pacing: sleep only remaining duration to match native video FPS in real-time
-                    elapsed = time.perf_counter() - t_frame_start
-                    sleep_time = max(0.0, frame_interval - elapsed)
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
-                # EOF reached — loop back to reopen (outer while handles it)
-        except Exception as exc:
-            cam["observed_state"] = "UNREACHABLE"
-            _OBSERVATIONS[camera_id] = {"error": str(exc), "detections": [], "tracks": [], "faces": [], "frame_at": time.time()}
-        finally:
-            with contextlib.suppress(Exception):
-                container.close()  # type: ignore[possibly-undefined]
-        return  # do NOT enter live reconnect loop for file sources
+
+                    loop_count += 1
+                    seek_success = False
+                    try:
+                        container.seek(0)
+                        seek_success = True
+                    except Exception:
+                        seek_success = False
+
+                    if not seek_success or frames_in_pass == 0:
+                        if frames_in_pass == 0:
+                            time.sleep(0.5)
+                        break
+
+            except Exception as exc:
+                if stop.is_set():
+                    break
+                decode_errors += 1
+                cam["observed_state"] = "RECONNECTING"
+                _OBSERVATIONS[camera_id] = {
+                    "error": str(exc),
+                    "detections": [],
+                    "tracks": [],
+                    "faces": [],
+                    "frame_at": time.time(),
+                }
+                time.sleep(0.5)
+            finally:
+                if container is not None:
+                    with contextlib.suppress(Exception):
+                        container.close()
+
+        analysis_ready.set()
+        _ACTIVE_PIPELINES.pop(camera_id, None)
+        return
 
     # ---------- LIVE STREAM: keep threaded analysis with worker sampling ----------
-    face_detector = FaceDetector()
-    analysis_frame: np.ndarray | None = None
-    analysis_lock = threading.Lock()
-    analysis_ready = threading.Event()
-
-    def analyze() -> None:
-        while not stop.is_set():
-            analysis_ready.wait(1.0)
-            analysis_ready.clear()
-            with analysis_lock:
-                current = analysis_frame.copy() if analysis_frame is not None else None
-            if current is None:
-                continue
-            pipeline.process_frame(current)
-            # For live, pipeline.enable_face is False, so we use dedicated detector here (avoids double cost)
-            faces = face_detector.detect(current)
-            plates: list[dict[str, Any]] = []
-            for detection in pipeline.last_detections:
-                if detection["class_name"] not in {"car", "truck", "bus", "motorcycle"}:
-                    continue
-                x1, y1, x2, y2 = detection["bbox_norm"]
-                h, w = current.shape[:2]
-                crop = current[int(y1 * h) : int(y2 * h), int(x1 * w) : int(x2 * w)]
-                plate = anpr.process_vehicle_crop(crop, vehicle_id=0) if crop.size else None
-                if plate and plate.consensus:
-                    plates.append({"text": plate.consensus, "confidence": plate.quality})
-            night_thumb = cv2.resize(current, (320, 180), interpolation=cv2.INTER_NEAREST)
-            night = night_detector.update(night_thumb, timestamp=time.time())
-            _OBSERVATIONS[camera_id] = {
-                "runtime": getattr(pipeline, "runtime", getattr(pipeline.detector, "runtime", "cpu")),
-                "active_model": getattr(pipeline, "model_id", "yolo26n"),
-                "detections": pipeline.last_detections,
-                "tracks": [
-                    {
-                        "track_id": track.track_id,
-                        "class_name": track.class_name,
-                        "confidence": track.confidence,
-                        "bbox_norm": track.bbox_norm,
-                        "identity": getattr(track, "identity", None),
-                        "identity_locked": getattr(track, "identity_locked", False),
-                    }
-                    for track in pipeline.last_tracks
-                ],
-                "faces": [
-                    {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
-                    for f in pipeline.last_faces
-                ] if pipeline.last_faces else [{"bbox_norm": face.bbox_norm, "confidence": face.confidence, "quality_passed": face.quality.passed} for face in faces],
-                "plates": plates,
-                "night": {
-                    "is_night": night.is_night,
-                    "illumination_score": night.illumination_score,
-                    "motion_area": night.motion_area,
-                    "confidence": night.confidence,
-                    "limitation": night.limitation,
-                },
-                "frame_at": time.time(),
-            }
-
-    analysis_thread = threading.Thread(target=analyze, daemon=True, name=f"analysis-{camera_id[:8]}")
-    analysis_thread.start()
     try:
         container = av.open(cam["endpoint"], options={"timeout": "3000000", "stimeout": "3000000"})
         stream = next((s for s in container.streams if s.type == "video"), None)
@@ -273,27 +292,27 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             if stop.is_set():
                 break
             image = frame.to_ndarray(format="bgr24")
-            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            h, w = image.shape[:2]
+            preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+            ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             if ok:
                 frame_bytes = encoded.tobytes()
                 with condition:
                     _FRAMES[camera_id] = frame_bytes
                     _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
                     condition.notify_all()
-            # Keep the player responsive while analytics consumes only the latest frame.
-            if frame_number % 3 == 0:
-                with analysis_lock:
-                    analysis_frame = image
-                analysis_ready.set()
+            with analysis_lock:
+                analysis_frame = image
+            analysis_ready.set()
             frame_number += 1
             samples = _HEALTH.setdefault(camera_id, [])
             samples.append(
                 {
                     "last_frame_age_ms": 0,
                     "source_fps": float(stream.average_rate) if stream.average_rate else None,
-                    "analysis_fps": 12.0,
-                    "inference_ms": 0.0,
-                    "queue_drops": pipeline.q_demux_to_sample.dropped + pipeline.q_sample_to_infer.dropped,
+                    "analysis_fps": round(last_analysis_fps or 12.0, 1),
+                    "inference_ms": round(last_inference_ms, 1),
+                    "queue_drops": 0,
                     "decode_errors": 0,
                     "reconnect_count": 0,
                     "stream_epoch": cam["stream_epoch"],
@@ -319,27 +338,27 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 if stop.is_set():
                     break
                 image = frame.to_ndarray(format="bgr24")
-                ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                h, w = image.shape[:2]
+                preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+                ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                 if ok:
                     frame_bytes = encoded.tobytes()
                     with condition:
                         _FRAMES[camera_id] = frame_bytes
                         _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
                         condition.notify_all()
-                # Keep the player responsive while analytics consumes only the latest frame.
-                if frame_number % 3 == 0:
-                    with analysis_lock:
-                        analysis_frame = image
-                    analysis_ready.set()
+                with analysis_lock:
+                    analysis_frame = image
+                analysis_ready.set()
                 frame_number += 1
                 samples = _HEALTH.setdefault(camera_id, [])
                 samples.append(
                     {
                         "last_frame_age_ms": 0,
                         "source_fps": float(stream.average_rate) if stream.average_rate else None,
-                        "analysis_fps": 12.0,
-                        "inference_ms": 0.0,
-                        "queue_drops": pipeline.q_demux_to_sample.dropped + pipeline.q_sample_to_infer.dropped,
+                        "analysis_fps": round(last_analysis_fps or 12.0, 1),
+                        "inference_ms": round(last_inference_ms, 1),
+                        "queue_drops": 0,
                         "decode_errors": 0,
                         "reconnect_count": 0,
                         "stream_epoch": cam["stream_epoch"],
@@ -677,15 +696,25 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
             while camera_id in _CAMERAS:
                 current_version = _FRAME_VERSIONS.get(camera_id, 0)
                 if current_version != last_version:
-                    last_version = current_version
                     frame = _FRAMES.get(camera_id)
                     if frame:
+                        last_version = current_version
                         yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
-                await asyncio.sleep(0.015)
+                await asyncio.sleep(0.010)
         except (asyncio.CancelledError, GeneratorExit):
             pass
 
-    return StreamingResponse(body(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        body(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/{camera_id}/observations", response_model=dict[str, Any])
@@ -774,6 +803,7 @@ async def delete_camera(camera_id: str) -> dict[str, str]:
     _FRAME_VERSIONS.pop(camera_id, None)
     _FRAME_CONDITIONS.pop(camera_id, None)
     _OBSERVATIONS.pop(camera_id, None)
+    _ACTIVE_PIPELINES.pop(camera_id, None)
     return {"status": "deleted", "id": camera_id}
 
 

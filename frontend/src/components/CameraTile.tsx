@@ -97,7 +97,7 @@ export function CameraTile({
     return () => clearInterval(timer);
   }, [imgError]);
 
-  const streamUrl = `/api/v1/cameras/${camera.id}/stream?k=${retryKey}`;
+  const streamUrl = `/api/v1/cameras/${camera.id}/stream?epoch=${camera.stream_epoch}&k=${retryKey}`;
   const { data: observations } = useQuery({
     queryKey: ["camera-observations", camera.id],
     queryFn: () => fetchCameraObservations(camera.id),
@@ -105,7 +105,10 @@ export function CameraTile({
   });
 
   const boxes: Box[] = (observations?.tracks ?? observations?.detections ?? [])
-    .filter((item) => item.confidence >= 0.45)
+    .filter((item) => {
+      const isIdentified = "identity" in item && Boolean((item as any).identity?.name);
+      return isIdentified || item.confidence >= 0.45;
+    })
     .map((item) => {
       const [x1, y1, x2, y2] = item.bbox_norm;
       const width = x2 - x1;
@@ -113,23 +116,42 @@ export function CameraTile({
       const trackItem =
         "track_id" in item
           ? (item as unknown as {
-              identity?: { name: string; score: number; tier: string };
+              identity?: {
+                name: string;
+                score: number;
+                tier: string;
+                threat_level?: string;
+                locked?: boolean;
+              };
+              identity_locked?: boolean;
             })
           : null;
       const identity = trackItem?.identity;
       const isWatchlistMatch = Boolean(identity && identity.name);
+      const threatLevel = identity?.threat_level?.toUpperCase();
+      const isCritical = threatLevel === "CRITICAL" || identity?.tier === "RED";
+      const targetName = identity?.name;
+
+      // Clearly display target's name with alert/priority styling
+      const displayLabel = isWatchlistMatch
+        ? (isCritical ? `CRITICAL: [${targetName}]` : `TARGET: [${targetName}]`)
+        : item.class_name;
+
       return {
         x: x1 + (width - tightened) / 2,
         y: y1,
         w: tightened,
         h: y2 - y1,
-        label: isWatchlistMatch ? `MATCH: ${identity?.name}` : item.class_name,
+        label: displayLabel,
         confidence: isWatchlistMatch ? identity?.score : item.confidence,
         trackId:
           "track_id" in item
             ? String((item as unknown as { track_id: number }).track_id)
             : undefined,
         isAlert: isWatchlistMatch,
+        targetName: targetName,
+        threatLevel: threatLevel,
+        isCritical: isCritical,
       };
     })
     .filter(
@@ -140,7 +162,15 @@ export function CameraTile({
             item.label.toLowerCase()
           ))
     )
-    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+    .sort((a, b) => {
+      if (Boolean(a.isCritical) !== Boolean(b.isCritical)) {
+        return a.isCritical ? -1 : 1;
+      }
+      if (Boolean(a.isAlert) !== Boolean(b.isAlert)) {
+        return a.isAlert ? -1 : 1;
+      }
+      return (b.confidence ?? 0) - (a.confidence ?? 0);
+    });
 
   // Show faces in operational/all modes with quiet, elegant champagne markers
   const minFaceConf = 0.35;
@@ -163,32 +193,40 @@ export function CameraTile({
         .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     : [];
 
-  const deduped = [...boxes, ...faceBoxes].reduce<Box[]>((acc, next) => {
-    const overlaps = acc.some((existing) => {
-      if (existing.label === "face" && next.label !== "face") return false;
-      if (existing.label !== "face" && next.label === "face") return false;
+  // Priority-aware deduplication: alerts and critical targets always win over non-alerts
+  const deduped: Box[] = [];
+  for (const box of [...boxes, ...faceBoxes]) {
+    const overlapIndex = deduped.findIndex((existing) => {
+      if (existing.label === "face" && box.label !== "face") return false;
+      if (existing.label !== "face" && box.label === "face") return false;
       const xOverlap = Math.max(
         0,
-        Math.min(existing.x + existing.w, next.x + next.w) -
-          Math.max(existing.x, next.x)
+        Math.min(existing.x + existing.w, box.x + box.w) -
+          Math.max(existing.x, box.x)
       );
       const yOverlap = Math.max(
         0,
-        Math.min(existing.y + existing.h, next.y + next.h) -
-          Math.max(existing.y, next.y)
+        Math.min(existing.y + existing.h, box.y + box.h) -
+          Math.max(existing.y, box.y)
       );
       const overlapArea = xOverlap * yOverlap;
-      const area = Math.min(existing.w * existing.h, next.w * next.h);
+      const area = Math.min(existing.w * existing.h, box.w * box.h);
       return area > 0 && overlapArea / area > 0.65;
     });
-    if (!overlaps) {
-      acc.push(next);
+
+    if (overlapIndex === -1) {
+      deduped.push(box);
+    } else {
+      const existing = deduped[overlapIndex];
+      // Critical targets and security alerts must never be suppressed by non-alerts
+      if ((box.isAlert || box.isCritical) && (!existing.isAlert && !existing.isCritical)) {
+        deduped[overlapIndex] = box;
+      }
     }
-    return acc;
-  }, []);
+  }
 
   const allBoxes = deduped.slice(0, 32);
-  const targetCount = boxes.length;
+  const targetCount = allBoxes.length;
 
   // Active selected box dynamically follows moving target if trackId matches
   const activeSelectedBox = selectedBox?.trackId
@@ -380,7 +418,7 @@ export function CameraTile({
               <div className="min-w-0 flex-1 pr-4">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs font-bold uppercase tracking-tight text-slate-900 dark:text-slate-100">
-                    {activeSelectedBox.label.replace(/^(MATCH|SUSPECT|WATCHLIST):\s*/i, "")}
+                    {activeSelectedBox.targetName || activeSelectedBox.label.replace(/^(MATCH|SUSPECT|WATCHLIST|TARGET|CRITICAL):\s*/i, "").replace(/^\[|\]$/g, "")}
                   </span>
                   {activeSelectedBox.trackId && (
                     <span className="text-[10px] font-mono font-semibold bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-300">
@@ -398,7 +436,7 @@ export function CameraTile({
                 </div>
                 {activeSelectedBox.isAlert && (
                   <span className="inline-block mt-1 text-[9px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/60 px-1.5 py-0.5 rounded border border-rose-200 dark:border-rose-900/50 uppercase tracking-wider">
-                    Watchlist Match
+                    {activeSelectedBox.isCritical ? "Critical Target Match" : "Watchlist Match"}
                   </span>
                 )}
               </div>

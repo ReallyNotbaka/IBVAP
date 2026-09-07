@@ -89,8 +89,9 @@ class WatchlistStore:
                     elif isinstance(raw_v, list):
                         gallery.append(np.array(raw_v, dtype=np.float32))
 
+                raw_threat = str(item.get("threat_level", "HIGH")).upper()
                 try:
-                    threat = ThreatLevel(item.get("threat_level", "HIGH"))
+                    threat = ThreatLevel(raw_threat)
                 except ValueError:
                     threat = ThreatLevel.HIGH
 
