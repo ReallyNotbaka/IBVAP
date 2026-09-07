@@ -127,7 +127,7 @@ export function OverlayCanvas({
         const hasTrack = Boolean(b.trackId);
         const isSelected = Boolean(selectedTrackId && b.trackId === selectedTrackId);
         const elementKey = b.trackId
-          ? `track-${b.trackId}`
+          ? (isFace ? `face-track-${b.trackId}` : `track-${b.trackId}`)
           : `det-${b.label}-${idx}`;
 
         // Micro-badge sizing and text formatting: clearly display target's name

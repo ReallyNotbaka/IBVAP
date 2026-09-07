@@ -197,6 +197,7 @@ class MiniPipeline:
                 wl_store = get_watchlist_store()
                 crop_frame = getattr(self, "_last_face_frame", frame)
                 for trk_id, face_info in assignments.items():
+                    face_info["track_id"] = trk_id
                     target_track = next((t for t in tracks if t.track_id == trk_id), None)
                     if target_track is None:
                         continue

@@ -202,7 +202,7 @@ class CentroidTracker:
         self.tracks: dict[int, Track] = {}
         self._next_id = 1
         self.stream_epoch = 0
-        self.smoothing = 0.65
+        self.smoothing = 0.78
 
     def reset_epoch(self, new_epoch: int) -> None:
         self.stream_epoch = new_epoch
