@@ -39,8 +39,12 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
     const bounds = button?.getBoundingClientRect();
 
     if (bounds) {
-      root.style.setProperty("--theme-transition-x", `${bounds.left + bounds.width / 2}px`);
-      root.style.setProperty("--theme-transition-y", `${bounds.top + bounds.height / 2}px`);
+      const x = bounds.left + bounds.width / 2;
+      const y = bounds.top + bounds.height / 2;
+      const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+      root.style.setProperty("--theme-transition-x", `${x}px`);
+      root.style.setProperty("--theme-transition-y", `${y}px`);
+      root.style.setProperty("--theme-transition-radius", `${radius}px`);
     }
 
     const updateTheme = () => {

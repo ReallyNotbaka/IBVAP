@@ -58,13 +58,13 @@ body, .topbar, .panel, .tile, .card, input, select, button, header, nav, aside, 
 }
 
 ::view-transition-group(root) {
-  animation-duration: 650ms;
+  animation-duration: 1100ms;
 }
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 650ms;
-  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-duration: 1100ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 ::view-transition-old(root) {
@@ -82,7 +82,7 @@ body, .topbar, .panel, .tile, .card, input, select, button, header, nav, aside, 
     clip-path: circle(0 at var(--theme-transition-x) var(--theme-transition-y));
   }
   to {
-    clip-path: circle(150vmax at var(--theme-transition-x) var(--theme-transition-y));
+    clip-path: circle(var(--theme-transition-radius) at var(--theme-transition-x) var(--theme-transition-y));
   }
 }
 
