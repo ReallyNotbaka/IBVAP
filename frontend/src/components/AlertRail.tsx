@@ -4,7 +4,7 @@ import { ChevronDownIcon, ChevronUpIcon } from "./Icons";
 
 export function AlertRail({ limit = 5 }: { limit?: number }) {
   const { data: rawEvents = [] } = useEvents(limit === 5 ? 10 : 30);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
   const [expandedCount, setExpandedCount] = useState(false);
 
   // Filter consecutive duplicate events for the same camera and event_type
@@ -22,11 +22,7 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
       {/* Header with Expand / Contract Button */}
       <div className="flex items-center justify-between px-4 py-3 bg-neutral-50/70 dark:bg-slate-950/60 border-b border-neutral-100 dark:border-white/5">
         <div className="flex items-center gap-2.5 flex-wrap">
-          <span
-            className={`h-2.5 w-2.5 rounded-full ${
-              events.length > 0 ? "bg-red-500 animate-pulse shadow-[0_0_8px_rgba(239,68,68,0.8)]" : "bg-emerald-500"
-            }`}
-          />
+          <span className={`h-2.5 w-2.5 rounded-full ${events.length > 0 ? "bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.65)]" : "bg-slate-300 dark:bg-slate-600"}`} />
           <h3 className="text-sm font-bold tracking-tight text-slate-900 dark:text-slate-100">
             Alerts & activity
           </h3>
@@ -35,13 +31,15 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
           </span>
 
           {/* Compact latest summary when collapsed */}
-          {isCollapsed && latestEvent && (
-            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 font-mono ml-2">
-              <span className="text-slate-400 dark:text-slate-500">Latest:</span>
+          {isCollapsed && (
+            <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 ml-2">
+              <span className="text-slate-400 dark:text-slate-500">{latestEvent ? "Latest:" : "All clear"}</span>
+              {latestEvent && (
               <span className="font-semibold text-slate-700 dark:text-slate-200">
                 {latestEvent.event_type.replace(/_/g, " ").toUpperCase()}
               </span>
-              {latestEvent.confidence !== undefined && (
+              )}
+              {latestEvent && latestEvent.confidence !== undefined && (
                 <span className="text-slate-500 dark:text-slate-400">({Math.round(latestEvent.confidence * 100)}%)</span>
               )}
             </span>
@@ -63,9 +61,9 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
             onClick={() => setIsCollapsed((v) => !v)}
             data-testid="toggle-alert-rail"
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700/80 bg-white dark:bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 shadow-sm transition-colors cursor-pointer"
-            title={isCollapsed ? "Expand alert feed" : "Contract alert feed"}
+            title={isCollapsed ? "Show activity" : "Hide activity"}
           >
-            <span>{isCollapsed ? "Expand" : "Contract"}</span>
+            <span>{isCollapsed ? "Show activity" : "Hide activity"}</span>
             {isCollapsed ? <ChevronDownIcon className="w-3 h-3 text-slate-500 dark:text-slate-400" /> : <ChevronUpIcon className="w-3 h-3 text-slate-500 dark:text-slate-400" />}
           </button>
         </div>

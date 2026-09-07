@@ -8,7 +8,6 @@ import {
   fetchCameraObservations,
   fetchPlayback,
   reconnectCamera,
-  seekPlayback,
   type Camera,
 } from "../lib/api";
 import {
@@ -135,12 +134,7 @@ export function CameraTile({
     enabled: isFootage,
     refetchInterval: 500,
   });
-  const [scrubValue, setScrubValue] = useState(0);
   const [transportBusy, setTransportBusy] = useState(false);
-
-  useEffect(() => {
-    if (playback && !transportBusy) setScrubValue(playback.position_seconds);
-  }, [playback, transportBusy]);
 
   async function runTransport(action: "pause" | "resume" | "stop" | "restart") {
     if (!isFootage || transportBusy) return;
@@ -154,16 +148,6 @@ export function CameraTile({
     }
   }
 
-  async function seekTo(position: number) {
-    if (!isFootage || transportBusy) return;
-    setTransportBusy(true);
-    try {
-      await seekPlayback(camera.id, position);
-      await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
-    } finally {
-      setTransportBusy(false);
-    }
-  }
 
   useEffect(() => {
     const el = containerRef.current;
@@ -694,18 +678,6 @@ export function CameraTile({
             <button type="button" onClick={() => void runTransport(playback?.state === "playing" ? "pause" : "resume")} disabled={transportBusy} className="transport-button" aria-label={playback?.state === "playing" ? "Pause footage" : "Play footage"}>
               {playback?.state === "playing" ? "Pause" : "Play"}
             </button>
-            <input
-              type="range"
-              min="0"
-              max={playback?.duration_seconds ?? 0}
-              step="0.1"
-              value={Math.min(scrubValue, playback?.duration_seconds ?? scrubValue)}
-              onChange={(event) => setScrubValue(Number(event.target.value))}
-              onPointerUp={() => void seekTo(scrubValue)}
-              disabled={!playback?.duration_seconds || transportBusy}
-              aria-label="Footage position"
-              className="transport-range"
-            />
             <button type="button" onClick={() => void runTransport("restart")} disabled={transportBusy} className="transport-button" aria-label="Restart footage">Restart</button>
             <button type="button" onClick={() => void runTransport("stop")} disabled={transportBusy} className="transport-button transport-button-danger" aria-label="Stop footage">Stop</button>
           </>
