@@ -77,6 +77,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         enable_face=True,
         face_stride=2,
         sample_stride=1,
+        max_face_size=640,
     )
     _ACTIVE_PIPELINES[camera_id] = pipeline
 
