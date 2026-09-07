@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { createCamera, finalizeUpload, uploadFootage } from "../lib/api";
 import { VideoIcon, UploadIcon } from "../components/Icons";
 
 export function UseFootage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("Choose a video file to analyze.");
   const [isBusy, setIsBusy] = useState(false);
@@ -33,6 +35,8 @@ export function UseFootage() {
         site_cidr_allowlist: [],
       });
 
+      setStatus("Refreshing camera list...");
+      await queryClient.invalidateQueries({ queryKey: ["cameras"] });
       setStatus(`Footage ready: ${file.name}`);
       navigate("/");
     } catch (error) {
