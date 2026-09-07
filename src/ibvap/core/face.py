@@ -6,6 +6,7 @@ Identity matching is disabled by default behind an authorization/privacy gate.
 
 from __future__ import annotations
 
+import math
 import os
 import pathlib
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ class FaceQuality:
     occlusion: float
     illumination: float
     passed: bool
+    geometry_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,173 @@ class FaceDetection:
     quality: FaceQuality
     landmarks: list[tuple[float, float]] | None
     raw_row: np.ndarray | None = None
+
+
+def _pt_line_distance(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> float:
+    """Perpendicular distance from point (px, py) to line segment (ax, ay)-(bx, by)."""
+    line_len = math.hypot(bx - ax, by - ay)
+    if line_len < 1e-6:
+        return math.hypot(px - ax, py - ay)
+    return abs((by - ay) * px - (bx - ax) * py + bx * ay - by * ax) / line_len
+
+
+class FaceQualityAssessment:
+    """Rigorous face quality and landmark geometry assessment engine."""
+
+    @staticmethod
+    def validate_geometry(
+        fw: float,
+        fh: float,
+        landmarks: list[tuple[float, float]] | None,
+        min_size: float = 24.0,
+    ) -> bool:
+        """Validate 5-point facial landmarks for plausible human facial geometry.
+
+        OpenCV Zoo YuNet landmark ordering:
+          0: right eye (re)
+          1: left eye (le)
+          2: nose tip (nt)
+          3: right mouth corner (rm)
+          4: left mouth corner (lm)
+        """
+        if fw < min_size or fh < min_size:
+            return False
+
+        aspect_ratio = fw / max(1e-5, fh)
+        if aspect_ratio < 0.42 or aspect_ratio > 1.60:
+            return False
+
+        if not landmarks or len(landmarks) != 5:
+            return False
+
+        re_x, re_y = landmarks[0]
+        le_x, le_y = landmarks[1]
+        nt_x, nt_y = landmarks[2]
+        rm_x, rm_y = landmarks[3]
+        lm_x, lm_y = landmarks[4]
+
+        # 1. Landmark ordering & non-inversion check
+        if re_x >= le_x or rm_x >= lm_x:
+            return False
+
+        # 2. Inter-ocular distance & mouth width
+        eye_dist = math.hypot(le_x - re_x, le_y - re_y)
+        if eye_dist < 6.0:
+            return False
+        ratio_eyes = eye_dist / fw
+        if ratio_eyes < 0.16 or ratio_eyes > 0.82:
+            return False
+
+        mouth_dist = math.hypot(lm_x - rm_x, lm_y - rm_y)
+        if mouth_dist < 4.0:
+            return False
+        ratio_mouth = mouth_dist / fw
+        if ratio_mouth < 0.10 or ratio_mouth > 0.85:
+            return False
+
+        # 3. Eye tilt (roll angle check)
+        eye_tilt = abs(le_y - re_y) / eye_dist
+        if eye_tilt > 0.70:
+            return False
+
+        # 4. Vertical anatomy ordering
+        eye_mid_y = (re_y + le_y) / 2.0
+        mouth_mid_y = (rm_y + lm_y) / 2.0
+        v_dist = mouth_mid_y - eye_mid_y
+        if v_dist < 6.0:
+            return False
+
+        # Nose tip must be vertically between eye line and mouth line
+        if nt_y < eye_mid_y - 0.05 * fh or nt_y > mouth_mid_y + 0.05 * fh:
+            return False
+
+        nose_v_ratio = (nt_y - eye_mid_y) / max(1e-5, v_dist)
+        if nose_v_ratio < 0.12 or nose_v_ratio > 0.88:
+            return False
+
+        # 5. Eye-Nose-Mouth vertical aspect ratio
+        enm_aspect = v_dist / max(1e-5, eye_dist)
+        if enm_aspect < 0.35 or enm_aspect > 2.40:
+            return False
+
+        # 6. Non-degenerate triangular area (Gauss shoelace formula)
+        # Area of eye-nose triangle (re, le, nt)
+        area_eye_nose = 0.5 * abs(re_x * (le_y - nt_y) + le_x * (nt_y - re_y) + nt_x * (re_y - le_y))
+        norm_area_en = area_eye_nose / (fw * fh)
+        if norm_area_en < 0.010:
+            return False
+
+        # Area of nose-mouth triangle (nt, rm, lm)
+        area_nose_mouth = 0.5 * abs(nt_x * (rm_y - lm_y) + rm_x * (lm_y - nt_y) + lm_x * (nt_y - rm_y))
+        norm_area_nm = area_nose_mouth / (fw * fh)
+        if norm_area_nm < 0.008:
+            return False
+
+        # 7. Collinearity check: lateral landmarks on near-frontal faces
+        if eye_tilt < 0.15:
+            d_r = _pt_line_distance(nt_x, nt_y, re_x, re_y, rm_x, rm_y) / fw
+            d_l = _pt_line_distance(nt_x, nt_y, le_x, le_y, lm_x, lm_y) / fw
+            if d_r < 0.015 and d_l < 0.015:
+                return False
+
+        return True
+
+    @classmethod
+    def assess(
+        cls,
+        crop: np.ndarray,
+        fw: float,
+        fh: float,
+        landmarks: list[tuple[float, float]] | None,
+        conf: float,
+        conf_threshold: float = 0.45,
+        min_size: float = 24.0,
+    ) -> FaceQuality:
+        """Assess facial quality including landmark geometry, blur, and illumination."""
+        if crop.size > 0:
+            gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+            blur = float(cv2.Laplacian(gray_crop, cv2.CV_64F).var())
+            illumination = float(np.mean(gray_crop))
+        else:
+            blur = 0.0
+            illumination = 0.0
+
+        if landmarks and len(landmarks) >= 3:
+            re_x, le_x, nt_x = landmarks[0][0], landmarks[1][0], landmarks[2][0]
+            eye_dist = abs(le_x - re_x)
+            eye_mid = (re_x + le_x) / 2.0
+            pose_yaw = float((nt_x - eye_mid) / (eye_dist + 1e-6) * 90.0) if eye_dist > 0 else 0.0
+        else:
+            pose_yaw = 0.0
+
+        geometry_valid = cls.validate_geometry(fw, fh, landmarks, min_size=min_size)
+        passed = bool(
+            geometry_valid
+            and blur >= 10.0
+            and 15.0 <= illumination <= 245.0
+            and conf >= conf_threshold
+        )
+
+        return FaceQuality(
+            blur=blur,
+            pose_yaw=pose_yaw,
+            occlusion=0.0,
+            illumination=illumination,
+            passed=passed,
+            geometry_valid=geometry_valid,
+        )
+
+
+def validate_facial_geometry(
+    fw: float,
+    fh: float,
+    landmarks: list[tuple[float, float]] | None,
+    min_size: float = 24.0,
+) -> bool:
+    """Validate 5-point facial landmarks for plausible human facial geometry."""
+    return FaceQualityAssessment.validate_geometry(fw, fh, landmarks, min_size=min_size)
 
 
 def check_identity_gate_passed(settings: Settings | AppConfig | Any | None = None) -> bool:
@@ -125,30 +294,16 @@ class FaceDetector:
 
             if px2 > px1 and py2 > py1:
                 crop = frame[py1:py2, px1:px2]
-                gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-                blur = float(cv2.Laplacian(gray_crop, cv2.CV_64F).var())
-                illumination = float(np.mean(gray_crop))
             else:
-                blur = 0.0
-                illumination = 0.0
+                crop = np.empty((0, 0, 3), dtype=np.uint8)
 
-            # Pose yaw estimation from eye distance and nose horizontal displacement
-            right_eye_x = landmarks[0][0]
-            left_eye_x = landmarks[1][0]
-            nose_x = landmarks[2][0]
-            eye_dist = abs(left_eye_x - right_eye_x)
-            eye_mid = (right_eye_x + left_eye_x) / 2.0
-            pose_yaw = float((nose_x - eye_mid) / (eye_dist + 1e-6) * 90.0) if eye_dist > 0 else 0.0
-            occlusion = 0.0
-
-            quality_passed = bool(blur >= 10.0 and illumination >= 20.0 and conf >= self.conf_threshold)
-
-            quality = FaceQuality(
-                blur=blur,
-                pose_yaw=pose_yaw,
-                occlusion=occlusion,
-                illumination=illumination,
-                passed=quality_passed,
+            quality = FaceQualityAssessment.assess(
+                crop=crop,
+                fw=fw,
+                fh=fh,
+                landmarks=landmarks,
+                conf=conf,
+                conf_threshold=self.conf_threshold,
             )
 
             results.append(
@@ -173,7 +328,7 @@ class FaceRecognizer:
     """SFace-backed feature extractor and biometric matcher (OpenCV Zoo).
 
     Generates 128-dimensional L2-normalized embeddings and calculates cosine similarity
-    against enrolled watchlist features.
+    against enrolled suspect templates.
     """
 
     def __init__(self, model_path: str = "models/face_recognition_sface_2021dec.onnx") -> None:
@@ -188,11 +343,13 @@ class FaceRecognizer:
                 self._recognizer = None
 
     def align_crop(self, frame: np.ndarray, face_row: np.ndarray | FaceDetection) -> np.ndarray:
-        """Align and crop face ROI to 112x112 standard representation."""
+        """Warp and align detected face to standard 112x112 portrait using 5 landmarks."""
         if self._recognizer is None or frame.size == 0:
             return np.zeros((112, 112, 3), dtype=np.uint8)
 
         if isinstance(face_row, FaceDetection):
+            if not face_row.quality.passed:
+                return np.zeros((112, 112, 3), dtype=np.uint8)
             if face_row.raw_row is not None:
                 row_arr = face_row.raw_row
             else:
@@ -208,7 +365,7 @@ class FaceRecognizer:
 
     def extract_feature(self, aligned_crop: np.ndarray) -> np.ndarray:
         """Extract 128-dimensional embedding from aligned 112x112 crop."""
-        if self._recognizer is None or aligned_crop.size == 0:
+        if self._recognizer is None or aligned_crop.size == 0 or np.all(aligned_crop == 0):
             return np.zeros((1, 128), dtype=np.float32)
 
         if aligned_crop.shape[:2] != (112, 112):
@@ -216,7 +373,10 @@ class FaceRecognizer:
 
         try:
             feat = self._recognizer.feature(aligned_crop)
-            return np.asarray(feat, dtype=np.float32)
+            arr = np.asarray(feat, dtype=np.float32)
+            if not np.all(np.isfinite(arr)):
+                return np.zeros((1, 128), dtype=np.float32)
+            return arr
         except Exception:
             return np.zeros((1, 128), dtype=np.float32)
 

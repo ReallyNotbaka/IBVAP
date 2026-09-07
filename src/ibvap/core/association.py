@@ -119,7 +119,7 @@ def associate_faces_to_tracks(
         min_x = tx1 - 0.15 * tw
         max_x = tx2 + 0.15 * tw
         min_y = ty1 - 0.10 * th
-        max_y = ty1 + 0.60 * th
+        max_y = ty1 + 0.40 * th
 
         for j, face in enumerate(faces):
             fx1, fy1, fx2, fy2 = face["bbox_norm"]
@@ -135,7 +135,7 @@ def associate_faces_to_tracks(
 
             # Scale ratio check (face height vs person bbox height: supports distant full-body to close-up/bust)
             ratio = fh / th
-            if ratio < 0.02 or ratio > 0.85:
+            if ratio < 0.03 or ratio > 0.65:
                 continue
 
             # Normalized distance from head anchor

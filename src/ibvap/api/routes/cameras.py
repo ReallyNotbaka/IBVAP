@@ -102,9 +102,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 t_infer_end = time.perf_counter()
                 last_inference_ms = (t_infer_end - t_infer_start) * 1000.0
 
+                h_c, w_c = current.shape[:2]
                 plates: list[dict[str, Any]] = []
                 if pipeline.last_detections:
-                    h_c, w_c = current.shape[:2]
                     for detection in pipeline.last_detections:
                         if detection["class_name"] not in {"car", "truck", "bus", "motorcycle"}:
                             continue
@@ -122,6 +122,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 _OBSERVATIONS[camera_id] = {
                     "runtime": getattr(pipeline, "runtime", getattr(pipeline.detector, "runtime", "cpu")),
                     "active_model": getattr(pipeline, "model_id", "yolo26n"),
+                    "aspect_ratio": round(w_c / max(1, h_c), 4),
+                    "frame_width": w_c,
+                    "frame_height": h_c,
                     "detections": pipeline.last_detections,
                     "tracks": [
                         {
@@ -267,6 +270,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 cam["observed_state"] = "RECONNECTING"
                 _OBSERVATIONS[camera_id] = {
                     "error": str(exc),
+                    "aspect_ratio": None,
+                    "frame_width": None,
+                    "frame_height": None,
                     "detections": [],
                     "tracks": [],
                     "faces": [],
@@ -721,7 +727,18 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
 async def camera_observations(camera_id: str) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return _OBSERVATIONS.get(camera_id, {"detections": [], "tracks": [], "frame_at": None})
+    return _OBSERVATIONS.get(
+        camera_id,
+        {
+            "aspect_ratio": None,
+            "frame_width": None,
+            "frame_height": None,
+            "detections": [],
+            "tracks": [],
+            "faces": [],
+            "frame_at": None,
+        },
+    )
 
 
 @router.post("/{camera_id}/test", response_model=CameraTestResponse)

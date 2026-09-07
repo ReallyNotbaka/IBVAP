@@ -269,24 +269,26 @@ class CentroidTracker:
 
             if overlapping_tid is not None:
                 trk = self.tracks[overlapping_tid]
-                # If new detection has higher confidence, promote its class
-                # Protect identified person tracks from class degradation (e.g. person -> motorcycle)
-                if conf > trk.confidence:
-                    has_person_identity = (
-                        trk.class_name == "person"
-                        and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
-                    )
-                    if not (has_person_identity and det["class_name"] != "person"):
-                        trk.class_name = det["class_name"]
-                        trk.class_id = int(det["class_id"])
-                    trk.confidence = conf
-                    trk.age = 0
-                    trk.hits += 1
-                    trk.last_seen = timestamp
-                # Suppress creating a duplicate track
+                has_person_identity = (
+                    trk.class_name == "person"
+                    and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
+                )
+                if conf > trk.confidence and not (has_person_identity and det["class_name"] != "person"):
+                    trk.class_name = det["class_name"]
+                    trk.class_id = int(det["class_id"])
+                trk.confidence = max(trk.confidence, conf)
+                trk.age = 0
+                trk.hits += 1
+                trk.last_seen = timestamp
+                matched.add(overlapping_tid)
                 continue
 
             # Stage 3: Truly new distinct object
+            # Suppress spurious low-confidence detections from creating new tracks
+            min_spawn = 0.50 if det.get("class_name") == "person" else 0.40
+            if conf < min_spawn:
+                continue
+
             tid = self._next_id
             self._next_id += 1
             trk = Track(
@@ -308,7 +310,10 @@ class CentroidTracker:
         # purge aged
         terminated: list[Track] = []
         for tid in list(self.tracks.keys()):
-            if self.tracks[tid].age > self.max_age:
+            trk = self.tracks[tid]
+            # Fast drop unconfirmed 1-hit tracks (glitches) within 3 frames; confirmed tracks use max_age
+            drop_limit = 3 if trk.hits <= 1 else self.max_age
+            if trk.age > drop_limit:
                 terminated.append(self.tracks.pop(tid))
 
         # Only return visible active tracks (age <= 2) to eliminate lingering ghost boxes

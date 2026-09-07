@@ -64,6 +64,9 @@ export type DownloadProgress = {
 export type CameraObservations = {
   runtime?: string;
   active_model?: string;
+  aspect_ratio?: number;
+  frame_width?: number;
+  frame_height?: number;
   detections: Array<{ bbox_norm: [number, number, number, number]; class_name: string; confidence: number }>;
   tracks: Array<{
     bbox_norm: [number, number, number, number];

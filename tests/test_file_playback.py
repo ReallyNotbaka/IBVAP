@@ -162,7 +162,9 @@ def test_critical_target_in_file_footage_observations() -> None:
     """Observations must persist critical target detections with red box data during playback."""
     cam_id = "test-cam-crit-file"
     store = get_watchlist_store()
-    target_vector = np.ones(128, dtype=np.float32) / np.sqrt(128)
+    rng = np.random.default_rng(42)
+    v = rng.standard_normal(128).astype(np.float32)
+    target_vector = v / float(np.linalg.norm(v))
     store.add_entry(
         WatchlistEntry(
             id="crit-file-01",
@@ -174,31 +176,34 @@ def test_critical_target_in_file_footage_observations() -> None:
         )
     )
 
-    test_video = Path("data/test_upload_face.mp4")
-    _CAMERAS[cam_id] = {
-        "id": cam_id,
-        "name": "Critical Target Cam",
-        "endpoint": str(test_video),
-        "source_type": "video_footage",
-        "protocol": "file",
-        "stream_epoch": 1,
-        "desired_state": "STREAMING",
-        "observed_state": "STREAMING",
-    }
+    try:
+        test_video = Path("data/test_upload_face.mp4")
+        _CAMERAS[cam_id] = {
+            "id": cam_id,
+            "name": "Critical Target Cam",
+            "endpoint": str(test_video),
+            "source_type": "video_footage",
+            "protocol": "file",
+            "stream_epoch": 1,
+            "desired_state": "STREAMING",
+            "observed_state": "STREAMING",
+        }
 
-    stop = threading.Event()
-    worker = threading.Thread(target=_camera_worker, args=(cam_id, stop), daemon=True)
-    _WORKERS[cam_id] = (stop, worker)
-    worker.start()
+        stop = threading.Event()
+        worker = threading.Thread(target=_camera_worker, args=(cam_id, stop), daemon=True)
+        _WORKERS[cam_id] = (stop, worker)
+        worker.start()
 
-    time.sleep(1.0)
-    stop.set()
-    worker.join(timeout=2.0)
+        time.sleep(1.0)
+        stop.set()
+        worker.join(timeout=2.0)
 
-    obs = _OBSERVATIONS.get(cam_id, {})
-    assert "tracks" in obs
-    assert "detections" in obs
-    assert "faces" in obs
+        obs = _OBSERVATIONS.get(cam_id, {})
+        assert "tracks" in obs
+        assert "detections" in obs
+        assert "faces" in obs
+    finally:
+        store.remove_entry("crit-file-01")
 
 
 def test_analysis_worker_resilient_to_inference_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:

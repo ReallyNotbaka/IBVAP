@@ -150,3 +150,59 @@ def test_identity_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IBVAP_ENABLE_FACE_IDENTITY", "1")
     assert check_identity_gate_passed() is True
     assert FaceDetector.check_identity_gate_passed() is True
+
+
+def test_face_geometry_validation_and_quality() -> None:
+    from ibvap.core.face import FaceQualityAssessment, validate_facial_geometry
+    from ibvap.core.watchlist import is_valid_exemplar
+
+    # Normal valid face landmarks
+    valid_landmarks = [
+        (125.0, 130.0),  # right eye
+        (175.0, 130.0),  # left eye
+        (150.0, 155.0),  # nose tip
+        (135.0, 180.0),  # right mouth corner
+        (165.0, 180.0),  # left mouth corner
+    ]
+    assert validate_facial_geometry(100.0, 100.0, valid_landmarks) is True
+
+    # 1. Inverted eyes (re_x >= le_x)
+    inverted_eyes = [(175.0, 130.0), (125.0, 130.0), (150.0, 155.0), (135.0, 180.0), (165.0, 180.0)]
+    assert validate_facial_geometry(100.0, 100.0, inverted_eyes) is False
+
+    # 2. Inverted mouth (rm_x >= lm_x)
+    inverted_mouth = [(125.0, 130.0), (175.0, 130.0), (150.0, 155.0), (165.0, 180.0), (135.0, 180.0)]
+    assert validate_facial_geometry(100.0, 100.0, inverted_mouth) is False
+
+    # 3. Extreme roll tilt (> 0.70)
+    tilted_eyes = [(125.0, 100.0), (145.0, 180.0), (135.0, 140.0), (130.0, 160.0), (150.0, 160.0)]
+    assert validate_facial_geometry(100.0, 100.0, tilted_eyes) is False
+
+    # 4. Nose above eyes
+    nose_above = [(125.0, 130.0), (175.0, 130.0), (150.0, 110.0), (135.0, 180.0), (165.0, 180.0)]
+    assert validate_facial_geometry(100.0, 100.0, nose_above) is False
+
+    # 5. Degenerate collinear landmarks (all on a line)
+    collinear = [(100.0, 100.0), (100.0, 120.0), (100.0, 140.0), (100.0, 160.0), (100.0, 180.0)]
+    assert validate_facial_geometry(100.0, 100.0, collinear) is False
+
+    # 6. None or too few landmarks
+    assert validate_facial_geometry(100.0, 100.0, None) is False
+    assert validate_facial_geometry(100.0, 100.0, [(125.0, 130.0)]) is False
+
+    # Assess quality method test
+    crop = np.ones((100, 100, 3), dtype=np.uint8) * 128
+    q_valid = FaceQualityAssessment.assess(crop, 100.0, 100.0, valid_landmarks, conf=0.8)
+    assert q_valid.geometry_valid is True
+
+    # Exemplar validation
+    rng = np.random.default_rng(123)
+    good_vec = rng.standard_normal(128).astype(np.float32)
+    assert is_valid_exemplar(good_vec) is True
+
+    # Bad exemplars
+    assert is_valid_exemplar(np.zeros(128, dtype=np.float32)) is False
+    assert is_valid_exemplar(np.ones(128, dtype=np.float32)) is False
+    assert is_valid_exemplar(np.array([np.nan] * 128, dtype=np.float32)) is False
+    assert is_valid_exemplar(np.ones(64, dtype=np.float32)) is False
+

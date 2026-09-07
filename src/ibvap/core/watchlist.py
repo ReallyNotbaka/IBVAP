@@ -63,6 +63,24 @@ class WatchlistEntry:
         return m / norms
 
 
+def is_valid_exemplar(arr: np.ndarray) -> bool:
+    """Ensure vector is non-empty, 128-d, finite, non-zero norm, and has genuine biometric variance.
+
+    Rejects constant, all-zero, or corrupted dummy vectors that create spurious cosine matches.
+    """
+    if not isinstance(arr, np.ndarray) or arr.size != 128:
+        return False
+    if not np.all(np.isfinite(arr)):
+        return False
+    norm = float(np.linalg.norm(arr))
+    if norm < 1e-4:
+        return False
+    var = float(np.var(arr))
+    if var < 1e-4:
+        return False
+    return True
+
+
 class WatchlistStore:
     """Thread-safe persistent storage and matcher for biometric watchlist targets."""
 
@@ -85,9 +103,12 @@ class WatchlistStore:
                     if isinstance(raw_v, str):
                         b = base64.b64decode(raw_v.encode("ascii"))
                         arr = np.frombuffer(b, dtype=np.float32).copy()
-                        gallery.append(arr)
+                        if is_valid_exemplar(arr):
+                            gallery.append(arr)
                     elif isinstance(raw_v, list):
-                        gallery.append(np.array(raw_v, dtype=np.float32))
+                        arr = np.array(raw_v, dtype=np.float32)
+                        if is_valid_exemplar(arr):
+                            gallery.append(arr)
 
                 raw_threat = str(item.get("threat_level", "HIGH")).upper()
                 try:
@@ -142,6 +163,7 @@ class WatchlistStore:
             logger.error("Failed to persist watchlist to %s: %s", self.storage_path, ex)
 
     def add_entry(self, entry: WatchlistEntry) -> None:
+        entry.gallery = [v for v in entry.gallery if is_valid_exemplar(v)]
         self._entries[entry.id] = entry
         self._save()
 
@@ -176,10 +198,9 @@ class WatchlistStore:
             return None
 
         q = np.asarray(query_feat, dtype=np.float32).flatten()
-        q_norm = np.linalg.norm(q)
-        if q_norm == 0:
+        if not is_valid_exemplar(q):
             return None
-        q = q / q_norm
+        q = q / float(np.linalg.norm(q))
 
         best_score = -1.0
         best_entry: WatchlistEntry | None = None

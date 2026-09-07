@@ -211,9 +211,32 @@ class ONNXDetectorProvider:
             if y2_norm < y1_norm:
                 y1_norm, y2_norm = y2_norm, y1_norm
 
+            bw_norm = x2_norm - x1_norm
+            bh_norm = y2_norm - y1_norm
+
+            # Reject zero or degenerate boxes
+            if bw_norm <= 0.005 or bh_norm <= 0.005:
+                continue
+
             cid = int(valid_class_ids[i])
             cname = SECURITY_CLASSES.get(cid, "unknown")
             conf = float(valid_scores[i])
+
+            # Person bounding box sanity checks:
+            if cname == "person":
+                # Reject boxes with unviable pixel dimensions
+                if bh_norm * orig_h < 20.0 or bw_norm * orig_w < 10.0:
+                    continue
+                # Aspect ratio sanity: human body (standing, sitting, or lying down)
+                hw_ratio = bh_norm / max(1e-5, bw_norm)
+                if hw_ratio < 0.22 or hw_ratio > 5.5:
+                    continue
+                # Reject boxes covering virtually the entire frame
+                if bw_norm > 0.94 and bh_norm > 0.90:
+                    continue
+                # Require confidence >= 0.50 for person detections
+                if conf < 0.50:
+                    continue
 
             detections.append(
                 Detection(

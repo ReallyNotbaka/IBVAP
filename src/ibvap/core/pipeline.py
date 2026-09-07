@@ -176,6 +176,7 @@ class MiniPipeline:
                             "_raw": f,
                         }
                         for f in raw_faces
+                        if f.quality.passed
                     ]
                     self.faces_analyzed += 1
                     new_faces_detected = bool(self.last_faces)
