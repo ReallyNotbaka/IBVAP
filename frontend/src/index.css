@@ -25,22 +25,53 @@
 }
 
 .dark {
-  --bg: #0c0e12;
-  --bg-gradient: #0c0e12;
-  --panel: rgba(18, 21, 28, 0.94);
-  --panel-strong: #12151c;
-  --panel-alt: #171b24;
-  --line: rgba(255, 255, 255, 0.08);
-  --text: #f8fafc;
-  --muted: #8e9bb0;
-  --accent: #f8fafc;
-  --accent-champagne: #dfd5c6;
+  --bg: #151515;
+  --bg-gradient: #151515;
+  --panel: rgba(30, 30, 30, 0.96);
+  --panel-strong: #202020;
+  --panel-alt: #292929;
+  --line: rgba(255, 255, 255, 0.12);
+  --text: #f2f0eb;
+  --muted: #aaa59c;
+  --accent: #f2f0eb;
+  --accent-champagne: #c7a978;
   --accent-soft: rgba(255, 255, 255, 0.06);
   --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
   --shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 44px -4px rgba(0, 0, 0, 0.65);
+}
+
+.dark [class*="dark:bg-slate-950"] {
+  background-color: #111111 !important;
+}
+
+.dark [class*="dark:bg-slate-900"] {
+  background-color: #1e1e1e !important;
+}
+
+.dark [class*="dark:bg-slate-800"] {
+  background-color: #292929 !important;
+}
+
+.dark [class*="dark:bg-slate-700"] {
+  background-color: #363636 !important;
+}
+
+.dark [class*="dark:border-slate-800"],
+.dark [class*="dark:border-slate-700"] {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.dark [class*="dark:text-slate-100"],
+.dark [class*="dark:text-slate-200"] {
+  color: #f2f0eb !important;
+}
+
+.dark [class*="dark:text-slate-300"],
+.dark [class*="dark:text-slate-400"] {
+  color: #aaa59c !important;
 }
 
 * {
@@ -111,17 +142,19 @@ button, input, select {
 }
 
 .page-transition {
-  animation: page-enter 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: page-enter 440ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes page-enter {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px);
+    filter: blur(2px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
+    filter: blur(0);
   }
 }
 
@@ -419,6 +452,13 @@ button, input, select {
   .topbar-title {
     flex: 1 1 auto;
     min-width: 0;
+  }
+
+  .topbar > div:last-child {
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-end;
   }
 
   .topbar-nav {
