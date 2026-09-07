@@ -4,7 +4,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { CpuIcon, CrosshairIcon } from "./Icons";
 
 const items = [
-  { to: "/", label: "Cockpit" },
+  { to: "/", label: "Overview" },
   { to: "/alerts", label: "Alerts" },
   { to: "/health", label: "Health" },
 ];

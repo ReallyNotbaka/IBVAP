@@ -25,7 +25,7 @@ test.describe('IBVAP Frontend E2E Test Suite', () => {
     await page.route('**/api/v1/health', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', storage_pressure: 'Normal' }) }));
     await page.goto('/');
     await expect(page.locator('header.topbar')).toBeVisible();
-    await expect(page.locator('header.topbar').getByRole('link', { name: /cockpit/i })).toBeVisible();
+    await expect(page.locator('header.topbar').getByRole('link', { name: /overview/i })).toBeVisible();
     await expect(page.locator('header.topbar').getByRole('link', { name: /alerts/i })).toBeVisible();
     await expect(page.locator('header.topbar').getByRole('link', { name: /health/i })).toBeVisible();
     await expect(page.getByTestId('live-player-c1')).toBeVisible();

@@ -229,7 +229,7 @@ export function ConnectModal() {
             </div>
             <div className="mt-4 flex gap-3">
               <button onClick={doSave} data-testid="continue" className="primary-button flex-1 cursor-pointer">
-                Add camera & go to cockpit
+                Add camera & go to overview
               </button>
               <button onClick={() => setStep(2)} className="ghost-button cursor-pointer">
                 Edit

@@ -90,7 +90,7 @@ export function EmptyState({
             data-testid="other-ip-panel"
             className="mt-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 p-4 text-sm text-slate-700 dark:text-slate-300"
           >
-            Supports standard RTSP, RTSPS, and IP video sources. Configure and manage your endpoints anytime from the operations dashboard.
+            Supports standard RTSP, RTSPS, and IP video sources. Configure and manage your camera sources from the overview.
           </div>
         )}
 
