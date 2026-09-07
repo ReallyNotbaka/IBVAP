@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { createCamera, finalizeUpload, uploadFootage } from "../lib/api";
+import { VideoIcon, UploadIcon } from "../components/Icons";
 
 export function UseFootage() {
   const navigate = useNavigate();
@@ -15,13 +16,13 @@ export function UseFootage() {
     }
 
     setIsBusy(true);
-    setStatus("Uploading footage to quarantine…");
+    setStatus("Uploading footage...");
 
     try {
       const upload = await uploadFootage(file);
-      setStatus("Finalizing uploaded footage…");
+      setStatus("Finalizing footage...");
       const finalized = await finalizeUpload(upload.upload_id);
-      setStatus("Promoting footage to camera source…");
+      setStatus("Configuring footage source...");
 
       await createCamera({
         name: file.name,
@@ -44,13 +45,23 @@ export function UseFootage() {
 
   return (
     <div className="flex-1 flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] py-8 px-4 w-full">
-      <div className="w-full max-w-xl rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-[#131720]/95 backdrop-blur-xl p-8 shadow-xl transition-all">
+      <div className="w-full max-w-xl rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/95 backdrop-blur-xl p-8 shadow-xl transition-all">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 shadow-sm">
+            <VideoIcon className="w-5 h-5 text-slate-700 dark:text-slate-300" />
+          </div>
+          <div>
+            <h1 className="text-[20px] font-bold tracking-tight text-slate-900 dark:text-slate-100">
+              Use video footage
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Analyze recorded video clip as a live camera source
+            </p>
+          </div>
+        </div>
 
-        <h1 className="text-[22px] font-bold tracking-tight text-slate-900 dark:text-slate-100">
-          Use video footage
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          Upload a local MP4, MOV, AVI, MKV, or WEBM clip and analyze it as a camera source.
+        <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
+          Upload a local MP4, MOV, AVI, MKV, or WEBM clip and process it through the vision pipeline.
         </p>
 
         <label className="mt-6 block rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 p-6 text-sm text-slate-600 dark:text-slate-300 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
@@ -61,7 +72,10 @@ export function UseFootage() {
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
           <div className="flex items-center justify-between gap-4">
-            <span className="truncate">{file ? file.name : "Choose a video file"}</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <UploadIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              <span className="truncate">{file ? file.name : "Choose a video file"}</span>
+            </div>
             <span className="rounded-full bg-slate-200 dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 flex-shrink-0">
               Browse
             </span>
@@ -73,14 +87,14 @@ export function UseFootage() {
             type="button"
             onClick={handleUseFootage}
             disabled={!file || isBusy}
-            className="primary-button flex-1 disabled:cursor-not-allowed disabled:opacity-60"
+            className="primary-button flex-1 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
           >
-            {isBusy ? "Working…" : "Use footage"}
+            {isBusy ? "Processing..." : "Use footage"}
           </button>
           <button
             type="button"
             onClick={() => navigate("/")}
-            className="secondary-button border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+            className="secondary-button border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
           >
             Cancel
           </button>

@@ -6,7 +6,7 @@ export function HealthBar() {
 
   if (!data) {
     return (
-      <div className="rounded-2xl border border-neutral-200/80 dark:border-white/10 bg-white dark:bg-[#131720] backdrop-blur-xl p-3.5 text-xs text-slate-400 dark:text-slate-500 shadow-sm">
+      <div className="rounded-2xl border border-neutral-200/80 dark:border-white/10 bg-white dark:bg-slate-900 backdrop-blur-xl p-3.5 text-xs text-slate-400 dark:text-slate-500 shadow-sm">
         System health — loading…
       </div>
     );
@@ -21,7 +21,7 @@ export function HealthBar() {
       className={`rounded-2xl border p-3.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 backdrop-blur-xl shadow-sm transition-colors ${
         isEmergency
           ? "bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900/60 text-red-800 dark:text-red-200"
-          : "bg-white dark:bg-[#131720] border-neutral-200/80 dark:border-white/10 text-slate-600 dark:text-slate-300"
+          : "bg-white dark:bg-slate-900 border-neutral-200/80 dark:border-white/10 text-slate-600 dark:text-slate-300"
       }`}
     >
       <span className="font-medium">

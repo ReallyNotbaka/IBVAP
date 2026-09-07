@@ -50,7 +50,7 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
       type="button"
       onClick={toggleTheme}
       data-testid="theme-toggle"
-      className={`relative flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full border border-neutral-200/90 dark:border-white/10 bg-neutral-100/90 dark:bg-[#1a202c] text-amber-600 dark:text-neutral-200 shadow-sm hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer overflow-hidden ${className}`}
+      className={`relative flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full border border-neutral-200/90 dark:border-white/10 bg-neutral-100/90 dark:bg-slate-800 text-amber-600 dark:text-neutral-200 shadow-sm hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer overflow-hidden ${className}`}
       title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
       aria-label={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
     >

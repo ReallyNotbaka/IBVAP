@@ -85,7 +85,7 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
     const cornerPath = page.locator('svg path[stroke="#dfd5c6"]').first();
     await expect(cornerPath).toBeVisible();
 
-    // Verify Quick Inspector on target click
+    // Verify Quick Inspector on target click (Dark Mode)
     const targetHit = page.locator('svg g rect.cursor-pointer').first();
     await expect(targetHit).toBeVisible();
     await targetHit.click({ force: true });
@@ -96,51 +96,108 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
     await expect(inspectorCard).toContainText('#104');
     await expect(inspectorCard).toContainText('94%');
 
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/inspector_dark.png'),
+    });
+
     // Close inspector card
-    await inspectorCard.getByRole('button', { name: '✕' }).click();
+    await inspectorCard.getByRole('button', { name: /close|✕/i }).click();
     await expect(inspectorCard).not.toBeVisible();
+
+    // Dark Mode Model Modal
+    const modelBtnDark = page.getByTestId('topbar-model-btn');
+    await modelBtnDark.click();
+    const modelModalDark = page.getByRole('heading', { name: /Dynamic YOLO26 Neural Model Switcher/i });
+    await expect(modelModalDark).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/model_modal_dark.png'),
+    });
+    const modelContainerDark = page.locator('.modal-content-animate');
+    await modelContainerDark.getByRole('button', { name: /close|✕/i }).click();
+    await expect(modelModalDark).not.toBeVisible();
+
+    // Dark Mode Watchlist Modal
+    const watchlistBtnDark = page.getByTestId('topbar-watchlist-btn');
+    await watchlistBtnDark.click();
+    const watchlistModalDark = page.getByRole('heading', { name: /Biometric Watchlist/i });
+    await expect(watchlistModalDark).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/watchlist_modal_dark.png'),
+    });
+    const watchlistContainerDark = page.locator('.modal-content-animate');
+    await watchlistContainerDark.getByRole('button', { name: /close|✕/i }).click();
+    await expect(watchlistModalDark).not.toBeVisible();
+
+    // Dark Mode Drawer
+    const drawerBtnDark = page.getByRole('button', { name: /Alerts/i }).filter({ hasText: 'Alerts' }).last();
+    await drawerBtnDark.click();
+    await expect(page.getByRole('heading', { name: /Alerts & (Watchlist|Suspects)/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/drawer_dark.png'),
+    });
+    await page.getByRole('button', { name: 'Close Drawer' }).click();
+    await expect(page.getByRole('heading', { name: /Alerts & (Watchlist|Suspects)/i })).not.toBeVisible();
 
     // 2. Switch to Light Mode
     await page.getByTestId('theme-toggle').click();
-    await page.waitForTimeout(350);
+    await page.waitForFunction(() => window.getComputedStyle(document.body).backgroundColor === 'rgb(250, 250, 250)', { timeout: 3000 });
 
     const lightBg = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor);
     console.log('Light mode body backgroundColor:', lightBg);
-    // Light mode body is #fafafa -> rgb(250, 250, 250)
     expect(lightBg).toBe('rgb(250, 250, 250)');
 
     // Verify theme toggle animation classes / attributes
     const themeBtn = page.getByTestId('theme-toggle');
     await expect(themeBtn).toBeVisible();
 
+    // Light Mode Quick Inspector
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await targetHit.click({ force: true });
+    await expect(inspectorCard).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/inspector_light.png'),
+    });
+    await inspectorCard.getByRole('button', { name: /close|✕/i }).click();
+    await expect(inspectorCard).not.toBeVisible();
+
     // 3. Test Watchlist Modal in Light Mode
     const watchlistBtn = page.getByTestId('topbar-watchlist-btn');
     await watchlistBtn.click();
     const watchlistModal = page.getByRole('heading', { name: /Biometric Watchlist/i });
     await expect(watchlistModal).toBeVisible();
-
-    // Check tabs
     await expect(page.getByRole('button', { name: /Targets Enrolled/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /Enroll New Target/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/watchlist_modal_light.png'),
+    });
 
     // Close modal via modal's close button
     const watchlistContainer = page.locator('.modal-content-animate');
-    await watchlistContainer.getByRole('button', { name: '✕' }).click();
+    await watchlistContainer.getByRole('button', { name: /close|✕/i }).click();
     await expect(watchlistModal).not.toBeVisible();
 
-    // 4. Test Model Selector Modal
+    // 4. Test Model Selector Modal in Light Mode
     const modelBtn = page.getByTestId('topbar-model-btn');
     await modelBtn.click();
     const modelModal = page.getByRole('heading', { name: /Dynamic YOLO26 Neural Model Switcher/i });
     await expect(modelModal).toBeVisible();
     await expect(page.getByRole('button', { name: /Available Models/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/model_modal_light.png'),
+    });
 
     // Close modal via modal's close button
     const modelContainer = page.locator('.modal-content-animate');
-    await modelContainer.getByRole('button', { name: '✕' }).click();
+    await modelContainer.getByRole('button', { name: /close|✕/i }).click();
     await expect(modelModal).not.toBeVisible();
 
-    // 5. Test Control Pill Bar
+    // 5. Test Control Pill Bar in Light Mode
     const cleanPreset = page.getByRole('button', { name: 'Clean' });
     const allDataPreset = page.getByRole('button', { name: 'All Data' });
     const alertsOnlyPreset = page.getByRole('button', { name: 'Alerts Only' });
@@ -151,12 +208,38 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
     await cleanPreset.click();
     await allDataPreset.click();
 
-    // Verify drawer toggle
-    const drawerBtn = page.getByRole('button', { name: '🔔 Alerts' });
+    // Verify drawer toggle in Light Mode
+    const drawerBtn = page.getByRole('button', { name: /Alerts/i }).filter({ hasText: 'Alerts' }).last();
     await drawerBtn.click();
     await expect(page.getByRole('heading', { name: /Alerts & (Watchlist|Suspects)/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/drawer_light.png'),
+    });
     await page.getByRole('button', { name: 'Close Drawer' }).click();
     await expect(page.getByRole('heading', { name: /Alerts & (Watchlist|Suspects)/i })).not.toBeVisible();
+
+    // 6. Test Alerts Page in Light & Dark Mode
+    await page.goto('/alerts');
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/alerts_light.png'),
+    });
+    await page.getByTestId('theme-toggle').click();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/alerts_dark.png'),
+    });
+
+    // 7. Test Health Page in Dark & Light Mode
+    await page.goto('/health');
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/health_dark.png'),
+    });
+    await page.getByTestId('theme-toggle').click();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/health_light.png'),
+    });
 
     console.log('All visual inspection checks passed successfully!');
   });
@@ -206,7 +289,34 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
       fullPage: true,
     });
 
-    // 2. Use Footage page
+    // 2. Connect Modal in Light & Dark Mode
+    await page.goto('/connect/phone');
+    await expect(page.getByRole('heading', { name: /Connect Camera Source/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/connect_modal_light.png'),
+    });
+    const connectContainer = page.locator('.modal-content-animate');
+    await connectContainer.getByRole('button', { name: /close|✕/i }).first().click();
+    await expect(page.locator('.modal-content-animate')).not.toBeVisible();
+
+    // Switch to dark and open modal again
+    await page.getByTestId('theme-toggle').click();
+    await page.waitForTimeout(350);
+    await page.goto('/connect/phone');
+    await expect(page.getByRole('heading', { name: /Connect Camera Source/i })).toBeVisible();
+    await page.waitForTimeout(350);
+    await page.screenshot({
+      path: path.resolve('ui-inspection-output/connect_modal_dark.png'),
+    });
+    await page.locator('.modal-content-animate').getByRole('button', { name: /close|✕/i }).first().click();
+    await expect(page.locator('.modal-content-animate')).not.toBeVisible();
+
+    // Switch back to light for subsequent tests or continue
+    await page.getByTestId('theme-toggle').click();
+    await page.waitForTimeout(350);
+
+    // 3. Use Footage page
     await page.goto('/use/footage');
     await expect(page.locator('header.topbar')).toHaveCount(1);
     await expect(page.locator('header:not(.topbar)')).toHaveCount(0);

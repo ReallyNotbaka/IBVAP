@@ -3,6 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { OverlayCanvas, type Box, type OverlayPreset } from "./OverlayCanvas";
 import { TileHealth } from "./TileHealth";
 import { fetchCameraObservations, type Camera } from "../lib/api";
+import {
+  ExpandIcon,
+  CompressIcon,
+  CloseIcon,
+  CrosshairIcon,
+  UserIcon,
+  FaceIcon,
+} from "./Icons";
 
 export interface TargetInspectData {
   trackId?: string;
@@ -38,11 +46,27 @@ function createFallbackThumb(box: Box, size = 160): string {
     ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
     ctx.fill();
 
-    // Silhouette icon
-    ctx.font = "40px sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(isFace ? "◎" : "👤", size / 2, size * 0.42);
+    // Geometric silhouette vector (no emojis)
+    if (isFace) {
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(size / 2, size * 0.42, size * 0.16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.beginPath();
+      ctx.arc(size * 0.44, size * 0.39, 2.5, 0, Math.PI * 2);
+      ctx.arc(size * 0.56, size * 0.39, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.beginPath();
+      ctx.arc(size / 2, size * 0.34, size * 0.10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(size / 2, size * 0.56, size * 0.16, Math.PI, 0);
+      ctx.fill();
+    }
 
     // Bottom banner with label & trackId
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
@@ -393,7 +417,7 @@ export function CameraTile({
               title={isSolo ? "Exit Theater Solo Mode" : "Expand to Theater Solo Mode"}
               aria-label={isSolo ? "Exit Theater Solo Mode" : "Expand to Theater Solo Mode"}
             >
-              {isSolo ? "⤡" : "⤢"}
+              {isSolo ? <CompressIcon className="w-3.5 h-3.5" /> : <ExpandIcon className="w-3.5 h-3.5" />}
             </button>
           )}
         </div>
@@ -454,7 +478,7 @@ export function CameraTile({
           {/* Quick Inspector Card */}
           {activeSelectedBox && (
             <div
-              className="inspector-card absolute z-50 w-64 rounded-2xl border border-slate-200/90 dark:border-white/10 bg-white/95 dark:bg-[#131720]/95 backdrop-blur-xl shadow-2xl p-3.5 text-slate-900 dark:text-slate-100 modal-content-animate"
+              className="inspector-card absolute z-50 w-64 rounded-2xl border border-slate-200/90 dark:border-white/10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl shadow-2xl p-3.5 text-slate-900 dark:text-slate-100 modal-content-animate"
               style={{
                 top: `${Math.min(Math.max(activeSelectedBox.y * 100, 12), 55)}%`,
                 left:
@@ -474,10 +498,11 @@ export function CameraTile({
             >
               <button
                 onClick={() => setSelectedBox(null)}
+                aria-label="Close"
                 className="absolute top-2.5 right-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 h-6 w-6 rounded-full flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-xs cursor-pointer"
                 title="Close Inspector"
               >
-                ✕
+                <CloseIcon className="w-3.5 h-3.5" />
               </button>
 
               <div className="flex items-center gap-3 mb-3">
@@ -488,10 +513,10 @@ export function CameraTile({
                       alt="Target crop"
                       className="h-full w-full object-cover"
                     />
+                  ) : activeSelectedBox.label.toLowerCase() === "face" ? (
+                    <FaceIcon className="w-6 h-6 text-slate-400 dark:text-slate-500" />
                   ) : (
-                    <span className="text-2xl">
-                      {activeSelectedBox.label.toLowerCase() === "face" ? "◎" : "👤"}
-                    </span>
+                    <UserIcon className="w-6 h-6 text-slate-400 dark:text-slate-500" />
                   )}
                 </div>
                 <div className="min-w-0 flex-1 pr-4">
@@ -525,7 +550,7 @@ export function CameraTile({
                 onClick={handlePutOnWatchlist}
                 className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-950 hover:bg-black dark:hover:bg-slate-100 active:scale-[0.98] text-xs font-semibold py-2 px-3 shadow-sm transition-all cursor-pointer"
               >
-                <span>🎯</span>
+                <CrosshairIcon className="w-3.5 h-3.5" />
                 <span>Put on Watchlist</span>
               </button>
             </div>

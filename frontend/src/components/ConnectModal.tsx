@@ -2,6 +2,12 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { testCamera, createCamera } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  CameraIcon,
+  CloseIcon,
+  CheckCircleIcon,
+  AlertTriangleIcon,
+} from "./Icons";
 
 export function ConnectModal() {
   const nav = useNavigate();
@@ -44,7 +50,7 @@ export function ConnectModal() {
       username: username || undefined,
       password: password || undefined,
       site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-      name: `Phone ${Date.now() % 1000}`,
+      name: `Camera ${Date.now() % 1000}`,
     });
     qc.invalidateQueries({ queryKey: ["cameras"] });
     setStep(1);
@@ -59,31 +65,67 @@ export function ConnectModal() {
       onClick={() => nav("/")}
     >
       <div
-        className="modal-content-animate w-full max-w-xl rounded-2xl bg-white dark:bg-[#131720] border border-neutral-200/80 dark:border-white/10 p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors"
+        className="modal-content-animate w-full max-w-xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-white/10 p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Modal Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-lg shadow-sm">
+              <CameraIcon className="w-5 h-5 text-slate-700 dark:text-slate-300" />
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+                Connect Camera Source
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Configure network camera, IP webcam, or mobile RTSP feed
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => nav("/")}
+            aria-label="Close"
+            title="Close"
+            className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+          >
+            <CloseIcon className="w-4 h-4" />
+          </button>
+        </div>
+
         {step === 1 && (
           <>
-            <h2 className="text-base font-bold tracking-tight">Prepare phone</h2>
-            <ol className="mt-3 list-decimal pl-5 text-sm leading-6 text-slate-600 dark:text-slate-300 space-y-1">
-              <li>Start DroidCam / IP-webcam on phone.</li>
-              <li>Same WiFi as server, keep on power.</li>
-              <li>Copy URL shown by app (e.g. http://192.168.1.10:4747/video).</li>
-            </ol>
-            <button onClick={() => setStep(2)} data-testid="prepare-done" className="primary-button mt-6 w-full cursor-pointer">
-              My phone camera is running
+            <div className="space-y-3">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Device Configuration Instructions
+              </h3>
+              <ol className="list-decimal pl-5 text-xs leading-5 text-slate-600 dark:text-slate-300 space-y-1.5">
+                <li>Start streaming service on device (e.g. DroidCam, IP Webcam, or hardware IP camera).</li>
+                <li>Ensure the camera device is connected to the same local network and powered.</li>
+                <li>Copy the stream endpoint URL provided by the application.</li>
+              </ol>
+            </div>
+            <button
+              onClick={() => setStep(2)}
+              data-testid="prepare-done"
+              className="primary-button mt-6 w-full cursor-pointer flex items-center justify-center gap-2"
+            >
+              <CameraIcon className="w-4 h-4" />
+              <span>Camera feed is ready</span>
             </button>
           </>
         )}
         {step === 2 && (
           <>
-            <h2 className="text-base font-bold tracking-tight">Enter connection</h2>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Stream Connection Parameters
+            </h3>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="http://192.168.1.10:4747/video"
               data-testid="stream-url"
-              className="mt-3 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-[#0b0d11] px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300"
+              className="mt-3 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300"
             />
             <button
               onClick={() => setShowAuth((v) => !v)}
@@ -111,26 +153,54 @@ export function ConnectModal() {
                 />
               </div>
             )}
-            <button onClick={doTest} disabled={!url || loading} data-testid="test-connection" className="primary-button mt-4 w-full disabled:opacity-50 cursor-pointer">
-              {loading ? "Testing..." : "Test connection"}
+            <button
+              onClick={doTest}
+              disabled={!url || loading}
+              data-testid="test-connection"
+              className="primary-button mt-4 w-full disabled:opacity-50 cursor-pointer"
+            >
+              {loading ? "Testing Connection..." : "Test connection"}
             </button>
           </>
         )}
         {step === 3 && (
           <>
-            <h2 className="text-base font-bold tracking-tight">Testing connection</h2>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Validating Connection
+            </h3>
             <div className="mt-4 space-y-2">
               {(result?.stages ?? [{ name: "Validating address", status: "running" }]).map((s) => (
-                <div key={s.name} className="flex items-center justify-between text-sm">
-                  <span>{s.name}</span>
-                  <span className={s.status === "ok" ? "text-emerald-600 dark:text-emerald-400 font-semibold" : s.status === "failed" ? "text-red-600 dark:text-red-400 font-semibold" : "text-slate-400"}>{s.status}</span>
+                <div key={s.name} className="flex items-center justify-between text-sm py-1 border-b border-slate-100 dark:border-slate-800/60 last:border-0">
+                  <span className="text-slate-700 dark:text-slate-300">{s.name}</span>
+                  <span className={s.status === "ok" ? "text-emerald-600 dark:text-emerald-400 font-semibold inline-flex items-center gap-1" : s.status === "failed" ? "text-red-600 dark:text-red-400 font-semibold inline-flex items-center gap-1" : "text-slate-400 font-mono text-xs"}>
+                    {s.status === "ok" ? (
+                      <>
+                        <CheckCircleIcon className="w-3.5 h-3.5" />
+                        <span>Ready</span>
+                      </>
+                    ) : s.status === "failed" ? (
+                      <>
+                        <AlertTriangleIcon className="w-3.5 h-3.5" />
+                        <span>Failed</span>
+                      </>
+                    ) : (
+                      s.status
+                    )}
+                  </span>
                 </div>
               ))}
             </div>
             {result && (
-              <div data-testid="test-result" className={`mt-4 rounded-xl p-3 text-sm ${result.result === "ok" ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60" : "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60"}`}>
-                {result.safe_message}
-                {result.reason_code && <span className="ml-2 text-xs">({result.reason_code})</span>}
+              <div data-testid="test-result" className={`mt-4 rounded-xl p-3 text-sm flex items-start gap-2 ${result.result === "ok" ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60" : "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60"}`}>
+                {result.result === "ok" ? (
+                  <CheckCircleIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <AlertTriangleIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                )}
+                <div>
+                  <span>{result.safe_message}</span>
+                  {result.reason_code && <span className="ml-2 text-xs opacity-75">({result.reason_code})</span>}
+                </div>
               </div>
             )}
             {result && result.result !== "ok" && (
@@ -142,9 +212,12 @@ export function ConnectModal() {
         )}
         {step === 4 && result?.probe && (
           <>
-            <h2 className="text-base font-bold tracking-tight">Confirm live preview</h2>
-            <div data-testid="test-result" className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60 p-3 text-sm mb-3">
-              {result.safe_message}
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Confirm live preview
+            </h3>
+            <div data-testid="test-result" className="rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60 p-3 text-sm mb-3 flex items-center gap-2">
+              <CheckCircleIcon className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>{result.safe_message}</span>
             </div>
             <div className="mt-3 rounded-xl bg-slate-900 p-3 border border-slate-800">
               {url.startsWith("http") && <img src={url} alt="Preview" className="max-h-72 w-full object-contain rounded-lg bg-black" />}
@@ -156,7 +229,7 @@ export function ConnectModal() {
             </div>
             <div className="mt-4 flex gap-3">
               <button onClick={doSave} data-testid="continue" className="primary-button flex-1 cursor-pointer">
-                Add camera → Go to cockpit
+                Add camera & go to cockpit
               </button>
               <button onClick={() => setStep(2)} className="ghost-button cursor-pointer">
                 Edit
@@ -164,9 +237,11 @@ export function ConnectModal() {
             </div>
           </>
         )}
-        <button onClick={() => nav("/")} className="mt-4 text-xs text-slate-500 dark:text-slate-400 underline hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
-          Close
-        </button>
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex justify-end">
+          <button onClick={() => nav("/")} className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

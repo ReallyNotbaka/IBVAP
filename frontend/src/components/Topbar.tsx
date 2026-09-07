@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { useWatchlist, useModels } from "../lib/api";
 import { ThemeToggle } from "./ThemeToggle";
+import { CpuIcon, CrosshairIcon } from "./Icons";
 
 const items = [
   { to: "/", label: "Cockpit" },
@@ -55,9 +56,9 @@ export function Topbar({
           onClick={onOpenModels}
           data-testid="topbar-model-btn"
           className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-slate-400 dark:hover:border-slate-600 hover:bg-slate-200/80 dark:hover:bg-slate-700/80 transition-all shadow-sm cursor-pointer"
-          title="Switch Active YOLO26 Neural Model"
+          title="Neural Model Settings"
         >
-          <span className="text-slate-500 dark:text-slate-400">⚡</span>
+          <CpuIcon className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
           <span className="hidden sm:inline text-slate-500 dark:text-slate-400 font-medium">Model:</span>
           <span className="font-mono uppercase font-bold text-slate-900 dark:text-slate-100">{activeModel}</span>
         </button>
@@ -67,9 +68,9 @@ export function Topbar({
           onClick={onOpenWatchlist}
           data-testid="topbar-watchlist-btn"
           className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-rose-400 dark:hover:border-rose-600 hover:bg-rose-50/50 dark:hover:bg-rose-950/30 transition-all shadow-sm cursor-pointer"
-          title="Manage Biometric Watchlist & Registered Profiles"
+          title="Biometric Watchlist"
         >
-          <span>🎯</span>
+          <CrosshairIcon className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
           <span>Watchlist</span>
           {suspects.length > 0 && (
             <span className="flex h-4 min-w-[16px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold text-white">

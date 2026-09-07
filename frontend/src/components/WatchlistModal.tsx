@@ -7,6 +7,15 @@ import {
   type WatchlistEntry,
 } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  CrosshairIcon,
+  CloseIcon,
+  UserIcon,
+  CameraIcon,
+  EyeIcon,
+  AlertTriangleIcon,
+  CheckCircleIcon,
+} from "./Icons";
 
 interface WatchlistModalProps {
   isOpen: boolean;
@@ -179,22 +188,23 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/80 border border-rose-200 dark:border-rose-900/60 text-rose-600 dark:text-rose-400 text-lg shadow-sm">
-              🎯
+              <CrosshairIcon className="w-5 h-5 text-rose-600 dark:text-rose-400" />
             </div>
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 Biometric Watchlist & Target Tracking
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Identify and track registered subjects across camera feeds with multi-photo facial recognition matrices
+                Register and track subjects of interest across camera feeds using facial feature recognition
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
           >
-            ✕
+            <CloseIcon className="w-4 h-4" />
           </button>
         </div>
 
@@ -232,8 +242,8 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                 </div>
               ) : suspects.length === 0 ? (
                 <div className="py-12 text-center space-y-3">
-                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800 text-2xl">
-                    👤
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500">
+                    <UserIcon className="w-6 h-6" />
                   </div>
                   <div className="text-sm font-medium text-slate-700 dark:text-slate-300">
                     No profiles currently enrolled
@@ -262,8 +272,8 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                           className="h-12 w-12 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shadow-xs"
                         />
                       ) : (
-                        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-lg">
-                          👤
+                        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500">
+                          <UserIcon className="w-6 h-6" />
                         </div>
                       )}
                       <div>
@@ -280,9 +290,15 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                           </span>
                         </div>
                         <div className="flex items-center gap-2.5 mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-                          <span>📸 {s.photo_count} angles</span>
+                          <span className="flex items-center gap-1">
+                            <CameraIcon className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{s.photo_count} angles</span>
+                          </span>
                           <span>•</span>
-                          <span>👁️ Sighted {s.sight_count} times</span>
+                          <span className="flex items-center gap-1">
+                            <EyeIcon className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Sighted {s.sight_count} times</span>
+                          </span>
                           {s.notes && (
                             <>
                               <span>•</span>
@@ -307,13 +323,15 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
           ) : (
             <form onSubmit={handleEnroll} className="space-y-4">
               {errorMessage && (
-                <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300">
-                  ⚠️ {errorMessage}
+                <div className="flex items-center gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300">
+                  <AlertTriangleIcon className="w-4 h-4 flex-shrink-0 text-rose-600 dark:text-rose-400" />
+                  <span>{errorMessage}</span>
                 </div>
               )}
               {successMessage && (
-                <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 p-3 text-xs text-emerald-700 dark:text-emerald-300">
-                  ✅ {successMessage}
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/40 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+                  <CheckCircleIcon className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span>{successMessage}</span>
                 </div>
               )}
 
@@ -377,13 +395,12 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                     disabled={photos.length >= 5}
                   />
                   <div className="space-y-1">
-                    <div className="text-2xl">📸</div>
+                    <CameraIcon className="w-7 h-7 text-slate-400 mx-auto" />
                     <div className="text-xs font-medium text-slate-700 dark:text-slate-300">
                       Drag & drop multiple photos or click to browse
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      Tip: Include frontal, 30° left, and 30° right profile shots for maximum
-                      accuracy.
+                      Tip: Multiple angles (frontal and profile) improve match accuracy across varied lighting and orientations.
                     </div>
                   </div>
                 </div>
@@ -400,9 +417,10 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                         <button
                           type="button"
                           onClick={() => handleRemovePhoto(i)}
-                          className="absolute top-1 right-1 h-5 w-5 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                          aria-label="Remove photo"
+                          className="absolute top-1 right-1 h-5 w-5 rounded-full bg-rose-600 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
                         >
-                          ✕
+                          <CloseIcon className="w-3 h-3 text-white" />
                         </button>
                         <div className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-center text-white py-0.5">
                           Photo {i + 1}
@@ -426,7 +444,7 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
                   disabled={submitting || photos.length === 0}
                   className="rounded-xl bg-slate-900 dark:bg-white hover:bg-black dark:hover:bg-slate-100 px-5 py-2 text-xs font-semibold text-white dark:text-slate-950 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm cursor-pointer"
                 >
-                  {submitting ? "Extracting SFace Biometrics..." : "Enroll in Watchlist"}
+                  {submitting ? "Extracting Biometrics..." : "Enroll in Watchlist"}
                 </button>
               </div>
             </form>

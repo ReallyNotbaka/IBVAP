@@ -209,7 +209,7 @@ test.describe('Critical Target Tracking & Identification Suite', () => {
     await expect(inspectorCard).toContainText(/Critical Target Match/i);
 
     // Close inspector
-    await inspectorCard.getByRole('button', { name: '✕' }).click();
+    await inspectorCard.getByRole('button', { name: /close|✕/i }).click();
     await expect(inspectorCard).not.toBeVisible();
   });
 

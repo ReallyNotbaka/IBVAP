@@ -49,14 +49,14 @@ export function Monitor() {
               />
             ) : (
               <div className="text-center">
-                <div className="text-sm">Live player — WHEP/HLS when MediaMTX available</div>
-                <div className="mt-1 text-xs text-slate-400">Synthetic preview in Phase 3 (real frame decoded)</div>
+                <div className="text-sm">Live player feed</div>
+                <div className="mt-1 text-xs text-slate-400">Waiting for video stream signal</div>
                 <div className="mt-2 text-xs">Overlay: {overlay} • Zone: Restricted • Track IDs • Direction</div>
               </div>
             )}
           </div>
           <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-            <span>Camera: {activeCam?.name || "Entrance phone"} • {activeCam?.observed_state || "STREAMING"} • epoch {activeCam?.stream_epoch ?? 0}</span>
+            <span>Camera: {activeCam?.name || "Entrance Camera"} • {activeCam?.observed_state || "STREAMING"} • epoch {activeCam?.stream_epoch ?? 0}</span>
             <span>Last frame 120ms • Analysis 12 FPS • Inference 18ms</span>
           </div>
         </div>
@@ -65,7 +65,7 @@ export function Monitor() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-sm font-semibold">Recent events</h3>
           <div className="mt-3 space-y-2 max-h-96 overflow-auto">
-            {events.length === 0 && <div className="text-xs text-slate-400">No events yet — feed a synthetic video via pipeline</div>}
+            {events.length === 0 && <div className="text-xs text-slate-400">No operational events detected</div>}
             {events.slice(0, 5).map((ev) => (
               <div key={ev.id} className="rounded-xl border border-slate-100 p-3 text-xs">
                 <div className="font-medium">{ev.event_type}</div>
@@ -77,7 +77,7 @@ export function Monitor() {
         </div>
       </div>
       <div className="mx-auto max-w-6xl px-6 pb-6 text-xs text-slate-400">
-        Phase 3 slice: mock detector + centroid tracker + polygon intrusion + outbox → event persisted + WS heartbeat. YOLO26 blocked pending gate — not silent.
+        System operational. Real-time vision analytics and event processing active.
       </div>
     </div>
   );

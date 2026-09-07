@@ -9,6 +9,7 @@ import {
   type DownloadProgress,
 } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
+import { CpuIcon, SparkIcon, CrosshairIcon, AlertTriangleIcon, CloseIcon, DownloadIcon } from "./Icons";
 
 interface ModelSelectorModalProps {
   isOpen: boolean;
@@ -126,22 +127,23 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-lg shadow-sm">
-              ⚡
+              <CpuIcon className="w-5 h-5 text-slate-800 dark:text-slate-200" />
             </div>
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
                 Dynamic YOLO26 Neural Model Switcher
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Switch neural network architectures on-the-fly with zero camera downtime
+                Switch neural network architectures with zero pipeline downtime
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
           >
-            ✕
+            <CloseIcon className="w-4 h-4" />
           </button>
         </div>
 
@@ -172,8 +174,9 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {actionError && (
-            <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300">
-              ⚠️ {actionError}
+            <div className="flex items-center gap-2 rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300">
+              <AlertTriangleIcon className="w-4 h-4 flex-shrink-0 text-rose-600 dark:text-rose-400" />
+              <span>{actionError}</span>
             </div>
           )}
 
@@ -258,9 +261,15 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
                         <p className="text-xs text-slate-500 dark:text-slate-400">
                           {m.description}
                         </p>
-                        <div className="flex items-center gap-4 text-[11px] text-slate-500 font-mono">
-                          <span>⚡ Est. Latency: ~{m.est_latency_ms}ms</span>
-                          <span>🎯 Precision: {m.mAP_val} mAP</span>
+                        <div className="flex items-center gap-4 text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                          <span className="flex items-center gap-1">
+                            <SparkIcon className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />
+                            <span>Est. Latency: ~{m.est_latency_ms}ms</span>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <CrosshairIcon className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />
+                            <span>Precision: {m.mAP_val} mAP</span>
+                          </span>
                         </div>
                       </div>
 
@@ -362,7 +371,7 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
             <div className="w-full max-w-sm rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5 shadow-2xl space-y-4 text-slate-900 dark:text-slate-100">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-lg">
-                  ⬇️
+                  <DownloadIcon className="w-5 h-5 text-slate-700 dark:text-slate-300" />
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">

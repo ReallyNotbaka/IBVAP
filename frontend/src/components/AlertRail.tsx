@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useEvents } from "../lib/api";
+import { ChevronDownIcon, ChevronUpIcon } from "./Icons";
 
 export function AlertRail({ limit = 5 }: { limit?: number }) {
   const { data: rawEvents = [] } = useEvents(limit === 5 ? 10 : 30);
@@ -17,9 +18,9 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
   const latestEvent = events[0];
 
   return (
-    <div className="rounded-2xl border border-neutral-200/90 dark:border-white/10 bg-white dark:bg-[#131720] backdrop-blur-xl shadow-sm transition-all overflow-hidden">
+    <div className="rounded-2xl border border-neutral-200/90 dark:border-white/10 bg-white dark:bg-slate-900 backdrop-blur-xl shadow-sm transition-all overflow-hidden">
       {/* Header with Expand / Contract Button */}
-      <div className="flex items-center justify-between px-4 py-3 bg-neutral-50/70 dark:bg-[#0e1117] border-b border-neutral-100 dark:border-white/5">
+      <div className="flex items-center justify-between px-4 py-3 bg-neutral-50/70 dark:bg-slate-950/60 border-b border-neutral-100 dark:border-white/5">
         <div className="flex items-center gap-2.5 flex-wrap">
           <span
             className={`h-2.5 w-2.5 rounded-full ${
@@ -65,7 +66,7 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
             title={isCollapsed ? "Expand alert feed" : "Contract alert feed"}
           >
             <span>{isCollapsed ? "Expand" : "Contract"}</span>
-            <span className="text-[10px]">{isCollapsed ? "▼" : "▲"}</span>
+            {isCollapsed ? <ChevronDownIcon className="w-3 h-3 text-slate-500 dark:text-slate-400" /> : <ChevronUpIcon className="w-3 h-3 text-slate-500 dark:text-slate-400" />}
           </button>
         </div>
       </div>
