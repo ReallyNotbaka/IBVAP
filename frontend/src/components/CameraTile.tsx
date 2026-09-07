@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { OverlayCanvas, type Box, type OverlayPreset } from "./OverlayCanvas";
 import { TileHealth } from "./TileHealth";
-import { fetchCameraObservations, type Camera } from "../lib/api";
+import {
+  controlPlayback,
+  disableCamera,
+  fetchCameraObservations,
+  fetchPlayback,
+  reconnectCamera,
+  seekPlayback,
+  type Camera,
+} from "../lib/api";
 import {
   ExpandIcon,
   CompressIcon,
@@ -107,6 +115,7 @@ export function CameraTile({
   isSolo?: boolean;
   onInspectTarget?: (target: TargetInspectData) => void;
 }) {
+  const qc = useQueryClient();
   const [imgError, setImgError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const [selectedBox, setSelectedBox] = useState<Box | null>(null);
@@ -119,6 +128,42 @@ export function CameraTile({
   const imgRef = useRef<HTMLImageElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const smoothedCoordsRef = useRef<Map<string, [number, number, number, number]>>(new Map());
+  const isFootage = camera.source_type === "video_footage" || camera.protocol === "file";
+  const { data: playback } = useQuery({
+    queryKey: ["camera-playback", camera.id],
+    queryFn: () => fetchPlayback(camera.id),
+    enabled: isFootage,
+    refetchInterval: 500,
+  });
+  const [scrubValue, setScrubValue] = useState(0);
+  const [transportBusy, setTransportBusy] = useState(false);
+
+  useEffect(() => {
+    if (playback && !transportBusy) setScrubValue(playback.position_seconds);
+  }, [playback, transportBusy]);
+
+  async function runTransport(action: "pause" | "resume" | "stop" | "restart") {
+    if (!isFootage || transportBusy) return;
+    setTransportBusy(true);
+    try {
+      await controlPlayback(camera.id, action);
+      await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
+      await qc.invalidateQueries({ queryKey: ["cameras"] });
+    } finally {
+      setTransportBusy(false);
+    }
+  }
+
+  async function seekTo(position: number) {
+    if (!isFootage || transportBusy) return;
+    setTransportBusy(true);
+    try {
+      await seekPlayback(camera.id, position);
+      await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
+    } finally {
+      setTransportBusy(false);
+    }
+  }
 
   useEffect(() => {
     const el = containerRef.current;
@@ -134,6 +179,17 @@ export function CameraTile({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!isFootage || !isSolo) return;
+    const handleSpace = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      void runTransport(playback?.state === "playing" ? "pause" : "resume");
+    };
+    window.addEventListener("keydown", handleSpace);
+    return () => window.removeEventListener("keydown", handleSpace);
+  }, [isFootage, isSolo, playback?.state, transportBusy]);
 
   useEffect(() => {
     const checkNaturalDims = () => {
@@ -409,6 +465,7 @@ export function CameraTile({
   return (
     <div
       data-testid={`live-player-${camera.id}`}
+      style={{ aspectRatio: effectiveAspect }}
       className={`tile group relative select-none transition-all duration-300 ${
         isSolo ? "ring-2 ring-slate-400 dark:ring-slate-300 shadow-2xl scale-[1.002]" : ""
       }`}
@@ -619,9 +676,45 @@ export function CameraTile({
       {/* Refined Bottom Bar */}
       <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 pointer-events-none z-20">
         <TileHealth id={camera.id} />
-        <span className="text-[10px] text-slate-300 font-mono bg-black/70 border border-white/10 rounded-full px-2.5 py-0.5 hidden sm:inline backdrop-blur-md">
-          {sourceUnavailable ? "OFFLINE" : sourceReconnecting ? "RECONNECTING" : "CONNECTED"}
-        </span>
+        <div className="flex items-center gap-2">
+          {isFootage && playback && (
+            <span className="text-[10px] text-slate-200 font-mono bg-black/70 border border-white/10 rounded-full px-2.5 py-0.5 backdrop-blur-md">
+              {playback.state.toUpperCase()}
+            </span>
+          )}
+          <span className="text-[10px] text-slate-300 font-mono bg-black/70 border border-white/10 rounded-full px-2.5 py-0.5 hidden sm:inline backdrop-blur-md">
+            {sourceUnavailable ? "OFFLINE" : sourceReconnecting ? "RECONNECTING" : "CONNECTED"}
+          </span>
+        </div>
+      </div>
+
+      <div className="absolute bottom-10 left-3 right-3 z-30 flex items-center gap-2 rounded-xl border border-white/10 bg-black/75 px-2.5 py-2 text-white backdrop-blur-md opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {isFootage ? (
+          <>
+            <button type="button" onClick={() => void runTransport(playback?.state === "playing" ? "pause" : "resume")} disabled={transportBusy} className="transport-button" aria-label={playback?.state === "playing" ? "Pause footage" : "Play footage"}>
+              {playback?.state === "playing" ? "Pause" : "Play"}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max={playback?.duration_seconds ?? 0}
+              step="0.1"
+              value={Math.min(scrubValue, playback?.duration_seconds ?? scrubValue)}
+              onChange={(event) => setScrubValue(Number(event.target.value))}
+              onPointerUp={() => void seekTo(scrubValue)}
+              disabled={!playback?.duration_seconds || transportBusy}
+              aria-label="Footage position"
+              className="transport-range"
+            />
+            <button type="button" onClick={() => void runTransport("restart")} disabled={transportBusy} className="transport-button" aria-label="Restart footage">Restart</button>
+            <button type="button" onClick={() => void runTransport("stop")} disabled={transportBusy} className="transport-button transport-button-danger" aria-label="Stop footage">Stop</button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={() => void reconnectCamera(camera.id)} className="transport-button" aria-label="Reconnect camera">Reconnect</button>
+            <button type="button" onClick={() => void disableCamera(camera.id)} className="transport-button transport-button-danger" aria-label="Stop camera">Stop</button>
+          </>
+        )}
       </div>
     </div>
   );

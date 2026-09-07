@@ -217,6 +217,46 @@ button, input, select {
   box-shadow: 0 28px 56px -12px rgba(0, 0, 0, 0.3);
 }
 
+.transport-button {
+  min-height: 1.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.55rem;
+  padding: 0.3rem 0.55rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.transport-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.transport-button:active {
+  transform: scale(0.96);
+}
+
+.transport-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.transport-button-danger {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.transport-range {
+  min-width: 3rem;
+  flex: 1;
+  accent-color: var(--accent-champagne);
+  cursor: pointer;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -475,6 +515,10 @@ button, input, select {
 
   .content-area {
     padding: 1rem 0.85rem;
+  }
+
+  .tile > .absolute.bottom-10 {
+    opacity: 1;
   }
 }
 

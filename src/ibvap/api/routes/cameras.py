@@ -47,6 +47,8 @@ _FRAME_VERSIONS: dict[str, int] = {}
 _FRAME_CONDITIONS: dict[str, threading.Condition] = {}
 _OBSERVATIONS: dict[str, dict[str, Any]] = {}
 _ACTIVE_PIPELINES: dict[str, MiniPipeline] = {}
+_PLAYBACK: dict[str, dict[str, Any]] = {}
+_PLAYBACK_LOCK = threading.Lock()
 
 
 def _camera_worker(camera_id: str, stop: threading.Event) -> None:
@@ -187,6 +189,13 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         decode_errors = 0
 
         while not stop.is_set():
+            with _PLAYBACK_LOCK:
+                playback = _PLAYBACK.setdefault(
+                    camera_id,
+                    {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None},
+                )
+                if playback["state"] == "stopped":
+                    break
             try:
                 if container is not None:
                     with contextlib.suppress(Exception):
@@ -207,14 +216,39 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 fps = detected_fps if detected_fps is not None else 30.0
                 fps = max(5.0, min(fps, 60.0))
                 frame_interval = 1.0 / fps
+                duration_seconds = None
+                if container.duration is not None:
+                    duration_seconds = max(0.0, float(container.duration) / av.time_base)
+                with _PLAYBACK_LOCK:
+                    playback["duration_seconds"] = duration_seconds
+                    playback["fps"] = fps
 
                 while not stop.is_set():
                     next_frame_time = time.perf_counter()
                     frames_in_pass = 0
 
                     try:
-                        for frame in container.decode(stream):
-                            if stop.is_set():
+                        frame_iter = container.decode(stream)
+                        while not stop.is_set():
+                            with _PLAYBACK_LOCK:
+                                playback_state = playback["state"]
+                                seek_to = playback.pop("seek_to", None)
+                            if playback_state == "stopped":
+                                break
+                            if playback_state == "paused":
+                                cam["observed_state"] = "PAUSED"
+                                time.sleep(0.05)
+                                continue
+                            if seek_to is not None:
+                                with contextlib.suppress(Exception):
+                                    container.seek(int(float(seek_to) * av.time_base), stream=stream, backward=True)
+                                frame_iter = container.decode(stream)
+                                continue
+                            cam["observed_state"] = "STREAMING"
+
+                            try:
+                                frame = next(frame_iter)
+                            except (StopIteration, av.error.EOFError):
                                 break
 
                             image = frame.to_ndarray(format="bgr24")
@@ -236,6 +270,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                             frame_number += 1
                             frames_in_pass += 1
+                            with _PLAYBACK_LOCK:
+                                playback["position_seconds"] = max(0.0, float(frame.time or 0.0))
 
                             samples = _HEALTH.setdefault(camera_id, [])
                             samples.append(
@@ -270,6 +306,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                     if stop.is_set():
                         break
+                    with _PLAYBACK_LOCK:
+                        if playback["state"] == "stopped":
+                            break
 
                     loop_count += 1
                     seek_success = False
@@ -429,6 +468,10 @@ class CameraTestRequest(BaseModel):
     username: str | None = None
     password: str | None = None
     site_cidr_allowlist: list[str] | None = None
+
+
+class PlaybackSeekRequest(BaseModel):
+    position_seconds: float = Field(ge=0)
 
 
 class CameraTestResponse(BaseModel):
@@ -693,6 +736,13 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
     _STATE_MACHINES[cam_id] = sm
     # store encrypted creds separately (in-mem for Phase 2)
     _CAMERAS[cam_id]["_enc"] = {"username": enc_user, "password": enc_pass}
+    if file_endpoint:
+        _PLAYBACK[cam_id] = {
+            "state": "playing",
+            "position_seconds": 0.0,
+            "duration_seconds": None,
+            "fps": None,
+        }
     if not is_synthetic:
         _start_camera_worker(cam_id)
     # never return credentials
@@ -762,6 +812,65 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
             "frame_at": None,
         },
     )
+
+
+def _is_file_camera(camera_id: str) -> bool:
+    cam = _CAMERAS.get(camera_id)
+    return bool(cam and (cam.get("source_type") == "video_footage" or cam.get("protocol") == "file"))
+
+
+@router.get("/{camera_id}/playback", response_model=dict[str, Any])
+async def playback_state(camera_id: str) -> dict[str, Any]:
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not _is_file_camera(camera_id):
+        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+    with _PLAYBACK_LOCK:
+        return dict(_PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}))
+
+
+@router.post("/{camera_id}/playback/{action}", response_model=dict[str, Any])
+async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"]) -> dict[str, Any]:
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not _is_file_camera(camera_id):
+        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+    with _PLAYBACK_LOCK:
+        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
+        if action == "pause":
+            playback["state"] = "paused"
+        elif action == "resume":
+            playback["state"] = "playing"
+        elif action == "restart":
+            playback["state"] = "playing"
+            playback["position_seconds"] = 0.0
+            playback["seek_to"] = 0.0
+        else:
+            playback["state"] = "stopped"
+            _CAMERAS[camera_id]["observed_state"] = "DISABLED"
+            _CAMERAS[camera_id]["desired_state"] = "DISABLED"
+            worker = _WORKERS.get(camera_id)
+            if worker:
+                worker[0].set()
+        state = dict(playback)
+    if action in {"pause", "resume", "restart"}:
+        _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"
+    return state
+
+
+@router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
+async def playback_seek(camera_id: str, req: PlaybackSeekRequest) -> dict[str, Any]:
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not _is_file_camera(camera_id):
+        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+    with _PLAYBACK_LOCK:
+        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
+        duration = playback.get("duration_seconds")
+        position = min(req.position_seconds, duration) if duration else req.position_seconds
+        playback["position_seconds"] = position
+        playback["seek_to"] = position
+        return dict(playback)
 
 
 @router.post("/{camera_id}/test", response_model=CameraTestResponse)
@@ -844,6 +953,7 @@ async def delete_camera(camera_id: str) -> dict[str, str]:
     _FRAME_CONDITIONS.pop(camera_id, None)
     _OBSERVATIONS.pop(camera_id, None)
     _ACTIVE_PIPELINES.pop(camera_id, None)
+    _PLAYBACK.pop(camera_id, None)
     return {"status": "deleted", "id": camera_id}
 
 

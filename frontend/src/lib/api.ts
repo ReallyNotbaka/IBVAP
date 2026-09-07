@@ -9,6 +9,15 @@ export type Camera = {
   endpoint: string;
   observed_state: string;
   stream_epoch: number;
+  source_type?: string;
+  protocol?: string;
+};
+
+export type PlaybackState = {
+  state: "playing" | "paused" | "stopped";
+  position_seconds: number;
+  duration_seconds: number | null;
+  fps: number | null;
 };
 
 export type TestStage = { name: string; status: string };
@@ -318,6 +327,40 @@ export async function reconnectCamera(id: string): Promise<Camera> {
   });
   if (!r.ok) throw new Error(`reconnect ${r.status}`);
   return (await r.json()) as Camera;
+}
+
+export async function disableCamera(id: string): Promise<Camera> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/disable`), { method: "POST" });
+  if (!r.ok) throw new Error(`disable ${r.status}`);
+  return (await r.json()) as Camera;
+}
+
+export async function enableCamera(id: string): Promise<Camera> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/enable`), { method: "POST" });
+  if (!r.ok) throw new Error(`enable ${r.status}`);
+  return (await r.json()) as Camera;
+}
+
+export async function fetchPlayback(id: string): Promise<PlaybackState> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/playback`));
+  if (!r.ok) throw new Error(`playback ${r.status}`);
+  return (await r.json()) as PlaybackState;
+}
+
+export async function controlPlayback(id: string, action: "pause" | "resume" | "stop" | "restart"): Promise<PlaybackState> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/playback/${action}`), { method: "POST" });
+  if (!r.ok) throw new Error(`playback ${r.status}`);
+  return (await r.json()) as PlaybackState;
+}
+
+export async function seekPlayback(id: string, positionSeconds: number): Promise<PlaybackState> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/playback/seek`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ position_seconds: positionSeconds }),
+  });
+  if (!r.ok) throw new Error(`seek ${r.status}`);
+  return (await r.json()) as PlaybackState;
 }
 
 export async function fetchCameraObservations(id: string): Promise<CameraObservations> {
