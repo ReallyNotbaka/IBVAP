@@ -1,7 +1,7 @@
 # IBVAP Hardware Performance Benchmarks
 
 **Status:** Real Measured Hardware Metrics (Verified on Host Environment)
-**Measured At:** `2026-08-30T12:40:43.464513+00:00`
+**Measured At:** `2026-09-06T12:53:36.103631+00:00`
 
 ---
 
@@ -15,7 +15,7 @@
 | **System RAM** | `23.7 GB` |
 | **Dedicated GPU** | `NVIDIA GeForce RTX 4050 Laptop GPU` |
 | **GPU VRAM** | `6141 MB (~6.0 GB)` |
-| **NVIDIA Driver Version** | `616.56` |
+| **NVIDIA Driver Version** | `616.64` |
 | **ONNX Runtime Engine** | `onnxruntime-directml v1.24.4` |
 | **Active Execution Providers** | `DmlExecutionProvider, CPUExecutionProvider` |
 | **OpenCV Engine** | `opencv-python v5.0.0` |
@@ -27,12 +27,12 @@
 
 | Pipeline Component | Runtime / Provider | Resolution | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Throughput |
 | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **YOLO26n Object Detector** | `DirectML (RTX 4050)` | `640x640x3` | **5.15** | **5.96** | **6.03** | 5.34 | **187.2 FPS** |
-| **YOLO26n Object Detector** | `CPU (Ryzen 7 7435HS)` | `640x640x3` | **26.87** | **27.63** | **28.36** | 26.49 | **37.7 FPS** |
-| **YuNet Face Detector** | `OpenCV DNN (CPU)` | `640x480x3` | **7.74** | **8.53** | **8.70** | 7.88 | **126.9 FPS** |
-| **SFace Face Embedder** | `OpenCV DNN (CPU)` | `112x112x3` | **5.17** | **5.58** | **5.75** | 5.22 | **191.5 FPS** |
-| **CentroidTracker** | `Python / NumPy` | `10 tracks` | **0.0372** | **0.0420** | **0.0464** | 0.0385 | **26001.7 Steps/s** |
-| **PyAV Video Decoder** | `FFmpeg / libavcodec` | `640x480 H.264` | **3.14** | **3.62** | **5.75** | 3.20 | **213.4 FPS** |
+| **YOLO26n Object Detector** | `DirectML (RTX 4050)` | `640x640x3` | **5.03** | **6.02** | **6.13** | 5.18 | **193.1 FPS** |
+| **YOLO26n Object Detector** | `CPU (Ryzen 7 7435HS)` | `640x640x3` | **27.29** | **29.03** | **29.27** | 27.26 | **36.7 FPS** |
+| **YuNet Face Detector** | `OpenCV DNN (CPU)` | `640x480x3` | **8.11** | **9.10** | **9.16** | 8.19 | **122.1 FPS** |
+| **SFace Face Embedder** | `OpenCV DNN (CPU)` | `112x112x3` | **5.27** | **5.64** | **5.71** | 5.27 | **189.9 FPS** |
+| **CentroidTracker** | `Python / NumPy` | `10 tracks` | **0.0450** | **0.0723** | **0.0986** | 0.0510 | **19589.4 Steps/s** |
+| **PyAV Video Decoder** | `FFmpeg / libavcodec` | `640x480 H.264` | **5.40** | **5.85** | **5.97** | 5.13 | **133.3 FPS** |
 
 ---
 
@@ -41,20 +41,20 @@
 Based on real measured latencies at an analysis cadence of **5 FPS** per camera channel (with keyframe decimation):
 
 - **GPU Accelerated (DirectML + RTX 4050 6GB):**
-  - Inference latency: **5.15 ms** (~187.2 FPS theoretical single-channel max)
-  - Sustainable concurrent cameras: **~37 real-time streams** at 5 FPS analysis rate.
+  - Inference latency: **5.03 ms** (~193.1 FPS theoretical single-channel max)
+  - Sustainable concurrent cameras: **~38 real-time streams** at 5 FPS analysis rate.
   - GPU VRAM footprint: ~250 MB model + session context (~4% of 6GB VRAM capacity).
 
 - **CPU Fallback (AMD Ryzen 7 7435HS - 8C / 16T):**
-  - Inference latency: **26.87 ms** (~37.7 FPS single-channel max)
+  - Inference latency: **27.29 ms** (~36.7 FPS single-channel max)
   - Sustainable concurrent cameras: **~7 real-time streams** at 5 FPS analysis rate without GPU offload.
 
 - **Media Demuxing & Decoding (PyAV):**
-  - Demux + software decode throughput: **213.4 FPS** (mean frame decode latency **3.20 ms**).
+  - Demux + software decode throughput: **133.3 FPS** (mean frame decode latency **5.13 ms**).
   - Decoding consumes < 1% CPU per 30 FPS 640x480 H.264 stream.
 
 - **Multi-Object Tracking (CentroidTracker):**
-  - Step latency: **0.0372 ms** per 10 active tracks (> 26001.7 steps/sec).
+  - Step latency: **0.0450 ms** per 10 active tracks (> 19589.4 steps/sec).
   - Tracking overhead is negligible (< 0.05 ms per frame).
 
 ---

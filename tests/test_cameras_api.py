@@ -133,3 +133,18 @@ def test_create_rejects_credential_in_url() -> None:
         },
     )
     assert resp.status_code == 400
+
+
+def test_create_rejects_private_endpoint_without_allowlist() -> None:
+    c = _client()
+    resp = c.post(
+        "/api/v1/cameras",
+        json={
+            "name": "private-no-allowlist",
+            "site_id": "00000000-0000-0000-0000-000000000004",
+            "endpoint": "http://192.168.1.10:8080/video",
+            "protocol": "http",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "blocked_private"

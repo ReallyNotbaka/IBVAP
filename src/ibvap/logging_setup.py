@@ -52,7 +52,7 @@ class JsonFormatter(logging.Formatter):
             payload["extra"] = _redact(extra)
         if record.exc_info and record.exc_info[0] is not None:
             payload["exc_info"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def setup_logging(log_level: str = "INFO", log_dir: str = "data/logs") -> None:

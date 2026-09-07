@@ -64,7 +64,7 @@ class FaceDetector:
     def __init__(
         self,
         model_path: str = "models/face_detection_yunet_2023mar.onnx",
-        conf_threshold: float = 0.6,
+        conf_threshold: float = 0.45,
     ) -> None:
         self.model_path = model_path
         self.conf_threshold = conf_threshold

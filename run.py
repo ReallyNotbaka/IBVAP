@@ -75,6 +75,40 @@ def bootstrap_environment(root: Path) -> bool:
     return env_created
 
 
+def ensure_frontend_bundle(root: Path) -> bool:
+    """Ensure the built frontend exists before serving the app UI.
+
+    This is intentionally tolerant: if Node/npm are absent, the backend still starts in API-only
+    mode and prints a clear notice instead of failing the whole app.
+    """
+    frontend_dir = root / "frontend"
+    dist_html = frontend_dir / "dist" / "index.html"
+    if dist_html.exists():
+        return True
+
+    if not (frontend_dir / "package.json").exists():
+        print("[Launcher] Notice: frontend package not found; serving API-only mode.")
+        return False
+
+    npm = shutil.which("npm")
+    if npm is None:
+        print("[Launcher] Notice: Node/npm not found. Frontend bundle not built; serving API-only mode.")
+        return False
+
+    print("[Launcher] Building frontend bundle...")
+    result = subprocess.run([npm, "run", "build"], cwd=str(frontend_dir), capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[Launcher] Frontend bundle built successfully.")
+        return True
+
+    print("[Launcher] Warning: frontend build failed. Serving API-only mode.")
+    if result.stdout:
+        print(result.stdout.strip())
+    if result.stderr:
+        print(result.stderr.strip())
+    return False
+
+
 def detect_hardware() -> str:
     """Detect available GPU or fallback compute devices."""
     try:
@@ -140,11 +174,11 @@ def main(argv: list[str] | None = None) -> int:
     if env_created:
         print("[Launcher] Initialized .env configuration from .env.example (local SQLite mode).")
 
-    # Verify frontend dist
-    dist_html = root / "frontend" / "dist" / "index.html"
-    if not dist_html.exists():
-        print("[Launcher] Notice: frontend/dist not found. Serving API and OpenAPI docs only.")
-        print("[Launcher] Run 'cd frontend && npm run build' to bundle the web UI.")
+    # Verify frontend dist and build automatically when possible.
+    frontend_ready = ensure_frontend_bundle(root)
+    if not frontend_ready:
+        print("[Launcher] Notice: frontend/dist not found or could not be built. Serving API and OpenAPI docs only.")
+        print("[Launcher] If you want the web UI, install Node/npm and run 'cd frontend && npm run build'.")
 
     banner = build_banner(args.host, args.port)
     print(banner)

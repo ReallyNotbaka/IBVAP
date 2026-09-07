@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IBVAP — Intelligent Border Video Analytics Platform</title>
     <meta name="description" content="IBVAP command console" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('ibvap-theme');
+          if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

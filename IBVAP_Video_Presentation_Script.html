@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IBVAP — 3-Minute Video Pitch Script & Storyboard</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Mermaid.js CDN for interactive diagram rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#090d16',
+        primaryColor: '#0f766e',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#14b8a6',
+        lineColor: '#38bdf8',
+        secondaryColor: '#1e293b',
+        tertiaryColor: '#0f172a'
+      }
+    });
+  </script>
+  <style>
+    @media print {
+      body { background-color: #ffffff !important; color: #000000 !important; }
+      .no-print { display: none !important; }
+      .print-card { border: 1px solid #cbd5e1 !important; background: #ffffff !important; color: #000000 !important; }
+      .print-text-dark { color: #0f172a !important; }
+      .print-quote { background: #f8fafc !important; border-left: 4px solid #0284c7 !important; color: #0f172a !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased font-sans p-4 sm:p-8 min-h-screen selection:bg-teal-500 selection:text-white">
+  
+  <!-- Max Container -->
+  <div class="max-w-4xl mx-auto space-y-8">
+    
+    <!-- Top Action Bar (Print / Copy / Share) -->
+    <div class="no-print flex flex-wrap items-center justify-between gap-4 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl backdrop-blur">
+      <div class="flex items-center gap-3">
+        <span class="flex h-3 w-3 relative">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+        </span>
+        <span class="text-xs font-mono font-semibold tracking-wider uppercase text-slate-300">
+          Shareable Pitch Document • Self-Contained
+        </span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="window.print()" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow transition cursor-pointer">
+          <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H7a2 2 0 00-2 2v4h10z"/></svg>
+          Print / Save as PDF
+        </button>
+        <button onclick="copyFullVoiceover()" id="copyBtn" class="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold shadow transition cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+          Copy Voiceover Text
+        </button>
+      </div>
+    </div>
+
+    <!-- Header Section -->
+    <header class="border-b border-slate-800 pb-6 space-y-3">
+      <div class="flex items-center gap-2">
+        <span class="bg-teal-950 text-teal-300 border border-teal-800/80 px-2.5 py-0.5 rounded text-[11px] font-mono font-bold tracking-wider uppercase">
+          Project IBVAP
+        </span>
+        <span class="text-xs text-slate-500 font-mono">• 3:00 Min Video Blueprint</span>
+      </div>
+      <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+        Intelligent Border Video Analytics Platform
+      </h1>
+      <p class="text-sm text-slate-400 leading-relaxed max-w-3xl">
+        Complete minute-by-minute presentation script, visual storyboard, and technical architecture for the project video submission. Paced for a natural speaking rate of ~135 words per minute.
+      </p>
+    </header>
+
+    <!-- Master Timing Matrix -->
+    <section class="space-y-3">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+        <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        Master Timeline & Segment Overview
+      </h2>
+      <div class="overflow-x-auto rounded-xl border border-slate-800 shadow">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-900 text-slate-300 border-b border-slate-800 font-semibold font-mono">
+            <tr>
+              <th class="py-3 px-4">Time</th>
+              <th class="py-3 px-4">Segment</th>
+              <th class="py-3 px-4">Visual Focus</th>
+              <th class="py-3 px-4">Narration Objective</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60 bg-slate-900/40 text-slate-300 font-sans">
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 px-4 font-mono text-emerald-400 font-bold">0:00 – 0:30</td>
+              <td class="py-3 px-4 font-semibold text-white">Problem + Societal Need</td>
+              <td class="py-3 px-4 text-slate-400">Remote border terrain, passive CCTV limitations, sentry fatigue curve</td>
+              <td class="py-3 px-4">Expose the operational failure of passive recording.</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 px-4 font-mono text-emerald-400 font-bold">0:30 – 0:55</td>
+              <td class="py-3 px-4 font-semibold text-white">Target Audience & Stakeholders</td>
+              <td class="py-3 px-4 text-slate-400">BSF, SSB, ITBP, Control Room sentries, Ministry of Home Affairs</td>
+              <td class="py-3 px-4">Show operational relief and strategic situational awareness.</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30 bg-teal-950/20">
+              <td class="py-3 px-4 font-mono text-amber-400 font-bold">0:55 – 1:55</td>
+              <td class="py-3 px-4 font-semibold text-amber-300">Solution + Prototype Demo</td>
+              <td class="py-3 px-4 text-slate-300"><strong>Core Live Minute:</strong> Real screen capture of IBVAP cockpit, phone camera feed, intrusion alert</td>
+              <td class="py-3 px-4">Prove working live software-defined AI with zero smart hardware.</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 px-4 font-mono text-emerald-400 font-bold">1:55 – 2:30</td>
+              <td class="py-3 px-4 font-semibold text-white">Innovation & Technical Approach</td>
+              <td class="py-3 px-4 text-slate-400">Pipeline architecture diagram, DirectML GPU acceleration, Cross-Class NMS</td>
+              <td class="py-3 px-4">Highlight sub-20ms edge latency and zero vendor lock-in.</td>
+            </tr>
+            <tr class="hover:bg-slate-800/30">
+              <td class="py-3 px-4 font-mono text-emerald-400 font-bold">2:30 – 3:00</td>
+              <td class="py-3 px-4 font-semibold text-white">Feasibility, Scalability & Close</td>
+              <td class="py-3 px-4 text-slate-400">BOP deployment topology, C2 integration, high-impact closing card</td>
+              <td class="py-3 px-4">Demonstrate offline edge feasibility and strong closing punch.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SECTION 1 -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow print-card">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-slate-800 text-slate-300 font-mono text-xs px-2.5 py-1 rounded font-bold">0:00 – 0:30</span>
+          <h2 class="text-base font-bold text-white">Segment 1: Problem & Societal Need</h2>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">30 Seconds (~68 words)</span>
+      </div>
+
+      <div class="space-y-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Visual Directions (What to show on screen):</h3>
+        <ul class="text-xs text-slate-300 space-y-1.5 list-disc list-inside bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+          <li><strong>0:00 – 0:10:</strong> Motion slide showing harsh remote border terrain (deserts, snow mountains, riverine BOPs) with headline: <em>"Thousands of Kilometers. Tens of Thousands of Cameras. One Critical Flaw."</em></li>
+          <li><strong>0:10 – 0:20:</strong> Split visual: Left side shows 30+ passive monitor feeds in a dark control room; Right side shows a human attention fatigue graph dropping sharply after 20 minutes.</li>
+          <li><strong>0:20 – 0:30:</strong> Three problem callouts: <em>1. Hardware Lock-In</em> (smart cameras cost 10× more), <em>2. Human Fatigue</em> (95% missed after 22 mins), <em>3. Passive Recording</em> (no prevention).</li>
+        </ul>
+      </div>
+
+      <div class="space-y-1.5">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Spoken Voiceover (Read verbatim):</h3>
+        <blockquote class="bg-slate-950 p-4 rounded-xl border-l-4 border-emerald-500 text-slate-200 text-sm italic leading-relaxed print-quote voiceover-text">
+          "Along thousands of kilometers of rugged border terrain, security forces deploy CCTV at Border Out Posts, checkposts, and transit corridors.<br><br>
+          Yet today, almost every single camera is completely passive—recording footage that is only reviewed after an incident has already occurred.<br><br>
+          Relying on fatigued human sentries to monitor dozens of flickering screens 24/7 creates dangerous blind spots. Meanwhile, replacing these cameras with proprietary 'smart' surveillance hardware is cost-prohibitive, fragile, and logistically unviable for remote outposts.<br><br>
+          Our borders don't need more cameras. They need intelligence."
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- SECTION 2 -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow print-card">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-slate-800 text-slate-300 font-mono text-xs px-2.5 py-1 rounded font-bold">0:30 – 0:55</span>
+          <h2 class="text-base font-bold text-white">Segment 2: Target Audience & Stakeholders</h2>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">25 Seconds (~58 words)</span>
+      </div>
+
+      <div class="space-y-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Visual Directions (What to show on screen):</h3>
+        <ul class="text-xs text-slate-300 space-y-1.5 list-disc list-inside bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+          <li><strong>0:30 – 0:42:</strong> Clean tactical 3-tier stakeholder graphic:
+            <span class="text-slate-400">Frontline (BSF, SSB, ITBP Sentries) → Operational (Sector Control Rooms & QRT Teams) → Strategic (Ministry of Home Affairs / Central Command).</span>
+          </li>
+          <li><strong>0:42 – 0:55:</strong> Benefit callout grid: <em>Zero Sentry Fatigue</em>, <em>Instant Perimeter Alarms</em>, <em>100% Hardware-Agnostic Software Upgrade</em>.</li>
+        </ul>
+      </div>
+
+      <div class="space-y-1.5">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Spoken Voiceover (Read verbatim):</h3>
+        <blockquote class="bg-slate-950 p-4 rounded-xl border-l-4 border-emerald-500 text-slate-200 text-sm italic leading-relaxed print-quote voiceover-text">
+          "IBVAP is engineered directly for frontline security agencies: the Border Security Force guarding western deserts and eastern riverines, the ITBP in high-altitude posts, and the SSB.<br><br>
+          For the sentry at a remote BOP, it acts as an automated co-pilot that never blinks, instantly alarming on unauthorized perimeter breaches.<br><br>
+          For Control Room Operators and Quick Reaction Teams, it converts raw video chaos into filtered, high-priority operational incidents.<br><br>
+          And for leadership, it delivers enterprise-grade intelligence using existing cameras without spending millions on proprietary hardware upgrades."
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- SECTION 3 (CORE LIVE DEMO) -->
+    <section class="bg-slate-900/80 border-2 border-amber-500/50 rounded-2xl p-5 sm:p-6 space-y-4 shadow-xl print-card">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-amber-500 text-slate-950 font-mono text-xs px-2.5 py-1 rounded font-extrabold">0:55 – 1:55</span>
+          <h2 class="text-base font-bold text-amber-300">Segment 3: Solution + Live Prototype Demo (Core Minute)</h2>
+        </div>
+        <span class="text-xs text-amber-400 font-mono font-semibold">60 Seconds (~138 words)</span>
+      </div>
+
+      <!-- Live Demonstration Playbook Flow -->
+      <div class="space-y-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-amber-400">Live Screen Recording Steps (Record at http://localhost:8000):</h3>
+        
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div class="mermaid">
+flowchart LR
+    A["1. Camera Connected\n(Phone: 10.53.109.95)"] --> B["2. Smooth Vector HUD\n(Person #1 • Face 91%)"]
+    B --> C["3. Subject Crosses Zone\n(Footpoint in Polygon)"]
+    C --> D["4. High-Urgency Alert\n(ZONE INTRUSION 92%)"]
+    D --> E["5. Expand/Contract Drawer\n(Clean Audit Log)"]
+          </div>
+
+          <ol class="text-xs text-slate-300 space-y-2 list-decimal list-inside">
+            <li><strong>[0:55 – 1:10] Camera Agnostic Ingestion:</strong> Show the live video tile. Point to top-left badge: <code class="text-emerald-400 bg-emerald-950/60 px-1 py-0.5 rounded">BOP Phone Camera [DIRECTML]</code>. Mention this live feed is streaming directly from an off-the-shelf smartphone, proving zero specialized camera hardware is needed.</li>
+            <li><strong>[1:10 – 1:25] All-Terrain Legibility & Accurate Counting:</strong> Walk in front of the camera. Point out the crisp CCTV typography (<code class="text-emerald-400">Person #1 90%</code>, <code class="text-cyan-400">Face 91%</code>) with dark shadow halo ensuring 100% readability. Highlight the top-right counter: <code class="text-amber-400 font-bold">● 1 Target</code> (discrete subject counting, not inflating face as a 2nd target). Move laterally to show the smooth 80ms vector interpolation.</li>
+            <li><strong>[1:25 – 1:40] Virtual Fence Perimeter Intrusion:</strong> Step your footpoint into the restricted polygon overlay (<code class="text-red-400">RESTRICTED ZONE ACTIVE</code>). An immediate high-urgency <code class="text-red-400 font-bold">ZONE INTRUSION</code> card triggers in the incident rail.</li>
+            <li><strong>[1:40 – 1:55] Zero-Spam State Transitions & Expand/Contract:</strong> Show that standing in the zone does not create 50 duplicate spam events. Click the <code class="text-white bg-slate-800 px-2 py-0.5 rounded">Contract ▲</code> button to shrink the drawer into a sleek 1-line bar, then click <code class="text-white bg-slate-800 px-2 py-0.5 rounded">Expand ▼</code> to show the full transition trail.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="space-y-1.5">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Spoken Voiceover (Read verbatim):</h3>
+        <blockquote class="bg-slate-950 p-4 rounded-xl border-l-4 border-amber-500 text-slate-200 text-sm italic leading-relaxed print-quote voiceover-text">
+          "Here is IBVAP running live on standard hardware. Notice our video input: this isn't an expensive military camera—it's a standard commercial IP feed streamed from a smartphone over local Wi-Fi.<br><br>
+          Our DirectML inference engine processes frames on an ordinary laptop GPU in just 18 milliseconds.<br><br>
+          Notice the tactical overlay: using our dual-stroke halo technique, bounding boxes and identities remain razor-sharp over desert glare, snow, or pitch-black night vision. The system tracks discrete targets accurately—distinguishing identity attributes like faces without false double-counting.<br><br>
+          Now, watch the operational tripwire. The moment a subject's footpoint crosses into the virtual restricted perimeter, IBVAP triggers an immediate high-urgency intrusion alert.<br><br>
+          Crucially, our state-transition engine eliminates alert fatigue: it logs the entry once, tracks continuous dwell without spamming the operator, and records the exit event.<br><br>
+          With one click on the Contract button, the operator can tuck the alert rail away into a compact status bar, preserving maximum visual focus on the live stream."
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- SECTION 4 -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow print-card">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-slate-800 text-slate-300 font-mono text-xs px-2.5 py-1 rounded font-bold">1:55 – 2:30</span>
+          <h2 class="text-base font-bold text-white">Segment 4: Innovation & Technical Approach</h2>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">35 Seconds (~84 words)</span>
+      </div>
+
+      <!-- Pipeline Architecture Diagram -->
+      <div class="space-y-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Technical Architecture Diagram (Included directly in your slides):</h3>
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800">
+          <div class="mermaid">
+graph TD
+    subgraph S1 [1. Ingestion Layer]
+        C1["Legacy CCTV / RTSP"] --> AV["PyAV Async Demuxer\n(cameras.py:42-135)"]
+        C2["DroidCam / Smartphone\n(10.53.109.95:4747)"] --> AV
+        C3["Static Video Uploads"] --> AV
+    end
+
+    subgraph S2 [2. Real-Time Edge Analytics]
+        AV --> BQ["Bounded Queue (Drop Stale)\n(pipeline.py:98-106)"]
+        BQ --> DML["DirectML / ONNX YOLO Engine (18ms)\n(detector.py:46-230)"]
+        DML --> TRK["Centroid Tracker + Cross-Class NMS\n(tracker.py:51-135)"]
+        DML --> FACE["YuNet Face Detector\n(face.py:40-160)"]
+        DML --> NIGHT["Adaptive Illumination Engine"]
+    end
+
+    subgraph S3 [3. Tactical Command Surface]
+        TRK --> ZE["Virtual Fence Zone Engine\n(zone_engine.py:21-25)"]
+        ZE --> OUT["Transactional Outbox (State Gating)\n(outbox.py:29-50)"]
+        OUT --> RELAY["Non-Blocking MJPEG Version Relay\n(cameras.py:380-405)"]
+        RELAY --> UI["Web Surveillance Cockpit (80ms Fluid HUD)\n(CameraTile.tsx & OverlayCanvas.tsx)"]
+    end
+          </div>
+        </div>
+
+        <!-- Codebase Deep-Dive Anchors -->
+        <div class="mt-4 space-y-2.5">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-sky-400">Exact Codebase File & Line References:</h4>
+          
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <div class="font-mono font-bold text-emerald-400 text-[11px]">src/ibvap/api/routes/cameras.py</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 42–135 (_camera_worker):</span> PyAV decodes video frames into BGR arrays and encodes JPEG 70% quality.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 87–127 (Auto-Reconnect):</span> Catches stream drops, enters <code class="text-amber-300">RECONNECTING</code>, and retries with backoff instead of terminating the thread.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 380–405 (camera_stream):</span> Async generator polls <code class="text-sky-300">_FRAME_VERSIONS</code> non-blockingly (<code class="text-sky-300">await asyncio.sleep(0.015)</code>) without thread locks.</div>
+            </div>
+
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <div class="font-mono font-bold text-emerald-400 text-[11px]">src/ibvap/core/detector.py</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 67–92 (DirectML Selection):</span> Inspects ONNX Runtime providers and prioritizes <code class="text-sky-300">DmlExecutionProvider</code> to run on any NVIDIA/AMD/Intel GPU without CUDA dependencies.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 108–133 (_preprocess):</span> Aspect-ratio-preserving letterboxing to 640×640 with normalized offset coordinates.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 162–189 (detect & NMS):</span> Filters security classes with confidence threshold <code class="text-amber-300">0.48</code> and NMS IoU <code class="text-amber-300">0.45</code>.</div>
+            </div>
+
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <div class="font-mono font-bold text-emerald-400 text-[11px]">src/ibvap/core/tracker.py</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 32–35 (Footpoint Calculation):</span> Calculates <code class="text-sky-300">((x1+x2)/2, y2)</code> bottom-center ground contact point for accurate virtual fence intrusion detection.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 108–132 (Cross-Class NMS Deduplication):</span> If an object is detected as both Car and Motorcycle/Person, spatial overlap (IoU > 0.40) resolves to the higher confidence class, completely preventing duplicate ghost boxes.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 134–137 (Age Culling):</span> Only returns tracks with <code class="text-amber-300">age &lt;= 2</code>, purging stale ghost boxes.</div>
+            </div>
+
+            <div class="bg-slate-950 p-3 rounded-xl border border-slate-800">
+              <div class="font-mono font-bold text-emerald-400 text-[11px]">src/ibvap/core/pipeline.py & outbox.py</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 110–162 in pipeline.py:</span> Emits lifecycle state transitions (<code class="text-red-400">zone_intrusion</code>, <code class="text-emerald-400">target_entered</code>, <code class="text-amber-400">target_exited</code>) rather than spamming alerts every 5 seconds.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">Lines 29–50 in outbox.py:</span> Atomic transactional outbox writes with deduplication key <code class="text-sky-300">camera_id:zone_id:track_id:stream_epoch</code>.</div>
+              <div class="text-slate-400 text-[11px] mt-1"><span class="text-slate-300 font-semibold">frontend/src/components/OverlayCanvas.tsx:</span> Stable keys (<code class="text-sky-300">key={`track-${b.trackId}`}</code>) prevent jumpy box transitions; dual-stroke 2.2px halo provides all-terrain contrast.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-1.5">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Spoken Voiceover (Read verbatim):</h3>
+        <blockquote class="bg-slate-950 p-4 rounded-xl border-l-4 border-emerald-500 text-slate-200 text-sm italic leading-relaxed print-quote voiceover-text">
+          "What makes IBVAP innovative is its radical independence from specialized hardware.<br><br>
+          Under the hood, our pipeline ingests uncompressed RTSP and MJPEG streams through an asynchronous PyAV demuxer. Using DirectML acceleration, our models run on commodity silicon—from low-power edge boxes to off-the-shelf field laptops—without vendor lock-in.<br><br>
+          To solve real-world false alarms, our custom tracker incorporates cross-class spatial deduplication, preventing dense scenes from generating overlapping ghost labels.<br><br>
+          And by decoupling video streaming from telemetry polling via non-blocking version generators, our interface achieves fluid, zero-stall video performance even over constrained tactical networks."
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- SECTION 5 -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 sm:p-6 space-y-4 shadow print-card">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-slate-800 text-slate-300 font-mono text-xs px-2.5 py-1 rounded font-bold">2:30 – 3:00</span>
+          <h2 class="text-base font-bold text-white">Segment 5: Feasibility, Scalability & Closing Impact</h2>
+        </div>
+        <span class="text-xs text-slate-400 font-mono">30 Seconds (~72 words)</span>
+      </div>
+
+      <div class="space-y-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Visual Directions (What to show on screen):</h3>
+        <ul class="text-xs text-slate-300 space-y-1.5 list-disc list-inside bg-slate-950/60 p-3 rounded-xl border border-slate-800/60">
+          <li><strong>2:30 – 2:45:</strong> Edge deployment map showing remote BOPs running autonomously 100% offline, relaying lightweight JSON event packets over tactical radio/VHF links to Sector Headquarters.</li>
+          <li><strong>2:45 – 3:00:</strong> High-impact closing title card:
+            <div class="mt-2 text-center p-3 bg-slate-950 border border-slate-800 rounded-lg">
+              <div class="font-extrabold text-white text-base">IBVAP — Intelligent Border Video Analytics Platform</div>
+              <div class="text-xs text-teal-400 font-mono mt-0.5">Software-Defined Border Intelligence. Any Camera. Any Terrain. Real Time.</div>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <div class="space-y-1.5">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400">Spoken Voiceover (Read verbatim):</h3>
+        <blockquote class="bg-slate-950 p-4 rounded-xl border-l-4 border-emerald-500 text-slate-200 text-sm italic leading-relaxed print-quote voiceover-text">
+          "IBVAP is built for immediate field deployment. Each Border Out Post can run autonomously on an inexpensive local edge computer, operating with 100% functionality even during complete satellite or internet blackouts.<br><br>
+          When connectivity is available, lightweight incident telemetry relays seamlessly into existing Command and Control centers.<br><br>
+          By transforming existing cameras into autonomous sentries, IBVAP protects our borders, preserves critical response time, and ensures our forces never walk into an ambush blind.<br><br>
+          Intelligent Border Video Analytics Platform—turning surveillance into actionable security."
+        </blockquote>
+      </div>
+    </section>
+
+    <!-- Footer Notes -->
+    <footer class="text-xs text-slate-500 border-t border-slate-800/80 pt-4 flex flex-wrap items-center justify-between gap-2">
+      <div>IBVAP Project Submission Document • Ready for presentation recording</div>
+      <div class="font-mono text-slate-400">Total Duration: 180s (3:00) • Total Words: ~420 words</div>
+    </footer>
+
+  </div>
+
+  <script>
+    function copyFullVoiceover() {
+      const quotes = document.querySelectorAll('.voiceover-text');
+      let fullText = "=== IBVAP 3-MINUTE VIDEO PRESENTATION VOICEOVER ===\n\n";
+      quotes.forEach((q, idx) => {
+        const timeHeader = q.closest('section').querySelector('span.font-mono').innerText;
+        const title = q.closest('section').querySelector('h2').innerText;
+        fullText += `[${timeHeader}] ${title}\n`;
+        fullText += q.innerText.trim() + "\n\n";
+      });
+      navigator.clipboard.writeText(fullText).then(() => {
+        const btn = document.getElementById('copyBtn');
+        const oldHtml = btn.innerHTML;
+        btn.innerHTML = `✓ Copied to Clipboard!`;
+        btn.classList.replace('bg-emerald-600', 'bg-sky-600');
+        setTimeout(() => {
+          btn.innerHTML = oldHtml;
+          btn.classList.replace('bg-sky-600', 'bg-emerald-600');
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>

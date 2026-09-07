@@ -24,8 +24,8 @@ export function Monitor() {
   const streamUrl = activeCam?.endpoint || "";
 
   return (
-    <main className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200 bg-white px-6 py-3 flex items-center justify-between">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+      <div className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-6 py-3 flex items-center justify-between">
         <h1 className="text-sm font-semibold">Monitoring workspace</h1>
         <div className="flex items-center gap-2 text-xs">
           <span className="h-2 w-2 rounded-full bg-emerald-500" /> Live
@@ -35,7 +35,7 @@ export function Monitor() {
             <option value="diagnostic">Diagnostic</option>
           </select>
         </div>
-      </header>
+      </div>
 
       <div className="mx-auto max-w-6xl p-6 grid grid-cols-3 gap-6">
         {/* dominant player */}
@@ -79,6 +79,6 @@ export function Monitor() {
       <div className="mx-auto max-w-6xl px-6 pb-6 text-xs text-slate-400">
         Phase 3 slice: mock detector + centroid tracker + polygon intrusion + outbox → event persisted + WS heartbeat. YOLO26 blocked pending gate — not silent.
       </div>
-    </main>
+    </div>
   );
 }

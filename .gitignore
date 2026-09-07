@@ -23,12 +23,18 @@ data/frames/*.jpg
 data/frames/*.mp4
 data/logs/*.log*
 data/bin/
+data/*.mp4
+data/watchlist.json
 *.part
 *.pt
 *.onnx
 !models/*.onnx
+models/yolo26[smlx]*.onnx
 !models/.gitkeep
 !data/.gitkeep
+server*.log
+*.log
+frontend/ui-inspection-output/
 
 # Secrets
 config/local.yaml

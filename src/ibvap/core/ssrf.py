@@ -145,16 +145,17 @@ def validate_resolved_ips(ips: list[str], policy: SSRFPolicy = DEFAULT_POLICY) -
 
 
 def resolve_and_validate(host: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0) -> list[str]:
-    """Resolve host and validate all returned IPs. Returns list of IP strings."""
-    prev = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
+    """Resolve host and validate all returned IPs. Returns list of IP strings.
+
+    Avoid mutating the process-wide socket timeout. DNS resolution itself has no per-call timeout
+    in the stdlib, while the actual stream connection should enforce timeouts at the I/O layer.
+    """
+    _ = timeout
     try:
         infos = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
         raise SSRFError("dns_failed", f"DNS resolution failed for {host}: {e}") from e
-    finally:
-        socket.setdefaulttimeout(prev)
-    ips: list[str] = list({str(info[4][0]) for info in infos})
+    ips: list[str] = list(dict.fromkeys(str(info[4][0]) for info in infos))
     validate_resolved_ips(ips, policy)
     return ips
 

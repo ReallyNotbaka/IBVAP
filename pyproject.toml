@@ -93,6 +93,9 @@ reportReturnType = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src"]

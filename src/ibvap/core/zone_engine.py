@@ -24,10 +24,10 @@ def is_intrusion(track_foot: tuple[float, float], zone: Zone) -> bool:
     return point_in_polygon(track_foot[0], track_foot[1], zone.polygon)
 
 
-# Default zone for Phase 3 slice - central restricted rectangle
+# Default zone for the live demo - lower perimeter area of the camera view.
 DEFAULT_ZONE = Zone(
     id="zone-restricted-1",
     name="Restricted Zone",
-    polygon=[[0.35, 0.35], [0.65, 0.35], [0.65, 0.65], [0.35, 0.65]],
+    polygon=[[0.05, 0.20], [0.95, 0.20], [0.95, 1.0], [0.05, 1.0]],
     enabled=True,
 )

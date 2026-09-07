@@ -53,7 +53,7 @@ class ONNXDetectorProvider:
     def __init__(
         self,
         model_path: str = "models/yolo26n.onnx",
-        conf_threshold: float = 0.35,
+        conf_threshold: float = 0.48,
         iou_threshold: float = 0.45,
         input_size: int = 640,
         providers: list[str] | None = None,

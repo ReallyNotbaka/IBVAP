@@ -14,8 +14,12 @@ from sqlalchemy.pool import NullPool, StaticPool
 
 from ibvap.config import Settings
 
+import threading
+
 _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
+_engine_lock = threading.Lock()
+_sessionmaker_lock = threading.Lock()
 
 
 def get_engine(settings: Settings | None = None) -> AsyncEngine:

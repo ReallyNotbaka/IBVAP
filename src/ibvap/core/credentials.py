@@ -17,19 +17,24 @@ _ENV_KEY: Final = "IBVAP_CREDENTIAL_KEY"
 
 def _get_fernet() -> Fernet:
     raw = os.getenv(_ENV_KEY)
-    if raw:
-        # raw may be base64 urlsafe 32 bytes or Fernet key itself
+    if not raw:
+        raise RuntimeError(
+            "IBVAP_CREDENTIAL_KEY is required for credential encryption. "
+            "Set a valid Fernet key or 32-byte secret before storing camera credentials."
+        )
+
+    candidate = raw.strip()
+    try:
+        Fernet(candidate.encode())
+        key = candidate.encode()
+    except Exception:
         try:
-            Fernet(raw.encode())
-            key = raw.encode()
-        except Exception:
             # treat as 32-byte secret, derive Fernet key via base64
-            padded = base64.urlsafe_b64encode(raw.encode()[:32].ljust(32, b"\0"))
+            padded = base64.urlsafe_b64encode(candidate.encode()[:32].ljust(32, b"\0"))
+            Fernet(padded)
             key = padded
-    else:
-        # dev fallback - deterministic but NOT for prod; warn in logs
-        # Use a fixed dev key so tests are deterministic without env
-        key = base64.urlsafe_b64encode(b"ibvap-dev-credential-key-32bytes!!")
+        except Exception as exc:  # pragma: no cover - defensive validation
+            raise ValueError("IBVAP_CREDENTIAL_KEY must be a valid Fernet key or 32-byte secret") from exc
     return Fernet(key)
 
 
