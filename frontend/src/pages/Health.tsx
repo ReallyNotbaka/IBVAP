@@ -197,16 +197,16 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
 }
 
 export function Health() {
-  const { data: healthData, isLoading: healthLoading, refetch: refetchHealth } = useSystemHealth();
-  const { data: cameras = [], isLoading: camerasLoading } = useCameras();
+  const { data: healthData, isError: healthError, refetch: refetchHealth } = useSystemHealth();
+  const { data: cameras = [], isLoading: camerasLoading, isError: camerasError } = useCameras();
 
   const sys = healthData?.system;
-  const memTotal = sys?.memory_total_mb || 16384;
-  const memUsed = sys?.memory_used_mb || 4096;
-  const memPercent = sys?.memory_percent || Math.round((memUsed / memTotal) * 100);
+  const memTotal = sys?.memory_total_mb;
+  const memUsed = sys?.memory_used_mb;
+  const memPercent = sys?.memory_percent;
+  const memPercentValue = memPercent ?? 0;
 
-  const directmlActive = sys?.directml_available ?? true;
-  const gpuName = sys?.gpu_accelerator || (directmlActive ? "DirectML (Windows Hardware Accelerated)" : "CPU Native");
+  const gpuName = sys?.gpu_accelerator || "Unavailable";
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-6">
@@ -221,7 +221,7 @@ export function Health() {
               System & Pipeline Diagnostics
               <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-900/50 px-2.5 py-0.5 text-xs font-mono font-bold text-emerald-700 dark:text-emerald-300">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Live Telemetry
+                Telemetry
               </span>
             </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -244,7 +244,7 @@ export function Health() {
         <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl p-4 shadow-xs space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Neural Accelerator
+              Accelerator
             </span>
             <span className="flex h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
           </div>
@@ -263,19 +263,19 @@ export function Health() {
               System RAM Load
             </span>
             <span className="text-xs font-mono font-bold text-slate-900 dark:text-slate-100">
-              {memPercent}%
+              {memPercent === undefined ? "--" : `${memPercent}%`}
             </span>
           </div>
           <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-            {memUsed} MB <span className="text-xs font-normal text-slate-400">/ {memTotal} MB</span>
+            {memUsed === undefined ? "Unavailable" : `${memUsed} MB`} {memTotal !== undefined && <span className="text-xs font-normal text-slate-400">/ {memTotal} MB</span>}
           </div>
           {/* Progress Bar */}
           <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
             <div
               className={`h-full transition-all duration-500 ${
-                memPercent > 80 ? "bg-rose-500" : memPercent > 60 ? "bg-amber-500" : "bg-emerald-500"
+                memPercentValue > 80 ? "bg-rose-500" : memPercentValue > 60 ? "bg-amber-500" : "bg-emerald-500"
               }`}
-              style={{ width: `${Math.min(100, memPercent)}%` }}
+              style={{ width: `${Math.min(100, memPercentValue)}%` }}
             />
           </div>
         </div>
@@ -292,7 +292,7 @@ export function Health() {
           </div>
           <div className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            {healthData?.checks?.media_gateway || "mediamtx-online"}
+            {healthData?.checks?.media_gateway || "Unavailable"}
           </div>
           <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
             Codec: PyAV 18.1.0 • H.264 / MJPEG
@@ -310,9 +310,9 @@ export function Health() {
             </span>
           </div>
           <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-            {sys?.process_uptime_seconds
+            {sys?.process_uptime_seconds !== undefined
               ? `${Math.floor(sys.process_uptime_seconds / 60)}m ${Math.floor(sys.process_uptime_seconds % 60)}s`
-              : "Active"}
+              : "Unavailable"}
           </div>
           <div className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
             API Core: OK • PostgreSQL Outbox
@@ -336,9 +336,18 @@ export function Health() {
           </span>
         </div>
 
-        {camerasLoading ? (
+        {healthError ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center dark:border-amber-900/60 dark:bg-amber-950/20">
+            <p className="text-xs text-amber-700 dark:text-amber-300">Health data is unavailable right now.</p>
+            <button type="button" onClick={() => void refetchHealth()} className="mt-3 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white dark:bg-white dark:text-slate-950 cursor-pointer">Try again</button>
+          </div>
+        ) : camerasLoading ? (
           <div className="py-12 text-center text-xs text-slate-400">
             Discovering camera health channels...
+          </div>
+        ) : camerasError ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-8 text-center dark:border-amber-900/60 dark:bg-amber-950/20">
+            <p className="text-xs text-amber-700 dark:text-amber-300">Camera health channels are unavailable.</p>
           </div>
         ) : cameras.length === 0 ? (
           <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/60 dark:bg-slate-900/60 p-8 text-center space-y-2">

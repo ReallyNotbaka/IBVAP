@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { testCamera, createCamera } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -20,7 +20,28 @@ export function ConnectModal() {
   const [showAuth, setShowAuth] = useState(false);
   const [result, setResult] = useState<null | { result: string; reason_code?: string; safe_message: string; stages: { name: string; status: string }[]; probe?: { width: number; height: number; fps: number | null; codec: string } }>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") nav("/");
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [open, nav]);
 
   if (!open) return null;
 
@@ -44,19 +65,27 @@ export function ConnectModal() {
   }
 
   async function doSave() {
-    await createCamera({
-      endpoint: url,
-      site_id: "00000000-0000-0000-0000-000000000001",
-      username: username || undefined,
-      password: password || undefined,
-      site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-      name: `Camera ${Date.now() % 1000}`,
-    });
-    qc.invalidateQueries({ queryKey: ["cameras"] });
-    setStep(1);
-    setResult(null);
-    setUrl("");
-    nav("/");
+    setSaving(true);
+    setSaveError("");
+    try {
+      await createCamera({
+        endpoint: url,
+        site_id: "00000000-0000-0000-0000-000000000001",
+        username: username || undefined,
+        password: password || undefined,
+        site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+        name: `Camera ${Date.now() % 1000}`,
+      });
+      await qc.invalidateQueries({ queryKey: ["cameras"] });
+      setStep(1);
+      setResult(null);
+      setUrl("");
+      nav("/");
+    } catch {
+      setSaveError("The camera could not be added. Check the connection and try again.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -65,6 +94,9 @@ export function ConnectModal() {
       onClick={() => nav("/")}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="connect-camera-title"
         className="modal-content-animate w-full max-w-xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-white/10 p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors"
         onClick={(e) => e.stopPropagation()}
       >
@@ -76,7 +108,7 @@ export function ConnectModal() {
             </div>
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Connect Camera Source
+                <span id="connect-camera-title">Connect Camera Source</span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Configure network camera, IP webcam, or mobile RTSP feed
@@ -84,6 +116,7 @@ export function ConnectModal() {
             </div>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={() => nav("/")}
             aria-label="Close"
             title="Close"
@@ -228,13 +261,18 @@ export function ConnectModal() {
               </div>
             </div>
             <div className="mt-4 flex gap-3">
-              <button onClick={doSave} data-testid="continue" className="primary-button flex-1 cursor-pointer">
-                Add camera & go to overview
+              <button onClick={doSave} disabled={saving} data-testid="continue" className="primary-button flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
+                {saving ? "Adding camera..." : "Add camera & go to overview"}
               </button>
               <button onClick={() => setStep(2)} className="ghost-button cursor-pointer">
                 Edit
               </button>
             </div>
+            {saveError && (
+              <p role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+                {saveError}
+              </p>
+            )}
           </>
         )}
         <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800/80 flex justify-end">

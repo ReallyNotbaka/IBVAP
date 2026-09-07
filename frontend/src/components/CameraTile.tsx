@@ -346,6 +346,8 @@ export function CameraTile({
 
   const allBoxes = deduped.slice(0, 32);
   const targetCount = allBoxes.length;
+  const sourceUnavailable = imgError || ["OFFLINE", "ERROR", "DISABLED"].includes(camera.observed_state?.toUpperCase() ?? "");
+  const sourceReconnecting = camera.observed_state?.toUpperCase() === "RECONNECTING";
 
   // Active selected box dynamically follows moving target if trackId matches
   const activeSelectedBox = selectedBox?.trackId
@@ -422,7 +424,7 @@ export function CameraTile({
       {/* Refined Video Top Header */}
       <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between text-xs text-white z-20 pointer-events-none">
         <div className="flex items-center gap-2 bg-black/70 border border-white/10 rounded-full px-3 py-1 backdrop-blur-md shadow-sm">
-          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+          <span className={`h-2 w-2 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.8)] ${sourceUnavailable ? "bg-rose-400" : sourceReconnecting ? "bg-amber-400 animate-pulse" : "bg-emerald-400 animate-pulse"}`} />
           <span className="font-semibold text-white text-[11px] tracking-tight">{camera.name}</span>
           <span className="text-[10px] text-slate-300 font-mono font-medium">
             [{observations?.runtime?.toUpperCase() || "DIRECTML"}]
@@ -508,7 +510,7 @@ export function CameraTile({
             />
           ) : (
             <div className="text-white text-xs p-6 text-center max-w-sm">
-              <div className="font-semibold text-slate-200">Video Signal Searching</div>
+              <div className="font-semibold text-slate-200">{sourceReconnecting ? "Reconnecting to camera" : "Video signal unavailable"}</div>
               <div className="mt-1 text-slate-400 text-[11px]">
                 Waiting for stream at {camera.endpoint || "configured endpoint"}
               </div>
@@ -618,7 +620,7 @@ export function CameraTile({
       <div className="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2 pointer-events-none z-20">
         <TileHealth id={camera.id} />
         <span className="text-[10px] text-slate-300 font-mono bg-black/70 border border-white/10 rounded-full px-2.5 py-0.5 hidden sm:inline backdrop-blur-md">
-          MONITORING ACTIVE
+          {sourceUnavailable ? "OFFLINE" : sourceReconnecting ? "RECONNECTING" : "CONNECTED"}
         </span>
       </div>
     </div>

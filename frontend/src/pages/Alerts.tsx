@@ -22,8 +22,9 @@ export function Alerts() {
   const [dedupEnabled, setDedupEnabled] = useState(true);
   const [isClearing, setIsClearing] = useState(false);
   const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(new Set());
+  const [actionError, setActionError] = useState("");
 
-  const { data: rawEvents = [], isLoading, refetch } = useEvents({ limit: 100 });
+  const { data: rawEvents = [], isLoading, isError, refetch } = useEvents({ limit: 100 });
   const { data: cameras = [] } = useCameras();
 
   const cameraMap = useMemo(() => {
@@ -147,7 +148,7 @@ export function Alerts() {
         setAcknowledgedIds(new Set());
         await qc.invalidateQueries({ queryKey: ["events"] });
       } catch (err) {
-        console.error(err);
+        setActionError("Alerts could not be cleared. Try again.");
       } finally {
         setIsClearing(false);
       }
@@ -217,6 +218,13 @@ export function Alerts() {
           </button>
         </div>
       </div>
+
+      {actionError && (
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+          <span>{actionError}</span>
+          <button type="button" onClick={() => setActionError("")} className="font-semibold underline underline-offset-2 cursor-pointer">Dismiss</button>
+        </div>
+      )}
 
       {/* Categorized Tabs Bar */}
       <div className="flex items-center gap-2 border-b border-slate-200/80 dark:border-white/10 overflow-x-auto pb-1">
@@ -304,6 +312,12 @@ export function Alerts() {
         {isLoading ? (
           <div className="py-16 text-center text-xs text-slate-400 dark:text-slate-500 font-medium">
             Loading operational activity feed...
+          </div>
+        ) : isError ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-12 text-center dark:border-amber-900/60 dark:bg-amber-950/20">
+            <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">Alerts are unavailable</h3>
+            <p className="mx-auto mt-2 max-w-sm text-xs text-amber-700 dark:text-amber-300">The activity feed could not be loaded. Your filters are still here.</p>
+            <button type="button" onClick={() => void refetch()} className="mt-4 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white dark:bg-white dark:text-slate-950 cursor-pointer">Try again</button>
           </div>
         ) : filteredEvents.length === 0 ? (
           <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl p-12 text-center space-y-2 shadow-xs">

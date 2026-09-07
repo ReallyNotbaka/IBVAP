@@ -9,15 +9,25 @@ export function UseFootage() {
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("Choose a video file to analyze.");
+  const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [isBusy, setIsBusy] = useState(false);
 
   async function handleUseFootage() {
     if (!file) {
+      setStatusKind("error");
       setStatus("Please choose a supported video file first.");
       return;
     }
 
+    const supportedExtension = /\.(mp4|mov|avi|mkv|webm)$/i.test(file.name);
+    if (!supportedExtension) {
+      setStatusKind("error");
+      setStatus("Choose an MP4, MOV, AVI, MKV, or WEBM file.");
+      return;
+    }
+
     setIsBusy(true);
+    setStatusKind("info");
     setStatus("Uploading footage...");
 
     try {
@@ -40,7 +50,8 @@ export function UseFootage() {
       setStatus(`Footage ready: ${file.name}`);
       navigate("/");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to use the selected footage.";
+      const message = error instanceof Error && error.message ? error.message : "Unable to use the selected footage.";
+      setStatusKind("error");
       setStatus(message);
     } finally {
       setIsBusy(false);
@@ -73,7 +84,11 @@ export function UseFootage() {
             type="file"
             accept=".mp4,.mov,.avi,.mkv,.webm,video/*"
             className="hidden"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setStatusKind("info");
+              setStatus("Ready to upload.");
+            }}
           />
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2 min-w-0">
@@ -93,7 +108,7 @@ export function UseFootage() {
             disabled={!file || isBusy}
             className="primary-button flex-1 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
           >
-            {isBusy ? "Processing..." : "Use footage"}
+            {isBusy ? "Processing..." : statusKind === "error" ? "Try again" : "Use footage"}
           </button>
           <button
             type="button"
@@ -104,7 +119,15 @@ export function UseFootage() {
           </button>
         </div>
 
-        <div className="mt-5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/80 dark:border-slate-800 p-3 text-xs font-mono text-slate-600 dark:text-slate-400">
+        <div
+          role="status"
+          aria-live="polite"
+          className={`mt-5 rounded-xl border p-3 text-xs font-mono ${
+            statusKind === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300"
+              : "border-slate-200/80 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60 text-slate-600 dark:text-slate-400"
+          }`}
+        >
           {status}
         </div>
       </div>
