@@ -13,7 +13,8 @@
 
 ## Architecture Overview
 
-\                                  +---------------------------------------+
+```
+                                  +---------------------------------------+
                                   |     Edge Cameras & Video Sources      |
                                   |  (RTSP / RTSPS / MJPEG / Smartphone)  |
                                   +-------------------+-------------------+
@@ -57,7 +58,7 @@
                          v                                               v
         +----------------------------------------------------------------------------------+
         |                               FastAPI REST & SSE API                             |
-        |      \GET /stream\ (Live MJPEG)       |      \GET /observations\ (HUD & Tracks)  |
+        |      GET /stream (Live MJPEG)         |      GET /observations (HUD & Tracks)    |
         +----------------------------------------+-----------------------------------------+
                                                  |
                                                  v
@@ -65,14 +66,15 @@
         |                            IBVAP Tactical Cockpit UI                             |
         |  (React 19, Tailwind CSS v4, Lucide Icons, Sub-pixel EMA Smoothing, Theater Mode)   |
         +----------------------------------------------------------------------------------+
-\
+```
+
 ---
 
-## Key Features
+## Key Capabilities
 
 - **Multi-Source Ingestion & Protocol Normalization**:
   - Seamlessly handles RTSP, RTSPS, HTTP/HTTPS, MJPEG, and video footage playback.
-  - Native smartphone camera integration: automatically detects and normalizes **DroidCam** (\:4747\) and **IP Webcam** (\:8080\) feeds to \/video\ with transient socket retry resilience.
+  - Native smartphone camera integration: automatically detects and normalizes **DroidCam** (`:4747`) and **IP Webcam** (`:8080`) feeds to `/video` with transient socket retry resilience.
 - **Hardware-Accelerated Computer Vision**:
   - **YOLO26 (YOLOv8)** ONNX model for high-confidence person and vehicle detection with DirectML GPU acceleration and CPU fallback.
   - **YuNet & SFace Biometrics**: 5-point facial landmark detection, quality assessment (blur, illumination, pose), and 128D feature embedding for suspect identification.
@@ -83,7 +85,7 @@
 - **Tactical Cockpit & Geofencing**:
   - Low-latency tactical grid with theater solo mode, infrared/low-light night vision indicators, and live target inspection.
   - Interactive polygon perimeter drawing with real-time intrusion alarms.
-  - Watchlist management with tiered alerts (\CRITICAL\, \HIGH\, \MEDIUM\, \LOW\).
+  - Watchlist management with tiered alerts (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`).
 - **Defensive Engineering & Zero-Trust Security**:
   - Strict SSRF policy enforcement with configurable CIDR allowlists (protects internal subnets).
   - DNS-rebinding defense and credentials encryption (Fernet / AES-GCM).
@@ -93,73 +95,86 @@
 
 ## Tech Stack
 
-| Layer | Technologies |
-|---|---|
-| **Backend** | Python 3.12+, FastAPI, Uvicorn, SQLAlchemy (Async), Pydantic v2 |
-| **Computer Vision** | OpenCV, PyAV (FFmpeg 7), ONNX Runtime (DirectML / CPU), PaddleOCR |
-| **Frontend** | React 19, TypeScript, Vite 7, Tailwind CSS v4, TanStack Query, Lucide Icons |
-| **Testing & Tooling** | Pytest, Pytest-Asyncio, Ruff, Pyright, Playwright, UV |
+| Component | Technologies | Purpose |
+|---|---|---|
+| **Backend Core** | Python 3.12+, FastAPI, Uvicorn, Pydantic v2 | High-performance asynchronous REST & SSE services |
+| **Media Demuxing** | PyAV, FFmpeg 7 | Low-latency stream probing, decoding, and zero-copy packet extraction |
+| **Object Detection** | ONNX Runtime (DirectML / CPU), YOLO26 | Real-time person and vehicle classification |
+| **Facial Biometrics** | OpenCV YuNet, SFace ONNX | Landmark tracking, quality gating, and face identification |
+| **ANPR Engine** | PaddleOCR, OpenCV | License plate detection and text recognition |
+| **Frontend Cockpit**| React 19, TypeScript, Vite 7, Tailwind CSS v4 | High-density tactical surveillance UI |
+| **Quality & Tests** | Pytest, Pytest-Asyncio, Ruff, Pyright, Playwright | Strict validation, type safety, and E2E verification |
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-- **Python**: \>= 3.12, < 3.14- **Node.js**: \>= 20.x- **uv**: Modern fast Python package manager (\pip install uv\ or \curl -LsSf https://astral.sh/uv/install.sh | sh\)
+- **Python**: `>= 3.12, < 3.14`
+- **Node.js**: `>= 20.x`
+- **uv**: Modern fast Python package manager (`pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ### 1. Installation
 
 Clone the repository:
-\\ash
+```bash
 git clone https://github.com/ReallyNotbaka/IBVAP.git
 cd IBVAP
-\
-Install backend dependencies:
-\\ash
+```
+
+Install backend dependencies using `uv`:
+```bash
 uv sync --all-extras
-\
+```
+
 Install frontend dependencies:
-\\ash
+```bash
 cd frontend
 npm install
 cd ..
-\
+```
+
 ---
 
-### 2. Running the Platform
+### 2. Running the System
 
-#### Running Backend
-\\ash
+#### Starting Backend
+```bash
 uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000 --reload
-\API Documentation will be available at:
-- Swagger UI: \http://localhost:8000/docs- ReDoc: \http://localhost:8000/redoc
-#### Running Frontend (Development)
-\\ash
+```
+Interactive API Documentation will be available at:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+#### Starting Frontend (Development)
+```bash
 cd frontend
 npm run dev
-\Open \http://localhost:5173\ in your browser.
+```
+Open `http://localhost:5173` in your browser.
 
 #### Building for Production
-\\ash
+```bash
 cd frontend
 npm run build
 cd ..
 uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000
-\FastAPI automatically serves the precompiled SPA frontend when \rontend/dist\ is present.
+```
+FastAPI automatically serves the precompiled SPA frontend when `frontend/dist` is present.
 
 ---
 
-## Connecting Video Streams
+## Connecting Cameras
 
 ### Wi-Fi Smartphone Cameras
-1. Launch **DroidCam** or **IP Webcam** on your mobile device connected to the same local Wi-Fi.
-2. Open the IBVAP Cockpit (\http://localhost:5173\) and click **Connect Camera**.
-3. Enter the device IP (e.g., .80.5.52\) and port (ļ7\ for DroidCam or \8080\ for IP Webcam).
-4. The system automatically configures the protocol to \http\, targets the stream endpoint \/video\, and permits local private subnets (.0.0.0/8\, 92.168.0.0/16\, z.16.0.0/12\).
+1. Launch **DroidCam** or **IP Webcam** on your mobile device connected to the same local Wi-Fi network.
+2. Open the IBVAP Cockpit (`http://localhost:5173`) and click **Connect Camera**.
+3. Enter the device IP (e.g. `10.80.5.52`) and port (`4747` for DroidCam or `8080` for IP Webcam).
+4. The system automatically configures the protocol to `http`, targets the stream endpoint `/video`, and permits local private subnets (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`).
 5. Click **Test Connection** to inspect stream metrics and **Save & Monitor** to begin live analysis.
 
 ### Standard CCTV / RTSP Feeds
-- Enter standard RTSP URLs (e.g., tsp://admin:password@192.168.1.100:554/h264Preview_01_main\).
+- Enter standard RTSP URLs (e.g. `rtsp://admin:password@192.168.1.100:554/h264Preview_01_main`).
 - Credentials are encrypted at rest and redacted from logging and telemetry surfaces.
 
 ---
@@ -167,26 +182,30 @@ uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000
 ## Verification & Testing
 
 Run full backend unit tests:
-\\ash
+```bash
 uv run pytest -q
-\
+```
+
 Run static type checking and linting:
-\\ash
+```bash
 uv run ruff check .
 uv run pyright src/
-\
+```
+
 Run frontend typecheck and end-to-end Playwright tests:
-\\ash
+```bash
 cd frontend
 npm run typecheck
 npx playwright test
 cd ..
-\
+```
+
 ---
 
 ## Project Structure
 
-\IBVAP/
+```
+IBVAP/
 ├── src/ibvap/
 │   ├── api/
 │   │   ├── app.py                # FastAPI application setup & SPA routing
@@ -217,7 +236,19 @@ cd ..
 ├── docs/                         # Architecture Decision Records (ADRs) & threat models
 ├── tests/                        # Pytest backend test suite (172+ test cases)
 └── pyproject.toml                # Project dependencies & metadata
-\
+```
+
+---
+
+## Documentation
+
+In-depth technical specifications and architectural documentation are available in the [`docs/`](docs/) directory:
+- [`docs/threat-model.md`](docs/threat-model.md) — Threat modeling & defensive security controls
+- [`docs/deployment.md`](docs/deployment.md) — Production edge deployment guide
+- [`docs/benchmarks.md`](docs/benchmarks.md) — Performance benchmarks & latency measurements
+- [`docs/traceability.md`](docs/traceability.md) — Feature-to-code traceability matrix
+- [`docs/adr/`](docs/adr/) — Architecture Decision Records
+
 ---
 
 ## License
