@@ -49,7 +49,7 @@ class Track:
         threat_level: str | ThreatLevel = ThreatLevel.HIGH,
     ) -> bool:
         """Record face recognition match and apply temporal confirmation latch.
-        
+
         - Critical targets (ThreatLevel.CRITICAL) lock immediately on RED tier match.
         - Other suspects lock on 2-of-3 RED matches or retain existing lock.
         - Sets identity immediately so UI displays target name and red box from frame 1.
@@ -202,7 +202,7 @@ class CentroidTracker:
         self.tracks: dict[int, Track] = {}
         self._next_id = 1
         self.stream_epoch = 0
-        self.smoothing = 0.80
+        self.smoothing = 0.35
 
     def reset_epoch(self, new_epoch: int) -> None:
         self.stream_epoch = new_epoch
@@ -258,7 +258,7 @@ class CentroidTracker:
                 previous = trk.bbox_norm
                 trk.bbox_norm = tuple(
                     (1.0 - self.smoothing) * old + self.smoothing * new
-                    for old, new in zip(previous, bbox)
+                    for old, new in zip(previous, bbox, strict=True)
                 )  # type: ignore[assignment]
                 trk.confidence = float(det["confidence"])
                 trk.age = 0
@@ -301,7 +301,7 @@ class CentroidTracker:
                 previous = trk.bbox_norm
                 trk.bbox_norm = tuple(
                     (1.0 - self.smoothing) * old + self.smoothing * new
-                    for old, new in zip(previous, bbox)
+                    for old, new in zip(previous, bbox, strict=True)
                 )  # type: ignore[assignment]
                 trk.trajectory.append(trk.center)
                 if len(trk.trajectory) > 64:
@@ -342,6 +342,10 @@ class CentroidTracker:
             if trk.age > drop_limit:
                 terminated.append(self.tracks.pop(tid))
 
-        # Only return visible active tracks (age <= 2) to eliminate lingering ghost boxes
-        visible_tracks = [t for t in self.tracks.values() if t.age <= 2]
+        # Preserve confirmed and locked tracks through short detector misses.
+        visible_tracks = [
+            t
+            for t in self.tracks.values()
+            if t.age <= (12 if t.identity_locked and t.identity and t.identity.get("threat_level") == "CRITICAL" else 4)
+        ]
         return visible_tracks, new_entries, terminated

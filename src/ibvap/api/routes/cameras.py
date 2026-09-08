@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ipaddress
+import sys
 import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,13 +23,13 @@ from pydantic import BaseModel, Field
 from ibvap.core.anpr import ANPRPipeline
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
+from ibvap.core.geometry import validate_polygon
 from ibvap.core.model_manager import get_shared_detector_handle
 from ibvap.core.night import NightDetector
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.probe import ProbeError, probe_url
 from ibvap.core.ssrf import SSRFError, SSRFPolicy, resolve_and_validate, validate_endpoint  # noqa: F401 - re-export
-
-import sys
+from ibvap.core.zone_engine import Zone
 
 if sys.platform == "win32":
     with contextlib.suppress(Exception):
@@ -35,6 +37,7 @@ if sys.platform == "win32":
         ctypes.windll.winmm.timeBeginPeriod(1)
 
 router = APIRouter(prefix="/api/v1/cameras", tags=["cameras"])
+ANPR_DISPLAY_CONFIDENCE = 0.80
 
 
 # In-memory store for Phase 2 demo (PG persistence via migrations; runtime wired in Phase 3)
@@ -75,10 +78,18 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         stream_epoch=cam["stream_epoch"],
         detector_handle=detector_handle,
         enable_face=True,
-        face_stride=2,
+        face_stride=4,
         sample_stride=1,
         max_face_size=640,
     )
+    saved_fence = cam.get("fence")
+    if isinstance(saved_fence, dict) and isinstance(saved_fence.get("polygon"), list):
+        pipeline.zone = Zone(
+            id=f"zone-{camera_id[:8]}",
+            name=str(saved_fence.get("name", "User fence")),
+            polygon=saved_fence["polygon"],
+            enabled=bool(saved_fence.get("enabled", True)),
+        )
     _ACTIVE_PIPELINES[camera_id] = pipeline
 
     anpr = ANPRPipeline()
@@ -93,12 +104,59 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     last_analysis_fps = 0.0
     last_analysis_fps_calc = time.perf_counter()
     last_inference_ms = 0.0
+    anpr_frame_number = 0
+    last_plate_detections: list[dict[str, Any]] = []
+    last_plates: list[dict[str, Any]] = []
+    ocr_last_submitted: dict[int, float] = {}
+    ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"anpr-{camera_id[:8]}")
+    pending_ocr: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
+
+    def recognize_vehicle(
+        crop: np.ndarray,
+        vehicle_plate_detections: list[dict[str, Any]],
+        vehicle_id: int,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        vehicle_class: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        try:
+            plate = anpr.process_vehicle_crop(crop, vehicle_id=vehicle_id)
+        except Exception:
+            return vehicle_plate_detections, None
+        if not plate or not plate.consensus:
+            return vehicle_plate_detections, None
+        if not vehicle_plate_detections and plate.candidates:
+            bx1, by1, bx2, by2 = plate.candidates[0].bbox_norm
+            vehicle_plate_detections.append(
+                {
+                    "bbox_norm": (
+                        x1 + bx1 * (x2 - x1),
+                        y1 + by1 * (y2 - y1),
+                        x1 + bx2 * (x2 - x1),
+                        y1 + by2 * (y2 - y1),
+                    ),
+                    "confidence": 0.0,
+                    "vehicle_class": vehicle_class,
+                    "track_id": vehicle_id,
+                }
+            )
+        confidence = max(0.0, min(1.0, plate.candidates[0].confidence if plate.candidates else 0.0))
+        if confidence < ANPR_DISPLAY_CONFIDENCE:
+            return vehicle_plate_detections, None
+        for item in vehicle_plate_detections:
+            item["text"] = plate.consensus
+            item["confidence"] = confidence
+        return vehicle_plate_detections, {"text": plate.consensus, "confidence": confidence}
 
     last_night_result = None
     last_night_time = 0.0
 
     def analyze() -> None:
-        nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc, last_inference_ms, last_night_result, last_night_time
+        nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc
+        nonlocal last_inference_ms, last_night_result, last_night_time, anpr_frame_number
+        nonlocal last_plate_detections, last_plates
         while not stop.is_set():
             if not analysis_ready.wait(timeout=0.5):
                 continue
@@ -110,14 +168,44 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 continue
 
             try:
+                completed: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
+                for future in pending_ocr:
+                    if future.done():
+                        completed.append(future)
+                for future in completed:
+                    pending_ocr.remove(future)
+                if completed:
+                    completed_results = [future.result() for future in completed]
+                    last_plate_detections = [item for detections, _ in completed_results for item in detections]
+                    unique_plates: dict[str, dict[str, Any]] = {}
+                    for _, plate in completed_results:
+                        if plate is not None:
+                            unique_plates[plate["text"]] = plate
+                    last_plates = list(unique_plates.values())
+
                 t_infer_start = time.perf_counter()
                 pipeline.process_frame(current)
                 t_infer_end = time.perf_counter()
                 last_inference_ms = (t_infer_end - t_infer_start) * 1000.0
 
                 h_c, w_c = current.shape[:2]
-                plates: list[dict[str, Any]] = []
+                anpr_frame_number += 1
+                run_ocr = anpr_frame_number % 4 == 1
+                plate_detections: list[dict[str, Any]] = []
                 if pipeline.last_detections:
+                    vehicle_detections = [
+                        detection
+                        for detection in pipeline.last_detections
+                        if detection["class_name"] in {"car", "truck", "bus", "motorcycle"}
+                    ]
+                    ocr_detection_ids = {
+                        id(detection)
+                        for detection in sorted(
+                            vehicle_detections,
+                            key=lambda item: (item["bbox_norm"][2] - item["bbox_norm"][0]) * (item["bbox_norm"][3] - item["bbox_norm"][1]),
+                            reverse=True,
+                        )[:3]
+                    }
                     for detection in pipeline.last_detections:
                         if detection["class_name"] not in {"car", "truck", "bus", "motorcycle"}:
                             continue
@@ -125,9 +213,53 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         crop = current[int(y1 * h_c) : int(y2 * h_c), int(x1 * w_c) : int(x2 * w_c)]
                         if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 35:
                             continue
-                        plate = anpr.process_vehicle_crop(crop, vehicle_id=0)
-                        if plate and plate.consensus:
-                            plates.append({"text": plate.consensus, "confidence": plate.quality})
+                        vehicle_plate_detections: list[dict[str, Any]] = []
+                        vehicle_id = 0
+                        best_overlap = 0.0
+                        for track in pipeline.last_tracks:
+                            tx1, ty1, tx2, ty2 = track.bbox_norm
+                            overlap_x = max(0.0, min(x2, tx2) - max(x1, tx1))
+                            overlap_y = max(0.0, min(y2, ty2) - max(y1, ty1))
+                            overlap = overlap_x * overlap_y
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                vehicle_id = track.track_id
+                        if run_ocr and id(detection) in ocr_detection_ids:
+                            for bx1, by1, bx2, by2 in anpr.detector.detect(crop):
+                                vehicle_plate_detections.append(
+                                    {
+                                        "bbox_norm": (
+                                            x1 + bx1 * (x2 - x1),
+                                            y1 + by1 * (y2 - y1),
+                                            x1 + bx2 * (x2 - x1),
+                                            y1 + by2 * (y2 - y1),
+                                        ),
+                                        "confidence": 0.0,
+                                        "vehicle_class": detection["class_name"],
+                                        "track_id": vehicle_id,
+                                    }
+                                )
+                        ocr_due = time.monotonic() - ocr_last_submitted.get(vehicle_id, 0.0) >= 0.6
+                        track_ready = any(track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks)
+                        if run_ocr and track_ready and ocr_due and id(detection) in ocr_detection_ids and len(pending_ocr) < 3:
+                            ocr_last_submitted[vehicle_id] = time.monotonic()
+                            pending_ocr.append(
+                                ocr_executor.submit(
+                                    recognize_vehicle,
+                                    crop.copy(),
+                                    vehicle_plate_detections,
+                                    vehicle_id,
+                                    x1,
+                                    y1,
+                                    x2,
+                                    y2,
+                                    detection["class_name"],
+                                )
+                            )
+                        plate_detections.extend(vehicle_plate_detections)
+
+                if last_plate_detections:
+                    plate_detections = last_plate_detections
 
                 now_ts = time.time()
                 if last_night_result is None or (now_ts - last_night_time) >= 0.5:
@@ -158,7 +290,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
                         for f in pipeline.last_faces
                     ],
-                    "plates": plates,
+                    "plates": last_plates,
+                    "plate_detections": plate_detections,
                     "night": {
                         "is_night": night.is_night,
                         "illumination_score": night.illumination_score,
@@ -346,6 +479,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         container.close()
 
         analysis_ready.set()
+        ocr_executor.shutdown(wait=False, cancel_futures=True)
         _ACTIVE_PIPELINES.pop(camera_id, None)
         return
 
@@ -440,6 +574,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             if container is not None:
                 with contextlib.suppress(Exception):
                     container.close()
+    ocr_executor.shutdown(wait=False, cancel_futures=True)
     _ACTIVE_PIPELINES.pop(camera_id, None)
 
 
@@ -474,6 +609,11 @@ class CameraTestRequest(BaseModel):
 
 class PlaybackSeekRequest(BaseModel):
     position_seconds: float = Field(ge=0)
+
+
+class CameraFenceRequest(BaseModel):
+    polygon: list[list[float]]
+    enabled: bool = True
 
 
 class CameraTestResponse(BaseModel):
@@ -817,6 +957,23 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
     )
 
 
+@router.put("/{camera_id}/fence", response_model=dict[str, Any])
+async def set_camera_fence(camera_id: str, req: CameraFenceRequest) -> dict[str, Any]:
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    error = validate_polygon(req.polygon)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
+    if any(not (0.0 <= point[0] <= 1.0 and 0.0 <= point[1] <= 1.0) for point in req.polygon):
+        raise HTTPException(status_code=422, detail="Fence points must be normalized between 0 and 1")
+    zone = Zone(id=f"zone-{camera_id[:8]}", name="User fence", polygon=req.polygon, enabled=req.enabled)
+    _CAMERAS[camera_id]["fence"] = {"polygon": req.polygon, "enabled": req.enabled, "name": zone.name}
+    pipeline = _ACTIVE_PIPELINES.get(camera_id)
+    if pipeline is not None:
+        pipeline.zone = zone
+    return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
+
+
 def _is_file_camera(camera_id: str) -> bool:
     cam = _CAMERAS.get(camera_id)
     return bool(cam and (cam.get("source_type") == "video_footage" or cam.get("protocol") == "file"))
@@ -855,6 +1012,16 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
             worker = _WORKERS.get(camera_id)
             if worker:
                 worker[0].set()
+            camera = _CAMERAS.pop(camera_id)
+            _STATE_MACHINES.pop(camera_id, None)
+            _HEALTH.pop(camera_id, None)
+            _FRAMES.pop(camera_id, None)
+            _FRAME_VERSIONS.pop(camera_id, None)
+            _OBSERVATIONS.pop(camera_id, None)
+            _PLAYBACK.pop(camera_id, None)
+            if camera.get("temporary") and camera.get("protocol") == "file":
+                with contextlib.suppress(OSError):
+                    Path(str(camera["endpoint"])).unlink()
         state = dict(playback)
     if action in {"pause", "resume", "restart"}:
         _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"

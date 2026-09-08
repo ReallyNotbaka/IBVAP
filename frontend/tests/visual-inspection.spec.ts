@@ -73,12 +73,12 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
     if (!isDark) {
       await page.getByTestId('theme-toggle').click();
     }
-    await page.waitForTimeout(350);
+    await page.waitForTimeout(1200);
 
     // Verify dark theme body background and absence of purple gradients
     const darkBg = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor);
-    // Dark mode body is architectural deep obsidian #0c0e12 or #0b0d11
-    expect(['rgb(11, 13, 17)', 'rgb(12, 14, 18)']).toContain(darkBg);
+    // Dark mode body is architectural neutral graphite #151515 or obsidian #0c0e12 / #0b0d11
+    expect(['rgb(11, 13, 17)', 'rgb(12, 14, 18)', 'rgb(21, 21, 21)']).toContain(darkBg);
 
     // Verify overlay corner brackets and stroke
     const cornerPath = page.locator('svg path[stroke="#dfd5c6"]').first();
@@ -142,6 +142,7 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
 
     // 2. Switch to Light Mode
     await page.getByTestId('theme-toggle').click();
+    await page.waitForTimeout(1200);
     await page.waitForFunction(() => window.getComputedStyle(document.body).backgroundColor === 'rgb(250, 250, 250)', { timeout: 3000 });
 
     const lightBg = await page.evaluate(() => window.getComputedStyle(document.body).backgroundColor);

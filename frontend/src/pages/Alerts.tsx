@@ -325,11 +325,11 @@ export function Alerts() {
               <ShieldCheckIcon className="w-5 h-5" />
             </div>
             <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-              Operational Zones Clear
+              No Matching Events
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
               {activeTab === "all"
-                ? "No active security incidents or alerts detected. The live perimeter is secure."
+                ? "No events match the current view."
                 : `No events currently match the selected "${activeTab}" filter.`}
             </p>
           </div>

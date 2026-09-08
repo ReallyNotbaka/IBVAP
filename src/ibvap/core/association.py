@@ -91,7 +91,7 @@ def linear_sum_assignment_numpy(cost_matrix: np.ndarray) -> tuple[np.ndarray, np
 def associate_faces_to_tracks(
     tracks: list[Track],
     faces: list[dict[str, Any]],
-    max_cost: float = 0.85,
+    max_cost: float = 0.75,
 ) -> dict[int, dict[str, Any]]:
     """Associate detected faces to active person tracks via Head-ROI bipartite matching.
     
@@ -111,15 +111,15 @@ def associate_faces_to_tracks(
         tw = max(1e-5, tx2 - tx1)
         th = max(1e-5, ty2 - ty1)
 
-        # Upper 25% Head Anchor
+        # Head anchor derived from the upper quarter of the person box.
         hx = (tx1 + tx2) / 2.0
-        hy = ty1 + 0.125 * th
+        hy = ty1 + 0.12 * th
 
-        # Permitted spatial boundary for the head center (supports full body, waist-up, and close-up framing)
-        min_x = tx1 - 0.15 * tw
-        max_x = tx2 + 0.15 * tw
-        min_y = ty1 - 0.10 * th
-        max_y = ty1 + 0.40 * th
+        # Tighter head-zone gate: valid face centers must stay close to the upper body and away from lower torso.
+        min_x = tx1 + 0.12 * tw
+        max_x = tx2 - 0.12 * tw
+        min_y = ty1 + 0.02 * th
+        max_y = ty1 + 0.42 * th
 
         for j, face in enumerate(faces):
             fx1, fy1, fx2, fy2 = face["bbox_norm"]
@@ -129,20 +129,19 @@ def associate_faces_to_tracks(
             fcx = (fx1 + fx2) / 2.0
             fcy = (fy1 + fy2) / 2.0
 
-            # Anatomical spatial containment check
             if not (min_x <= fcx <= max_x and min_y <= fcy <= max_y):
                 continue
 
-            # Scale ratio check (face height vs person bbox height: supports distant full-body to close-up/bust)
+            # Allow close-up waist-up / bust framing, but reject torso-like boxes and tiny background patches.
             ratio = fh / th
-            if ratio < 0.03 or ratio > 0.65:
+            if ratio < 0.08 or ratio > 0.58:
                 continue
 
-            # Normalized distance from head anchor
-            dx = abs(fcx - hx) / tw
-            dy = abs(fcy - hy) / th
+            # Cost penalizes lateral and vertical deviation from the upper-head anchor.
+            dx = abs(fcx - hx) / max(tw, 1e-5)
+            dy = abs(fcy - hy) / max(th, 1e-5)
             dist = math.sqrt(dx * dx + dy * dy)
-            scale_penalty = 0.3 * abs(ratio - 0.18)
+            scale_penalty = 0.32 * abs(ratio - 0.22)
             cost_matrix[i, j] = dist + scale_penalty
 
     rows, cols = linear_sum_assignment_numpy(cost_matrix)

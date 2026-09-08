@@ -102,6 +102,11 @@ export function CameraTile({
   onSolo,
   isSolo,
   onInspectTarget,
+  onStopped,
+  fencePoints = [],
+  showFence = false,
+  fenceDrawing = false,
+  onFencePoint,
 }: {
   camera: Camera;
   mode?: "minimal" | "operational" | "diagnostic";
@@ -113,6 +118,11 @@ export function CameraTile({
   onSolo?: () => void;
   isSolo?: boolean;
   onInspectTarget?: (target: TargetInspectData) => void;
+  onStopped?: () => void;
+  fencePoints?: [number, number][];
+  showFence?: boolean;
+  fenceDrawing?: boolean;
+  onFencePoint?: (point: [number, number]) => void;
 }) {
   const qc = useQueryClient();
   const [imgError, setImgError] = useState(false);
@@ -143,6 +153,7 @@ export function CameraTile({
       await controlPlayback(camera.id, action);
       await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
       await qc.invalidateQueries({ queryKey: ["cameras"] });
+      if (action === "stop") onStopped?.();
     } finally {
       setTransportBusy(false);
     }
@@ -240,8 +251,8 @@ export function CameraTile({
       const prev = smoothedCoordsRef.current.get(trackKey);
       let smoothed = rawBbox;
       if (prev) {
-        // Temporal box smoothing (EMA filter, alpha = 0.42) across observation ticks
-        const alpha = 0.42;
+        // Track-keyed EMA keeps the vehicle frame stable while detections fluctuate.
+        const alpha = 0.12;
         smoothed = [
           (1 - alpha) * prev[0] + alpha * rawBbox[0],
           (1 - alpha) * prev[1] + alpha * rawBbox[1],
@@ -293,12 +304,14 @@ export function CameraTile({
         targetName: targetName,
         threatLevel: threatLevel,
         isCritical: isCritical,
+        isPlate: false,
       };
     })
     .filter(
       (item) =>
         item.label &&
-        (item.isAlert ||
+        (item.isPlate ||
+          item.isAlert ||
           ["person", "car", "truck", "bus", "motorcycle", "bicycle"].includes(
             item.label.toLowerCase()
           ))
@@ -320,8 +333,7 @@ export function CameraTile({
     ? (observations?.faces ?? [])
         .filter(
           (face) =>
-            (face.confidence ?? 0) >= minFaceConf &&
-            (face as { quality_passed?: boolean }).quality_passed !== false
+            (face.confidence ?? 0) >= minFaceConf
         )
         .map((face, fIdx) => {
           const rawBbox = face.bbox_norm;
@@ -329,7 +341,7 @@ export function CameraTile({
           const prev = smoothedCoordsRef.current.get(faceKey);
           let smoothed = rawBbox;
           if (prev) {
-            const alpha = 0.45;
+            const alpha = 0.25;
             smoothed = [
               (1 - alpha) * prev[0] + alpha * rawBbox[0],
               (1 - alpha) * prev[1] + alpha * rawBbox[1],
@@ -352,12 +364,52 @@ export function CameraTile({
         .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     : [];
 
+  const plateBoxes: Box[] = (observations?.plate_detections ?? []).map((plate) => {
+    const [x1, y1, x2, y2] = plate.bbox_norm;
+    return {
+      x: x1,
+      y: y1,
+      w: x2 - x1,
+      h: y2 - y1,
+      label: plate.text?.toUpperCase() || "plate",
+      confidence: plate.confidence || undefined,
+      trackId: plate.track_id !== undefined ? `track-${plate.track_id}` : undefined,
+      isPlate: true,
+    };
+  });
+
+  const matchedPlateBoxes = new Set<Box>();
+  const vehicleBoxesWithPlates = boxes.map((vehicle) => {
+    const plate = plateBoxes.find((candidate) => {
+      if (!candidate.label || candidate.label === "plate") return false;
+      if (vehicle.trackId && candidate.trackId) return vehicle.trackId === candidate.trackId;
+      const centerX = candidate.x + candidate.w / 2;
+      const centerY = candidate.y + candidate.h / 2;
+      return (
+        centerX >= vehicle.x &&
+        centerX <= vehicle.x + vehicle.w &&
+        centerY >= vehicle.y &&
+        centerY <= vehicle.y + vehicle.h
+      );
+    });
+    if (!plate) return vehicle;
+    matchedPlateBoxes.add(plate);
+    return {
+      ...vehicle,
+      label: plate.label,
+      confidence: plate.confidence ?? vehicle.confidence,
+      isPlate: true,
+    };
+  });
+  const unmatchedPlateBoxes = plateBoxes.filter((plate) => !matchedPlateBoxes.has(plate));
+
   // Priority-aware deduplication: alerts and critical targets always win over non-alerts
   const deduped: Box[] = [];
-  for (const box of [...boxes, ...faceBoxes]) {
+  for (const box of [...vehicleBoxesWithPlates, ...faceBoxes, ...unmatchedPlateBoxes]) {
     const overlapIndex = deduped.findIndex((existing) => {
       if (existing.label === "face" && box.label !== "face") return false;
       if (existing.label !== "face" && box.label === "face") return false;
+      if (existing.isPlate || box.isPlate) return false;
       const xOverlap = Math.max(
         0,
         Math.min(existing.x + existing.w, box.x + box.w) -
@@ -385,7 +437,7 @@ export function CameraTile({
   }
 
   const allBoxes = deduped.slice(0, 32);
-  const targetCount = allBoxes.length;
+  const targetCount = allBoxes.filter((box) => !box.isPlate).length;
   const sourceUnavailable = imgError || ["OFFLINE", "ERROR", "DISABLED"].includes(camera.observed_state?.toUpperCase() ?? "");
   const sourceReconnecting = camera.observed_state?.toUpperCase() === "RECONNECTING";
 
@@ -529,6 +581,15 @@ export function CameraTile({
       >
         <div
           className="relative flex items-center justify-center select-none"
+          onClick={(event) => {
+            if (!fenceDrawing || !onFencePoint) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            onFencePoint([
+              Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+              Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+            ]);
+            event.stopPropagation();
+          }}
           style={{
             width: renderedDimensions.width,
             height: renderedDimensions.height,
@@ -559,6 +620,22 @@ export function CameraTile({
                 Ensure device is on the same network and stream is active.
               </div>
             </div>
+          )}
+
+          {(showFence || fenceDrawing) && fencePoints.length >= 2 && (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polygon
+                points={fencePoints.map(([x, y]) => `${x * 100},${y * 100}`).join(" ")}
+                fill={fenceDrawing ? "rgba(250, 204, 21, 0.12)" : "rgba(34, 211, 238, 0.10)"}
+                stroke={fenceDrawing ? "#facc15" : "#22d3ee"}
+                strokeWidth="0.8"
+                strokeDasharray={fenceDrawing ? "2 1" : undefined}
+                vectorEffect="non-scaling-stroke"
+              />
+              {fenceDrawing && fencePoints.map(([x, y], index) => (
+                <circle key={`${x}-${y}-${index}`} cx={x * 100} cy={y * 100} r="1.2" fill="#facc15" />
+              ))}
+            </svg>
           )}
 
           {/* HUD SVG Overlays */}

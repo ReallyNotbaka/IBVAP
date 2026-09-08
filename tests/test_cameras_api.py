@@ -90,6 +90,28 @@ def test_create_and_list_cameras() -> None:
     assert any(x["id"] == cam["id"] for x in lst)
 
 
+def test_camera_fence_is_validated_and_saved() -> None:
+    c = _client()
+    resp = c.post(
+        "/api/v1/cameras",
+        json={
+            "name": "Fence camera",
+            "site_id": "00000000-0000-0000-0000-000000000001",
+            "source_type": "smartphone_ip_webcam",
+            "endpoint": "synthetic://fence",
+            "protocol": "http",
+        },
+    )
+    camera_id = resp.json()["id"]
+    polygon = [[0.1, 0.2], [0.9, 0.2], [0.8, 0.8], [0.2, 0.8]]
+    saved = c.put(f"/api/v1/cameras/{camera_id}/fence", json={"polygon": polygon})
+    assert saved.status_code == 200
+    assert saved.json()["fence"]["polygon"] == polygon
+
+    invalid = c.put(f"/api/v1/cameras/{camera_id}/fence", json={"polygon": [[0.1, 0.1], [0.2, 0.2]]})
+    assert invalid.status_code == 422
+
+
 def test_disable_and_reconnect() -> None:
     c = _client()
     resp = c.post(

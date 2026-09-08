@@ -75,7 +75,7 @@ export function AlertRail({ limit = 5 }: { limit?: number }) {
           <div className="space-y-2 max-h-72 overflow-y-auto">
             {events.length === 0 ? (
               <div className="text-xs text-slate-400 dark:text-slate-500 py-4 text-center font-medium">
-                Operational zones clear • No intrusion or abnormal activity detected
+                No recent events
               </div>
             ) : (
               show.map((ev) => {

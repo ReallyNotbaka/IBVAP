@@ -11,8 +11,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ibvap.config import Settings
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
+from ibvap.core.face import check_identity_gate_passed
 from ibvap.core.queue import BoundedQueue
+from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker
 from ibvap.core.zone_engine import DEFAULT_ZONE, is_intrusion
 from ibvap.events.outbox import transactional_write
@@ -54,6 +57,7 @@ class MiniPipeline:
         self.tracker = CentroidTracker()
         self.tracker.stream_epoch = stream_epoch
         self.zone = DEFAULT_ZONE
+        self.rule_engine = RuleEngine(loiter_seconds=10.0, cooldown_seconds=10.0)
         # bounded queues per spec 10
         self.q_demux_to_sample = BoundedQueue("demux->sample", max_size=2, max_age_ms=400)
         self.q_sample_to_infer = BoundedQueue("sample->infer", max_size=2, max_age_ms=400)
@@ -84,7 +88,7 @@ class MiniPipeline:
 
         if face_recognizer is not None:
             self.face_recognizer = face_recognizer
-        elif enable_face and Path("models/face_recognition_sface_2021dec.onnx").exists():
+        elif enable_face and check_identity_gate_passed(Settings()) and Path("models/face_recognition_sface_2021dec.onnx").exists():
             try:
                 from ibvap.core.face import FaceRecognizer
                 self.face_recognizer = FaceRecognizer()
@@ -180,7 +184,6 @@ class MiniPipeline:
                             "_raw": f,
                         }
                         for f in raw_faces
-                        if f.quality.passed
                     ]
                     self.faces_analyzed += 1
                     new_faces_detected = bool(self.last_faces)
@@ -188,12 +191,13 @@ class MiniPipeline:
                     pass
 
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
-        if new_faces_detected and self.last_faces and self.face_recognizer is not None:
+        recognition_faces = [face for face in self.last_faces if face.get("quality_passed", False)]
+        if new_faces_detected and recognition_faces and self.face_recognizer is not None:
             try:
                 from ibvap.core.association import associate_faces_to_tracks
                 from ibvap.core.watchlist import get_watchlist_store
 
-                assignments = associate_faces_to_tracks(tracks, self.last_faces)
+                assignments = associate_faces_to_tracks(tracks, recognition_faces)
                 wl_store = get_watchlist_store()
                 crop_frame = getattr(self, "_last_face_frame", frame)
                 for trk_id, face_info in assignments.items():
@@ -233,8 +237,27 @@ class MiniPipeline:
 
         primary_event: dict | None = None
         intrusion_track_ids: set[int] = set()
-
         now_ts = time.time()
+        if self.zone.id != DEFAULT_ZONE.id:
+            self.rule_engine.zones = [{"id": self.zone.id, "polygon": self.zone.polygon}]
+            for trk in tracks:
+                for rule_event in self.rule_engine.check_zones(trk.track_id, trk.footpoint, now_ts):
+                    event = {
+                        "camera_id": self.camera_id,
+                        "stream_epoch": self.stream_epoch,
+                        "event_type": "suspicious_loitering",
+                        "zone_id": self.zone.id,
+                        "track_id": trk.track_id,
+                        "bbox_norm": trk.bbox_norm,
+                        "confidence": trk.confidence,
+                        "explanation": self.rule_engine.explain(rule_event),
+                        "model_id": getattr(self, "model_id", "yolo26n"),
+                    }
+                    transactional_write(event, dedup_key=f"{self.camera_id}:loiter:{self.zone.id}:{trk.track_id}")
+                    self.events_created += 1
+                    if primary_event is None:
+                        primary_event = event
+
         # 1. Restricted Zone Intrusion (with hysteresis and debounce cooldown)
         for trk in tracks:
             if trk.class_name not in {"person", "car", "truck", "bus", "motorcycle"}:

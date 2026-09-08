@@ -328,7 +328,7 @@ export function Health() {
               Active Camera Stream Feeds
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Real-time FPS decode pacing, hardware queue latency, and drop counters
+              FPS, decode pacing, queue latency, and drop counters
             </p>
           </div>
           <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-3 py-1 text-xs font-mono font-semibold text-slate-700 dark:text-slate-300">

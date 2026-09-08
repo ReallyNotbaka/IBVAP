@@ -9,7 +9,7 @@ echo ==================================================================
 
 where uv >nul 2>nul
 if !ERRORLEVEL! equ 0 (
-    uv run python run.py %*
+    uv run --no-sync python run.py %*
     goto :done
 )
 

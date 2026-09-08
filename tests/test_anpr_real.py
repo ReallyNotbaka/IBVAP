@@ -3,7 +3,18 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ibvap.core.anpr import ANPRPipeline, OCRReader, PlateDetector, PlateResult, normalize_plate
+from ibvap.core.anpr import ANPRPipeline, OCRReader, PlateCandidate, PlateDetector, PlateResult, normalize_plate
+
+
+def fake_reader() -> OCRReader:
+    return OCRReader(ocr_engine=lambda crop: [
+        PlateCandidate(
+            text="MH12DE1234",
+            confidence=0.95,
+            quality=float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()),
+            bbox_norm=(0.0, 0.0, 1.0, 1.0),
+        )
+    ])
 
 
 def test_normalize_plate_diverse_inputs() -> None:
@@ -52,7 +63,7 @@ def test_plate_detector_synthetic_plate_localization() -> None:
 
 
 def test_ocr_reader_quality_gate() -> None:
-    ocr = OCRReader()
+    ocr = fake_reader()
 
     # Uniform image has 0 Laplacian variance
     flat_img = np.full((40, 150, 3), 200, dtype=np.uint8)
@@ -66,7 +77,7 @@ def test_ocr_reader_quality_gate() -> None:
 
 
 def test_ocr_reader_recognition() -> None:
-    ocr = OCRReader()
+    ocr = fake_reader()
 
     # Synthetic plate crop
     plate_crop = np.full((40, 160, 3), 240, dtype=np.uint8)
@@ -96,7 +107,7 @@ def test_multiframe_temporal_consensus() -> None:
 
 
 def test_anpr_pipeline_end_to_end() -> None:
-    pipeline = ANPRPipeline()
+    pipeline = ANPRPipeline(ocr=fake_reader())
 
     vehicle_crop = np.full((200, 300, 3), 90, dtype=np.uint8)
     cv2.rectangle(vehicle_crop, (75, 130), (225, 170), (240, 240, 240), -1)
@@ -113,7 +124,7 @@ def test_anpr_pipeline_end_to_end() -> None:
 
 
 def test_anpr_pipeline_empty_and_blank() -> None:
-    pipeline = ANPRPipeline()
+    pipeline = ANPRPipeline(ocr=fake_reader())
 
     assert pipeline.process_vehicle_crop(np.zeros((0, 0, 3), dtype=np.uint8), vehicle_id=1) is None
 

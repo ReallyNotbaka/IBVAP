@@ -1,7 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { useWatchlist, useModels } from "../lib/api";
 import { ThemeToggle } from "./ThemeToggle";
-import { CameraIcon, CpuIcon, CrosshairIcon } from "./Icons";
+import { ArrowLeftIcon, CameraIcon, CpuIcon, CrosshairIcon } from "./Icons";
 
 const items = [
   { to: "/", label: "Overview" },
@@ -20,6 +20,7 @@ export function Topbar({
 }) {
   const loc = useLocation();
   const isCockpit = loc.pathname === "/" || loc.pathname.startsWith("/connect");
+  const showBack = loc.pathname !== "/";
   const { data: suspects = [] } = useWatchlist();
   const { data: modelData } = useModels();
   const activeModel = modelData?.active_model || "yolo26n";
@@ -27,7 +28,13 @@ export function Topbar({
   return (
     <header className="topbar">
       <div className="topbar-title flex items-center gap-3">
-        <Link to="/" className="brand" style={{ padding: 0, textDecoration: "none", color: "inherit" }}>
+        <Link
+          to="/"
+          aria-label="IBVAP landing page"
+          data-testid="brand-home"
+          className="brand"
+          style={{ padding: 0, textDecoration: "none", color: "inherit" }}
+        >
           <div className="brand-mark">IB</div>
           <div>
             <div className="brand-name">IBVAP</div>
@@ -37,6 +44,17 @@ export function Topbar({
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3">
+        {showBack && (
+          <Link
+            to="/"
+            data-testid="back-to-overview"
+            aria-label="Back to overview"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 px-2.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-slate-400 dark:hover:border-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          >
+            <ArrowLeftIcon className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Back</span>
+          </Link>
+        )}
         <nav className="topbar-nav" aria-label="Section navigation">
           {items.map((it) => {
             const active = it.to === "/" ? isCockpit : loc.pathname === it.to;

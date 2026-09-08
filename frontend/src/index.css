@@ -4,8 +4,8 @@
 
 :root {
   --bg: #fafafa;
-  --bg-gradient: #fafafa;
-  --panel: rgba(255, 255, 255, 0.96);
+  --bg-gradient: radial-gradient(circle at 12% -10%, rgba(185, 148, 105, 0.12), transparent 34%), linear-gradient(135deg, #fbfaf8 0%, #f3f2ef 100%);
+  --panel: rgba(255, 255, 255, 0.82);
   --panel-strong: #ffffff;
   --panel-alt: #f4f4f5;
   --line: rgba(0, 0, 0, 0.08);
@@ -18,7 +18,7 @@
   --warning: #f59e0b;
   --danger: #ef4444;
   --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 12px 32px -4px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 18px 50px -18px rgba(24, 24, 27, 0.22);
   --radius-lg: 16px;
   --radius-md: 12px;
   --radius-sm: 8px;
@@ -26,8 +26,8 @@
 
 .dark {
   --bg: #151515;
-  --bg-gradient: #151515;
-  --panel: rgba(30, 30, 30, 0.96);
+  --bg-gradient: radial-gradient(circle at 88% -10%, rgba(199, 169, 120, 0.12), transparent 32%), linear-gradient(135deg, #171717 0%, #101112 100%);
+  --panel: rgba(30, 30, 30, 0.82);
   --panel-strong: #202020;
   --panel-alt: #292929;
   --line: rgba(255, 255, 255, 0.12);
@@ -322,9 +322,9 @@ button, input, select {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.85rem 1.75rem;
+  padding: 0.9rem 1.75rem;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   position: sticky;
@@ -366,7 +366,7 @@ button, input, select {
 .topbar-link.active {
   background: var(--panel-alt);
   color: var(--text);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: inset 0 0 0 1px var(--line), 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
 .topbar-link:hover:not(.active) {
@@ -383,7 +383,7 @@ button, input, select {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }

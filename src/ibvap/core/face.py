@@ -308,10 +308,7 @@ class FaceDetector:
             px2 = min(w, int(round(x + fw)))
             py2 = min(h, int(round(y + fh)))
 
-            if px2 > px1 and py2 > py1:
-                crop = frame[py1:py2, px1:px2]
-            else:
-                crop = np.empty((0, 0, 3), dtype=np.uint8)
+            crop = frame[py1:py2, px1:px2] if px2 > px1 and py2 > py1 else np.empty((0, 0, 3), dtype=np.uint8)
 
             quality = FaceQualityAssessment.assess(
                 crop=crop,

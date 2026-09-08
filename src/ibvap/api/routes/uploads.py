@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import time
 import uuid
 from pathlib import Path
 
@@ -14,6 +16,35 @@ from ibvap.core.upload import ALLOWED_EXTS, MAX_SIZE_BYTES, promoted_path, quara
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
 _UPLOADS: dict[str, dict[str, object]] = {}
+UPLOAD_RETENTION_SECONDS = 24 * 60 * 60
+UPLOAD_ROOTS = (Path("data/uploads"), Path("data/quarantine"))
+
+
+def _remove_path(path_value: object) -> None:
+    path = Path(str(path_value))
+    if path.exists() and path.is_file():
+        path.unlink()
+
+
+def cleanup_expired_uploads(now: float | None = None) -> int:
+    """Remove stale upload files and their in-memory metadata."""
+    cutoff = (now or time.time()) - UPLOAD_RETENTION_SECONDS
+    removed = 0
+    for upload_id, data in list(_UPLOADS.items()):
+        if float(data.get("created_at", 0.0)) >= cutoff:
+            continue
+        _remove_path(data.get("path"))
+        _UPLOADS.pop(upload_id, None)
+        removed += 1
+    for root in UPLOAD_ROOTS:
+        if not root.exists():
+            continue
+        for path in root.iterdir():
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                with contextlib.suppress(OSError):
+                    path.unlink()
+                    removed += 1
+    return removed
 
 
 class UploadCreateResponse(BaseModel):
@@ -26,12 +57,13 @@ class UploadCreateResponse(BaseModel):
 
 @router.post("", response_model=UploadCreateResponse)
 async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  # noqa: B008
+    cleanup_expired_uploads()
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename required")
     try:
         validate_filename(file.filename)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=400, detail=f"Unsupported extension {ext}")
@@ -79,8 +111,18 @@ async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  
         "sha256": sha,
         "status": "quarantined",
         "path": str(qpath),
+        "created_at": time.time(),
     }
     return UploadCreateResponse(upload_id=upload_id, filename=file.filename, size=total, sha256=sha, status="quarantined")
+
+
+@router.delete("/{upload_id}", response_model=dict[str, str])
+async def delete_upload(upload_id: str) -> dict[str, str]:
+    data = _UPLOADS.pop(upload_id, None)
+    if not data:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    _remove_path(data.get("path"))
+    return {"status": "deleted", "upload_id": upload_id}
 
 
 @router.get("/{upload_id}", response_model=dict[str, object])

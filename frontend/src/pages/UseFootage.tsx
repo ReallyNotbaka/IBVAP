@@ -43,6 +43,7 @@ export function UseFootage() {
         protocol: "file",
         endpoint: finalized.path,
         site_cidr_allowlist: [],
+        temporary: true,
       });
 
       setStatus("Refreshing camera list...");

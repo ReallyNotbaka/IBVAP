@@ -166,6 +166,23 @@ class TestHungarianSpatialAssociation:
         assert assignments[1] == face1
         assert assignments[2] == face2
 
+    def test_lower_body_face_is_rejected(self) -> None:
+        trk = Track(
+            track_id=1,
+            class_name="person",
+            class_id=0,
+            bbox_norm=(0.1433633075485511, 0.4202986361416724, 0.5447594294489909, 0.9216361213900612),
+            confidence=0.90,
+        )
+        face = {
+            "bbox_norm": (0.07615335717583922, 0.47118450087487845, 0.1699961819708618, 0.5579700810375883),
+            "confidence": 0.92,
+            "quality_passed": True,
+        }
+
+        assignments = associate_faces_to_tracks([trk], [face])
+        assert 1 not in assignments
+
     def test_non_person_tracks_not_associated(self) -> None:
         car_trk = Track(
             track_id=10,

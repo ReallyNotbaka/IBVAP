@@ -28,7 +28,7 @@ function SourceState({ error, onRetry }: { error?: boolean; onRetry?: () => void
           Sources are temporarily unavailable
         </h1>
         <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500 dark:text-slate-400">
-          The source list could not be reached. Your footage is safe; try again when the service is ready.
+          The source list is unavailable. Try again when the service is ready.
         </p>
         {error && onRetry && (
           <button

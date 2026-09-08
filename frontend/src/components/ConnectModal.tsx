@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   CameraIcon,
   CloseIcon,
+  ArrowLeftIcon,
   CheckCircleIcon,
   AlertTriangleIcon,
 } from "./Icons";
@@ -17,7 +18,7 @@ export function ConnectModal() {
   const [address, setAddress] = useState("");
   const [port, setPort] = useState("");
   const [protocol, setProtocol] = useState("");
-  const [streamPath, setStreamPath] = useState("");
+  const [streamPath, setStreamPath] = useState("video");
   const [temporary, setTemporary] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -50,13 +51,13 @@ export function ConnectModal() {
   if (!open) return null;
 
   async function doTest() {
+    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
     if (!address.trim() || !port.trim() || !protocol) {
-      setResult({ result: "error", safe_message: "Enter an address, port, and protocol before testing.", stages: [] });
-      setStep(2);
+      setResult({ result: "error", safe_message: "Enter the device IP, port, and protocol before testing.", stages: [] });
+      setStep(1);
       return;
     }
 
-    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
     setLoading(true);
     setStep(3);
     try {
@@ -97,7 +98,7 @@ export function ConnectModal() {
       setAddress("");
       setPort("");
       setProtocol("");
-      setStreamPath("");
+      setStreamPath("video");
       setTemporary(true);
       nav("/");
     } catch {
@@ -134,85 +135,96 @@ export function ConnectModal() {
               </p>
             </div>
           </div>
-          <button
-            ref={closeButtonRef}
-            onClick={() => nav("/")}
-            aria-label="Close"
-            title="Close"
-            className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
-          >
-            <CloseIcon className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => nav("/")}
+              aria-label="Back to overview"
+              title="Back to overview"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              <ArrowLeftIcon className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Back</span>
+            </button>
+            <button
+              ref={closeButtonRef}
+              onClick={() => nav("/")}
+              aria-label="Close"
+              title="Close"
+              className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
+            >
+              <CloseIcon className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {step === 1 && (
           <>
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                How should this source be kept?
-              </h3>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button type="button" onClick={() => setTemporary(true)} className={`rounded-xl border p-3 text-left transition-colors cursor-pointer ${temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
-                  <span className="block text-sm font-semibold">Temporary source</span>
-                  <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">Use it for this session without treating it as a saved camera.</span>
-                </button>
-                <button type="button" onClick={() => setTemporary(false)} className={`rounded-xl border p-3 text-left transition-colors cursor-pointer ${!temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
-                  <span className="block text-sm font-semibold">Saved camera</span>
-                  <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">Keep this source in the camera list with its address.</span>
-                </button>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950/60">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Source details</h3>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Enter the network details for your camera.</p>
+                </div>
+                <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 shadow-sm dark:bg-slate-800 dark:text-slate-400">Required</span>
               </div>
-            </div>
-            <button
-              onClick={() => setStep(2)}
-              data-testid="prepare-done"
-              className="primary-button mt-6 w-full cursor-pointer flex items-center justify-center gap-2"
-            >
-              <CameraIcon className="w-4 h-4" />
-              <span>Enter camera details</span>
-            </button>
-          </>
-        )}
-        {step === 2 && (
-          <>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Camera connection details
-            </h3>
-            <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_9rem]">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                IP address or hostname
-                <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="e.g. 10.0.0.25" data-testid="camera-address" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
+              <label className="mt-4 block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                Device IP address
+                <input
+                  value={address}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    try {
+                      const parsed = new URL(value);
+                      setProtocol(parsed.protocol.replace(":", ""));
+                      setAddress(parsed.hostname);
+                      setPort(parsed.port);
+                      setStreamPath(parsed.pathname.replace(/^\/+/, "") || "video");
+                    } catch {
+                      setAddress(value);
+                    }
+                  }}
+                  placeholder="Device IP address"
+                  data-testid="stream-url"
+                  autoFocus
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-slate-300 dark:focus:ring-white/10"
+                />
               </label>
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Port
-                <input value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} placeholder="e.g. 4747" inputMode="numeric" data-testid="camera-port" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
-              </label>
-            </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Protocol
-                <select value={protocol} onChange={(e) => setProtocol(e.target.value)} data-testid="camera-protocol" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300">
-                  <option value="">Select protocol</option>
-                  <option value="http">HTTP / MJPEG</option>
-                  <option value="https">HTTPS</option>
-                  <option value="rtsp">RTSP</option>
-                  <option value="rtsps">RTSPS</option>
-                </select>
-              </label>
-              <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Port
+                  <input value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} placeholder="Port" inputMode="numeric" data-testid="camera-port" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-slate-300 dark:focus:ring-white/10" />
+                </label>
+                <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  Protocol
+                  <select value={protocol} onChange={(e) => setProtocol(e.target.value)} data-testid="camera-protocol" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:focus:border-slate-300 dark:focus:ring-white/10">
+                    <option value="">Select protocol</option>
+                    <option value="http">HTTP / MJPEG</option>
+                    <option value="https">HTTPS</option>
+                    <option value="rtsp">RTSP</option>
+                    <option value="rtsps">RTSPS</option>
+                  </select>
+                </label>
+              </div>
+              <label className="mt-3 block text-xs font-semibold text-slate-600 dark:text-slate-300">
                 Stream path <span className="font-normal text-slate-400">optional</span>
-                <input value={streamPath} onChange={(e) => setStreamPath(e.target.value)} placeholder="Optional path, e.g. video" data-testid="camera-path" className="mt-1 w-full rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-slate-950 px-3 py-2 text-sm font-normal text-slate-900 dark:text-slate-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:border-neutral-900 dark:focus:border-neutral-300" />
+                <input value={streamPath} onChange={(e) => setStreamPath(e.target.value)} placeholder="Stream path" data-testid="camera-path" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-slate-300 dark:focus:ring-white/10" />
               </label>
             </div>
-            <p className="mt-3 text-[11px] text-slate-500 dark:text-slate-400">No address is preconfigured. Enter the values shown by your CCTV or network camera software.</p>
-            <button
-              onClick={() => setShowAuth((v) => !v)}
-              data-testid="toggle-auth"
-              className="text-xs underline mt-2 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
-            >
-              {showAuth ? "Hide authentication" : "Authentication (optional)"}
-            </button>
+
+            <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setShowAuth((v) => !v)}
+                data-testid="toggle-auth"
+                aria-expanded={showAuth}
+                className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100 cursor-pointer"
+              >
+                <span>Authentication <span className="font-normal text-slate-400">optional</span></span>
+                <span className="text-lg leading-none text-slate-400">{showAuth ? "−" : "+"}</span>
+              </button>
             {showAuth && (
-              <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="grid grid-cols-2 gap-3 border-t border-slate-200 px-4 pb-4 pt-3 dark:border-slate-700">
                 <input
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
@@ -230,11 +242,27 @@ export function ConnectModal() {
                 />
               </div>
             )}
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold text-slate-600 dark:text-slate-300">Keep this source</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setTemporary(true)} className={`rounded-lg border px-3 py-2 text-left text-xs transition-colors cursor-pointer ${temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
+                  <span className="block font-semibold">This session</span>
+                  <span className="mt-0.5 block text-slate-500 dark:text-slate-400">Temporary</span>
+                </button>
+                <button type="button" onClick={() => setTemporary(false)} className={`rounded-lg border px-3 py-2 text-left text-xs transition-colors cursor-pointer ${!temporary ? "border-slate-900 bg-slate-100 dark:border-white dark:bg-slate-800" : "border-slate-200 dark:border-slate-700"}`}>
+                  <span className="block font-semibold">Save camera</span>
+                  <span className="mt-0.5 block text-slate-500 dark:text-slate-400">Keep in camera list</span>
+                </button>
+              </div>
+            </div>
+
             <button
               onClick={doTest}
-              disabled={!address || !port || !protocol || loading}
+              disabled={!address.trim() || !port.trim() || !protocol || loading}
               data-testid="test-connection"
-              className="primary-button mt-4 w-full disabled:opacity-50 cursor-pointer"
+              className="primary-button mt-5 w-full disabled:opacity-50 cursor-pointer"
             >
               {loading ? "Testing Connection..." : "Test connection"}
             </button>
@@ -281,7 +309,7 @@ export function ConnectModal() {
               </div>
             )}
             {result && result.result !== "ok" && (
-              <button onClick={() => setStep(2)} className="text-sm underline mt-3 text-neutral-900 dark:text-neutral-200 font-medium cursor-pointer">
+              <button onClick={() => setStep(1)} className="text-sm underline mt-3 text-neutral-900 dark:text-neutral-200 font-medium cursor-pointer">
                 Edit connection
               </button>
             )}
@@ -308,7 +336,7 @@ export function ConnectModal() {
               <button onClick={doSave} disabled={saving} data-testid="continue" className="primary-button flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                 {saving ? "Adding camera..." : "Add camera & go to overview"}
               </button>
-              <button onClick={() => setStep(2)} className="ghost-button cursor-pointer">
+              <button onClick={() => setStep(1)} className="ghost-button cursor-pointer">
                 Edit
               </button>
             </div>

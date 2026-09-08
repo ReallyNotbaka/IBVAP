@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { useCameras, useModels, useWatchlist, useEvents } from "../lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { setCameraFence, useCameras, useModels, useWatchlist, useEvents } from "../lib/api";
 import { CameraTile, type TargetInspectData } from "../components/CameraTile";
 import { AlertRail } from "../components/AlertRail";
 import { HealthBar } from "../components/HealthBar";
@@ -23,6 +25,8 @@ export function Cockpit({
   onOpenWatchlist?: () => void;
   onInspectTarget?: (target: TargetInspectData) => void;
 }) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: cameras = [] } = useCameras();
   const { data: modelData } = useModels();
   const { data: suspects = [] } = useWatchlist();
@@ -40,6 +44,9 @@ export function Cockpit({
 
   // Collapsible Alerts & Suspects Drawer
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fencePoints, setFencePoints] = useState<Record<string, [number, number][]>>({});
+  const [drawingFenceFor, setDrawingFenceFor] = useState<string | null>(null);
+  const [showFence, setShowFence] = useState(false);
 
   const n = cameras.length;
   const soloCamera = solo ? cameras.find((c) => c.id === solo) : null;
@@ -107,6 +114,11 @@ export function Cockpit({
               isSolo={Boolean(soloCamera)}
               onSolo={() => setSolo((prev) => (prev === c.id ? null : c.id))}
               onInspectTarget={onInspectTarget}
+              onStopped={() => navigate("/")}
+              fencePoints={fencePoints[c.id] ?? c.fence?.polygon ?? []}
+              showFence={showFence && Boolean(c.fence?.polygon?.length)}
+              fenceDrawing={drawingFenceFor === c.id}
+              onFencePoint={(point) => setFencePoints((previous) => ({ ...previous, [c.id]: [...(previous[c.id] ?? []), point] }))}
             />
           ))}
         </div>
@@ -116,6 +128,43 @@ export function Cockpit({
           <div className="control-pill-bar mt-3 w-full max-w-[1200px] flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-2xl bg-white/85 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-white/10 shadow-md transition-colors">
             {/* Left: Exit Solo mode when active, or overlay label */}
             <div className="flex items-center gap-2">
+              {n === 1 && (cameras[0]?.fence?.polygon?.length ?? 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFence((visible) => !visible)}
+                  className="secondary-button border border-cyan-300/60 bg-cyan-50 text-cyan-900 dark:border-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-100 cursor-pointer"
+                >
+                  {showFence ? "Hide fence" : "Show fence"}
+                </button>
+              )}
+              {n === 1 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const camera = cameras[0];
+                    setFencePoints((previous) => ({ ...previous, [camera.id]: camera.fence?.polygon ?? [] }));
+                    setDrawingFenceFor((current) => (current === camera.id ? null : camera.id));
+                  }}
+                  className="secondary-button border border-amber-300/60 bg-amber-50 text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 cursor-pointer"
+                >
+                  {drawingFenceFor ? "Finish fence" : "Draw fence"}
+                </button>
+              )}
+              {n === 1 && drawingFenceFor && (fencePoints[drawingFenceFor]?.length ?? 0) >= 3 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const camera = cameras[0];
+                    await setCameraFence(camera.id, fencePoints[camera.id] ?? []);
+                    await qc.invalidateQueries({ queryKey: ["cameras"] });
+                    setDrawingFenceFor(null);
+                    setShowFence(true);
+                  }}
+                  className="primary-button bg-amber-400 text-amber-950 hover:bg-amber-300 cursor-pointer"
+                >
+                  Save fence
+                </button>
+              )}
               {soloCamera ? (
                 <button
                   onClick={() => setSolo(null)}
@@ -370,7 +419,7 @@ export function Cockpit({
 
               {eventList.length === 0 ? (
                 <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 p-4 text-center text-xs text-slate-400">
-                  Perimeter secure • No recent events
+                  No recent events
                 </div>
               ) : (
                 <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">

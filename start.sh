@@ -6,7 +6,7 @@ echo "Starting IBVAP Platform..."
 echo "=================================================================="
 
 if command -v uv >/dev/null 2>&1; then
-    uv run python run.py "$@"
+    uv run --no-sync python run.py "$@"
 elif command -v python3 >/dev/null 2>&1; then
     python3 run.py "$@"
 else

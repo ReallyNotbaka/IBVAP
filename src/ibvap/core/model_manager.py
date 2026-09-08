@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, field
 import gc
-import hashlib
 import logging
-from pathlib import Path
 import threading
 import time
-from typing import Any, Generator
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import httpx
 import numpy as np
 
-from ibvap.core.detector import DetectorProvider, ONNXDetectorProvider
+from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class ModelInfo:
 
 class ThreadSafeDetectorHandle:
     """Thread-safe detector container providing zero-downtime hot-swapping and COM teardown.
-    
+
     Guarantees no race conditions between active frame inferences and session updates.
     """
 
@@ -86,6 +86,7 @@ class ThreadSafeDetectorHandle:
         self._active_model_name = active_model_name
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
+        self._inference_lock = threading.Lock()
         self._active_readers = 0
         self._is_writing = False
 
@@ -99,13 +100,14 @@ class ThreadSafeDetectorHandle:
 
     @contextmanager
     def acquire(self) -> Generator[DetectorProvider, None, None]:
-        """Acquire read access to detector. Multiple worker threads can infer concurrently."""
+        """Acquire detector access with one inference at a time for DirectML safety."""
         with self._cond:
             while self._is_writing:
                 self._cond.wait()
             self._active_readers += 1
         try:
-            yield self._detector
+            with self._inference_lock:
+                yield self._detector
         finally:
             with self._cond:
                 self._active_readers -= 1
@@ -254,30 +256,29 @@ class ModelDownloadManager:
         last_calc_bytes = 0
 
         try:
-            async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
-                async with client.stream("GET", download_url) as response:
-                    if response.status_code != 200:
-                        raise RuntimeError(f"HTTP {response.status_code} from download server")
+            async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client, client.stream("GET", download_url) as response:
+                if response.status_code != 200:
+                    raise RuntimeError(f"HTTP {response.status_code} from download server")
 
-                    total = int(response.headers.get("content-length", meta["size_bytes"]))
-                    prog.total_bytes = total
+                total = int(response.headers.get("content-length", meta["size_bytes"]))
+                prog.total_bytes = total
 
-                    with open(tmp, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size=65536):
-                            f.write(chunk)
-                            prog.downloaded_bytes += len(chunk)
-                            prog.progress_percent = round((prog.downloaded_bytes / max(1, prog.total_bytes)) * 100, 1)
+                with open(tmp, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        f.write(chunk)
+                        prog.downloaded_bytes += len(chunk)
+                        prog.progress_percent = round((prog.downloaded_bytes / max(1, prog.total_bytes)) * 100, 1)
 
-                            now = time.time()
-                            dt = now - last_calc_time
-                            if dt >= 0.25:  # update speed and ETA 4 times/sec
-                                bytes_diff = prog.downloaded_bytes - last_calc_bytes
-                                speed_bps = bytes_diff / dt
-                                prog.speed_mbps = round((speed_bps * 8) / (1024 * 1024), 2)
-                                remaining_bytes = max(0, prog.total_bytes - prog.downloaded_bytes)
-                                prog.eta_seconds = round(remaining_bytes / max(1.0, speed_bps), 1)
-                                last_calc_time = now
-                                last_calc_bytes = prog.downloaded_bytes
+                        now = time.time()
+                        dt = now - last_calc_time
+                        if dt >= 0.25:  # update speed and ETA 4 times/sec
+                            bytes_diff = prog.downloaded_bytes - last_calc_bytes
+                            speed_bps = bytes_diff / dt
+                            prog.speed_mbps = round((speed_bps * 8) / (1024 * 1024), 2)
+                            remaining_bytes = max(0, prog.total_bytes - prog.downloaded_bytes)
+                            prog.eta_seconds = round(remaining_bytes / max(1.0, speed_bps), 1)
+                            last_calc_time = now
+                            last_calc_bytes = prog.downloaded_bytes
 
             prog.status = "verifying"
             # Verify file has non-zero content
@@ -324,9 +325,6 @@ def get_shared_detector_handle() -> ThreadSafeDetectorHandle:
     if _GLOBAL_DETECTOR_HANDLE is None:
         # Check if default yolo26n exists, otherwise fallback to MockPersonDetector
         p = Path("models/yolo26n.onnx")
-        if p.exists():
-            initial = ONNXDetectorProvider(str(p))
-        else:
-            initial = MockPersonDetector(model_id="yolo26n")
+        initial = ONNXDetectorProvider(str(p)) if p.exists() else MockPersonDetector(model_id="yolo26n")
         _GLOBAL_DETECTOR_HANDLE = ThreadSafeDetectorHandle(initial, active_model_name="yolo26n")
     return _GLOBAL_DETECTOR_HANDLE

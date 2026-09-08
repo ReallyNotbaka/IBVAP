@@ -10,6 +10,10 @@ uv sync --frozen
 uv run ibvap --help
 ```
 
+ANPR uses PaddleOCR on `gpu:0` by default. Install the matching PaddlePaddle GPU
+wheel for the host from the official PaddlePaddle instructions before starting
+the backend; set `IBVAP_ANPR_DEVICE=cpu` only for a deliberate CPU fallback.
+
 ## Dev
 
 ```bash

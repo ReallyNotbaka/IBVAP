@@ -12,6 +12,7 @@ export type Camera = {
   source_type?: string;
   protocol?: string;
   temporary?: boolean;
+  fence?: { polygon: [number, number][]; enabled: boolean; name?: string };
 };
 
 export type PlaybackState = {
@@ -95,6 +96,7 @@ export type CameraObservations = {
   frame_at: number | null;
   faces?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; quality_passed: boolean }>;
   plates?: Array<{ text: string; confidence: number }>;
+  plate_detections?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; vehicle_class: string; track_id?: number; text?: string }>;
   night?: { is_night: boolean; illumination_score: number; motion_area: number; confidence: number; limitation: string };
 };
 
@@ -353,6 +355,16 @@ export async function controlPlayback(id: string, action: "pause" | "resume" | "
   const r = await fetch(base(`/api/v1/cameras/${id}/playback/${action}`), { method: "POST" });
   if (!r.ok) throw new Error(`playback ${r.status}`);
   return (await r.json()) as PlaybackState;
+}
+
+export async function setCameraFence(id: string, polygon: [number, number][], enabled = true): Promise<Camera> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/fence`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ polygon, enabled }),
+  });
+  if (!r.ok) throw new Error(`fence ${r.status}`);
+  return (await r.json()) as Camera;
 }
 
 export async function seekPlayback(id: string, positionSeconds: number): Promise<PlaybackState> {

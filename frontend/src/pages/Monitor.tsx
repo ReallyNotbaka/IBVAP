@@ -77,7 +77,7 @@ export function Monitor() {
         </div>
       </div>
       <div className="mx-auto max-w-6xl px-6 pb-6 text-xs text-slate-400">
-        System operational. Real-time vision analytics and event processing active.
+        Status available.
       </div>
     </div>
   );

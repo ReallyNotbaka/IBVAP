@@ -152,11 +152,13 @@ test.describe('IBVAP Frontend E2E Test Suite', () => {
     const html = page.locator('html');
     const wasDark = await html.evaluate((el) => el.classList.contains('dark'));
     await themeToggle.click();
+    await page.waitForTimeout(1200);
     const isNowDark = await html.evaluate((el) => el.classList.contains('dark'));
     expect(isNowDark).toBe(!wasDark);
 
     // Toggle back
     await themeToggle.click();
+    await page.waitForTimeout(1200);
     const isRestored = await html.evaluate((el) => el.classList.contains('dark'));
     expect(isRestored).toBe(wasDark);
   });

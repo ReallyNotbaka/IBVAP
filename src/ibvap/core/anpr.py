@@ -5,10 +5,13 @@ Morphological plate localization + OCR text recognition + multi-frame consensus.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -124,35 +127,17 @@ PlateDetectorStub = PlateDetector
 
 
 class OCRReader:
-    """Character segmentation and template/morphological text recognition for plate crops."""
+    """PaddleOCR-backed text recognition for plate crops."""
 
     def __init__(
         self,
         ocr_engine: Callable[[np.ndarray], list[PlateCandidate]] | None = None,
+        device: str | None = None,
     ) -> None:
         self.ocr_engine = ocr_engine
-        self.templ_w = 20
-        self.templ_h = 28
-        self.templates = self._build_templates()
-
-    def _build_templates(self) -> dict[str, list[np.ndarray]]:
-        """Pre-compute normalized character glyph templates for fast matching."""
-        templates: dict[str, list[np.ndarray]] = {}
-        for ch in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-            t_list: list[np.ndarray] = []
-            for font in (cv2.FONT_HERSHEY_SIMPLEX, cv2.FONT_HERSHEY_DUPLEX):
-                for scale in (0.7, 1.0):
-                    for thick in (1, 2):
-                        timg = np.zeros((80, 80), dtype=np.uint8)
-                        cv2.putText(timg, ch, (15, 60), font, scale, 255, thick)
-                        cnts, _ = cv2.findContours(timg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                        if cnts:
-                            x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
-                            if w > 0 and h > 0:
-                                glyph = timg[y : y + h, x : x + w]
-                                t_list.append(cv2.resize(glyph, (self.templ_w, self.templ_h)))
-            templates[ch] = t_list
-        return templates
+        self.device = device or os.getenv("IBVAP_ANPR_DEVICE", "gpu:0")
+        self._paddle_ocr: Any = None
+        self._paddle_unavailable = False
 
     def check_quality(self, crop: np.ndarray) -> float:
         """Compute Laplacian blur variance as a sharpness/quality score."""
@@ -178,75 +163,62 @@ class OCRReader:
         if self.ocr_engine is not None:
             return self.ocr_engine(plate_crop)
 
-        if len(plate_crop.shape) == 3 and plate_crop.shape[2] == 3:
-            gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
-        elif len(plate_crop.shape) == 3 and plate_crop.shape[2] == 1:
-            gray = plate_crop[:, :, 0]
-        else:
-            gray = plate_crop
-
-        mean_val = float(np.mean(gray))
-        if mean_val > 120:
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        else:
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        cnts, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        ch, cw = plate_crop.shape[:2]
-
-        char_boxes: list[tuple[int, int, int, int]] = []
-        for c in cnts:
-            cx, cy, cbw, cbh = cv2.boundingRect(c)
-            if 0.20 * ch <= cbh <= 0.98 * ch and 3 <= cbw <= 0.40 * cw and (cbw * cbh) < (0.75 * ch * cw):
-                char_boxes.append((cx, cy, cbw, cbh))
-
-        # Filter nested bounding boxes (e.g. holes inside 0, 8, B, D)
-        filtered_boxes: list[tuple[int, int, int, int]] = []
-        for i, b1 in enumerate(char_boxes):
-            contained = False
-            for j, b2 in enumerate(char_boxes):
-                if i != j and b1[0] >= b2[0] and b1[1] >= b2[1] and (b1[0] + b1[2]) <= (b2[0] + b2[2]) and (b1[1] + b1[3]) <= (b2[1] + b2[3]):
-                    contained = True
-                    break
-            if not contained:
-                filtered_boxes.append(b1)
-
-        # Sort characters left-to-right
-        filtered_boxes.sort(key=lambda b: b[0])
-        if len(filtered_boxes) < 4:
+        if self._paddle_unavailable:
             return []
 
-        chars: list[str] = []
-        confs: list[float] = []
+        try:
+            if self._paddle_ocr is None:
+                if "torch" not in sys.modules:
+                    sys.modules["torch"] = None
+                from paddleocr import PaddleOCR
 
-        for cx, cy, cbw, cbh in filtered_boxes:
-            char_crop = binary[cy : cy + cbh, cx : cx + cbw]
-            char_resized = cv2.resize(char_crop, (self.templ_w, self.templ_h))
+                self._paddle_ocr = PaddleOCR(
+                    lang="en",
+                    device=self.device,
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    use_textline_orientation=False,
+                )
 
-            best_char = "?"
-            best_score = -1.0
-            for ch_name, t_arrs in self.templates.items():
-                for templ in t_arrs:
-                    res = cv2.matchTemplate(char_resized, templ, cv2.TM_CCOEFF_NORMED)
-                    score = float(res[0][0])
-                    if score > best_score:
-                        best_score = score
-                        best_char = ch_name
+            results = self._paddle_ocr.predict(input=plate_crop)
+        except Exception:
+            self._paddle_unavailable = True
+            return []
+        candidates: list[PlateCandidate] = []
+        for result in results:
+            if isinstance(result, Mapping):
+                data: Mapping[str, Any] = result
+            else:
+                json_value = getattr(result, "json", None)
+                parsed = json_value() if callable(json_value) else json_value
+                if not isinstance(parsed, Mapping):
+                    continue
+                data = parsed
+            texts = data.get("rec_texts", [])
+            scores = data.get("rec_scores", [])
+            boxes = data.get("rec_boxes", [])
+            for index, text in enumerate(texts):
+                confidence = float(scores[index]) if index < len(scores) else 0.0
+                box = boxes[index] if index < len(boxes) else None
+                bbox_norm = self._normalize_box(box, plate_crop.shape[1], plate_crop.shape[0])
+                candidates.append(PlateCandidate(normalize_plate(str(text)), confidence, quality, bbox_norm))
+        return candidates
 
-            chars.append(best_char)
-            confs.append(max(0.0, best_score))
-
-        raw_text = "".join(chars)
-        avg_conf = float(np.mean(confs)) if confs else 0.0
-
-        return [
-            PlateCandidate(
-                text=raw_text,
-                confidence=avg_conf,
-                quality=quality,
-                bbox_norm=(0.0, 0.0, 1.0, 1.0),
-            )
-        ]
+    @staticmethod
+    def _normalize_box(box: Any, width: int, height: int) -> tuple[float, float, float, float]:
+        if box is None:
+            return (0.0, 0.0, 1.0, 1.0)
+        coords = np.asarray(box).reshape(-1, 2)
+        if len(coords) < 2:
+            return (0.0, 0.0, 1.0, 1.0)
+        x1, y1 = coords.min(axis=0)
+        x2, y2 = coords.max(axis=0)
+        return (
+            max(0.0, min(1.0, float(x1) / width)),
+            max(0.0, min(1.0, float(y1) / height)),
+            max(0.0, min(1.0, float(x2) / width)),
+            max(0.0, min(1.0, float(y2) / height)),
+        )
 
 
 OCRStub = OCRReader

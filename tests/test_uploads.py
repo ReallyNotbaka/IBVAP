@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import cv2
 from fastapi.testclient import TestClient
 
@@ -39,6 +37,11 @@ def test_upload_happy_path_and_promote() -> None:
     assert resp.status_code == 200
     assert resp.json()["status"] == "promoted"
 
+    resp = c.delete(f"/api/v1/uploads/{upload_id}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "deleted"
+    assert c.get(f"/api/v1/uploads/{upload_id}").status_code == 404
+
 
 def test_upload_rejects_html_masquerading_as_mp4() -> None:
     c = _client()
@@ -46,10 +49,9 @@ def test_upload_rejects_html_masquerading_as_mp4() -> None:
     assert resp.status_code == 400
 
 
-def test_video_footage_can_be_tested_and_saved() -> None:
+def test_video_footage_can_be_tested_and_saved(tmp_path) -> None:
     c = _client()
-    video_path = Path("tests/fixtures/test-footage.mp4")
-    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path = tmp_path / "test-footage.mp4"
     writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
     assert writer.isOpened()
     frame = 255 * __import__("numpy").ones((64, 64, 3), dtype="uint8")

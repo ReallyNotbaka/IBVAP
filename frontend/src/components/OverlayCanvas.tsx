@@ -12,6 +12,7 @@ export interface Box {
   targetName?: string;
   threatLevel?: string;
   isCritical?: boolean;
+  isPlate?: boolean;
 }
 
 interface ColorTheme {
@@ -22,7 +23,7 @@ interface ColorTheme {
   border: string;
 }
 
-function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean): ColorTheme {
+function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean, isPlate?: boolean): ColorTheme {
   if (isAlert || isCritical) {
     return {
       primary: "#ef4444", // Vivid Crimson for true security alerts & critical targets
@@ -30,6 +31,16 @@ function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean): 
       bg: "rgba(185, 28, 28, 0.96)", // Deep tactical crimson badge background
       accent: "#ffffff",
       border: "rgba(239, 68, 68, 0.9)",
+    };
+  }
+
+  if (isPlate) {
+    return {
+      primary: "#22d3ee",
+      halo: "rgba(0, 15, 25, 0.95)",
+      bg: "rgba(8, 47, 73, 0.96)",
+      accent: "#cffafe",
+      border: "rgba(34, 211, 238, 0.9)",
     };
   }
 
@@ -45,13 +56,13 @@ function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean): 
     };
   }
 
-  // Normal pedestrians, vehicles, and general objects: elegant quiet champagne/neutral
+  // High-contrast lime stays legible over daylight, road, and night footage.
   return {
-    primary: "#dfd5c6",
-    halo: "rgba(0, 0, 0, 0.85)",
-    bg: "rgba(18, 21, 28, 0.90)",
-    accent: "#dfd5c6",
-    border: "rgba(223, 213, 198, 0.35)",
+    primary: "#a3e635",
+    halo: "rgba(0, 15, 0, 0.95)",
+    bg: "rgba(20, 55, 10, 0.94)",
+    accent: "#ecfccb",
+    border: "rgba(163, 230, 53, 0.85)",
   };
 }
 
@@ -117,7 +128,7 @@ export function OverlayCanvas({
       </defs>
 
       {filteredBoxes.map((b, idx) => {
-        const theme = getColorTheme(b.label, b.isAlert, b.isCritical);
+        const theme = getColorTheme(b.label, b.isAlert, b.isCritical, b.isPlate);
         const bx = b.x * 100;
         const by = b.y * 100;
         const bw = b.w * 100;
@@ -133,6 +144,8 @@ export function OverlayCanvas({
         // Micro-badge sizing and text formatting: clearly display target's name
         const formattedLabel = b.targetName
           ? (b.isCritical ? `CRITICAL: [${b.targetName}]` : `[${b.targetName}]`)
+          : b.isPlate
+          ? b.label.toUpperCase()
           : b.isAlert
           ? b.label
           : b.label.charAt(0).toUpperCase() + b.label.slice(1).toLowerCase();
