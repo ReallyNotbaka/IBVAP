@@ -120,7 +120,8 @@ body, .topbar, .panel, .tile, .card, input, select, button, header, nav, aside, 
 html, body, #root {
   min-height: 100%;
   margin: 0;
-  background: var(--bg-gradient);
+  background-color: var(--bg);
+  background-image: var(--bg-gradient);
   color: var(--text);
 }
 

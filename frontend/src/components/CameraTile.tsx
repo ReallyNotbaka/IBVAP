@@ -240,6 +240,10 @@ export function CameraTile({
     }
   })();
 
+  if (smoothedCoordsRef.current.size > 50) {
+    smoothedCoordsRef.current.clear();
+  }
+
   const boxes: Box[] = (observations?.tracks ?? observations?.detections ?? [])
     .filter((item) => {
       const isIdentified = "identity" in item && Boolean((item as any).identity?.name);
@@ -337,11 +341,40 @@ export function CameraTile({
         )
         .map((face, fIdx) => {
           const rawBbox = face.bbox_norm;
-          const faceKey = `face-${fIdx}`;
+          let faceKey =
+            face.track_id !== undefined && face.track_id !== null
+              ? `face-track-${face.track_id}`
+              : "";
+          if (!faceKey) {
+            let bestDist = 0.08;
+            let bestKey = "";
+            const fcx = (rawBbox[0] + rawBbox[2]) / 2;
+            const fcy = (rawBbox[1] + rawBbox[3]) / 2;
+            for (const [k, p] of smoothedCoordsRef.current.entries()) {
+              if (k.startsWith("face-untracked-")) {
+                const pcx = (p[0] + p[2]) / 2;
+                const pcy = (p[1] + p[3]) / 2;
+                const d = Math.hypot(fcx - pcx, fcy - pcy);
+                if (d < bestDist) {
+                  bestDist = d;
+                  bestKey = k;
+                }
+              }
+            }
+            faceKey = bestKey || `face-untracked-${fIdx}`;
+          }
+
           const prev = smoothedCoordsRef.current.get(faceKey);
           let smoothed = rawBbox;
           if (prev) {
-            const alpha = 0.25;
+            const cx = (rawBbox[0] + rawBbox[2]) / 2;
+            const cy = (rawBbox[1] + rawBbox[3]) / 2;
+            const pcx = (prev[0] + prev[2]) / 2;
+            const pcy = (prev[1] + prev[3]) / 2;
+            const dist = Math.hypot(cx - pcx, cy - pcy);
+
+            // Sub-pixel jitter deadband and velocity-adaptive filter
+            const alpha = dist < 0.006 ? 0.15 : dist < 0.03 ? 0.35 : dist < 0.12 ? 0.70 : 0.95;
             smoothed = [
               (1 - alpha) * prev[0] + alpha * rawBbox[0],
               (1 - alpha) * prev[1] + alpha * rawBbox[1],
@@ -358,6 +391,7 @@ export function CameraTile({
             h: y2 - y1,
             label: "face",
             confidence: face.confidence,
+            trackId: face.track_id !== undefined && face.track_id !== null ? String(face.track_id) : undefined,
             isAlert: false,
           };
         })
@@ -407,9 +441,14 @@ export function CameraTile({
   const deduped: Box[] = [];
   for (const box of [...vehicleBoxesWithPlates, ...faceBoxes, ...unmatchedPlateBoxes]) {
     const overlapIndex = deduped.findIndex((existing) => {
+      // Don't suppress a face with a vehicle/person body or vice versa
       if (existing.label === "face" && box.label !== "face") return false;
       if (existing.label !== "face" && box.label === "face") return false;
       if (existing.isPlate || box.isPlate) return false;
+
+      // Exact track ID match
+      if (existing.trackId && box.trackId && existing.trackId === box.trackId) return true;
+
       const xOverlap = Math.max(
         0,
         Math.min(existing.x + existing.w, box.x + box.w) -
@@ -421,8 +460,13 @@ export function CameraTile({
           Math.max(existing.y, box.y)
       );
       const overlapArea = xOverlap * yOverlap;
-      const area = Math.min(existing.w * existing.h, box.w * box.h);
-      return area > 0 && overlapArea / area > 0.65;
+      const minArea = Math.min(existing.w * existing.h, box.w * box.h);
+      const unionArea = existing.w * existing.h + box.w * box.h - overlapArea;
+      const iou = unionArea > 0 ? overlapArea / unionArea : 0;
+      const containment = minArea > 0 ? overlapArea / minArea : 0;
+
+      // Deduplicate if IoU > 0.35 or one box is >50% contained within another
+      return iou > 0.35 || containment > 0.50;
     });
 
     if (overlapIndex === -1) {
@@ -431,6 +475,8 @@ export function CameraTile({
       const existing = deduped[overlapIndex];
       // Critical targets and security alerts must never be suppressed by non-alerts
       if ((box.isAlert || box.isCritical) && (!existing.isAlert && !existing.isCritical)) {
+        deduped[overlapIndex] = box;
+      } else if ((box.confidence ?? 0) > (existing.confidence ?? 0) && !existing.isAlert && !existing.isCritical) {
         deduped[overlapIndex] = box;
       }
     }
@@ -600,7 +646,6 @@ export function CameraTile({
               ref={imgRef}
               src={streamUrl}
               alt={camera.name}
-              crossOrigin="anonymous"
               className="w-full h-full object-contain block select-none"
               onLoad={(e) => {
                 const img = e.currentTarget;

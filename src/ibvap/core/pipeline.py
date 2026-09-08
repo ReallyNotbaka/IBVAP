@@ -11,9 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ibvap.config import Settings
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
-from ibvap.core.face import check_identity_gate_passed
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker
@@ -88,7 +86,7 @@ class MiniPipeline:
 
         if face_recognizer is not None:
             self.face_recognizer = face_recognizer
-        elif enable_face and check_identity_gate_passed(Settings()) and Path("models/face_recognition_sface_2021dec.onnx").exists():
+        elif enable_face and Path("models/face_recognition_sface_2021dec.onnx").exists():
             try:
                 from ibvap.core.face import FaceRecognizer
                 self.face_recognizer = FaceRecognizer()
@@ -191,13 +189,12 @@ class MiniPipeline:
                     pass
 
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
-        recognition_faces = [face for face in self.last_faces if face.get("quality_passed", False)]
-        if new_faces_detected and recognition_faces and self.face_recognizer is not None:
+        if new_faces_detected and self.last_faces and self.face_recognizer is not None:
             try:
                 from ibvap.core.association import associate_faces_to_tracks
                 from ibvap.core.watchlist import get_watchlist_store
 
-                assignments = associate_faces_to_tracks(tracks, recognition_faces)
+                assignments = associate_faces_to_tracks(tracks, self.last_faces)
                 wl_store = get_watchlist_store()
                 crop_frame = getattr(self, "_last_face_frame", frame)
                 for trk_id, face_info in assignments.items():

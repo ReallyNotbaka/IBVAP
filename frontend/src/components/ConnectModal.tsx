@@ -50,13 +50,83 @@ export function ConnectModal() {
 
   if (!open) return null;
 
+  const applyPreset = (presetAddr: string, presetPort: string, presetProto: string, presetPath: string) => {
+    setAddress(presetAddr);
+    setPort(presetPort);
+    setProtocol(presetProto);
+    setStreamPath(presetPath);
+    setResult(null);
+    setSaveError("");
+  };
+
+  const handleAddressChange = (raw: string) => {
+    const trimmed = raw.trim();
+    let candidate = trimmed;
+    if (!candidate.includes("://") && (candidate.includes(":") || candidate.includes("/"))) {
+      candidate = "http://" + candidate;
+    }
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.hostname) {
+        setAddress(parsed.hostname);
+        if (parsed.port) {
+          setPort(parsed.port);
+          if (parsed.port === "4747" || parsed.port === "8080") {
+            setProtocol("http");
+            setStreamPath(parsed.pathname.replace(/^\/+/, "") || "video");
+          } else if (parsed.port === "554") {
+            setProtocol("rtsp");
+          }
+        }
+        if (parsed.protocol && ["http:", "https:", "rtsp:", "rtsps:"].includes(parsed.protocol)) {
+          setProtocol(parsed.protocol.replace(":", ""));
+        }
+        const p = parsed.pathname.replace(/^\/+/, "");
+        if (p) setStreamPath(p);
+        return;
+      }
+    } catch {
+      // fallback to plain input
+    }
+    setAddress(raw);
+  };
+
+  const handlePortChange = (val: string) => {
+    const clean = val.replace(/\D/g, "");
+    setPort(clean);
+    if (clean === "4747" || clean === "8080") {
+      if (!protocol) setProtocol("http");
+      if (!streamPath) setStreamPath("video");
+    } else if (clean === "554") {
+      if (!protocol) setProtocol("rtsp");
+    }
+  };
+
   async function doTest() {
-    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
-    if (!address.trim() || !port.trim() || !protocol) {
+    const cleanAddress = address.trim();
+    const cleanPort = port.trim();
+    let cleanProtocol = protocol.trim();
+    let cleanPath = streamPath.trim().replace(/^\/+/, "");
+
+    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanProtocol) {
+      cleanProtocol = "http";
+      setProtocol("http");
+    } else if (cleanPort === "554" && !cleanProtocol) {
+      cleanProtocol = "rtsp";
+      setProtocol("rtsp");
+    }
+    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
+      cleanPath = "video";
+      setStreamPath("video");
+    }
+
+    if (!cleanAddress || !cleanPort || !cleanProtocol) {
       setResult({ result: "error", safe_message: "Enter the device IP, port, and protocol before testing.", stages: [] });
       setStep(1);
       return;
     }
+
+    const endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
 
     setLoading(true);
     setStep(3);
@@ -77,7 +147,20 @@ export function ConnectModal() {
   }
 
   async function doSave() {
-    const endpoint = `${protocol}://${address.trim()}:${port.trim()}${streamPath.trim() ? `/${streamPath.trim().replace(/^\/+/, "")}` : ""}`;
+    const cleanAddress = address.trim();
+    const cleanPort = port.trim();
+    let cleanProtocol = protocol.trim() || ((cleanPort === "4747" || cleanPort === "8080") ? "http" : cleanPort === "554" ? "rtsp" : "http");
+    let cleanPath = streamPath.trim().replace(/^\/+/, "");
+    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
+      cleanPath = "video";
+    }
+
+    const endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
+    const isPhone = cleanPort === "4747" || cleanPort === "8080" || cleanPath.toLowerCase().includes("video");
+    const cameraName = cleanPort === "4747"
+      ? `Phone Camera (${cleanAddress})`
+      : `Camera ${cleanAddress || (Date.now() % 1000)}`;
+
     setSaving(true);
     setSaveError("");
     try {
@@ -87,9 +170,9 @@ export function ConnectModal() {
         username: username || undefined,
         password: password || undefined,
         site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-        name: `Camera ${Date.now() % 1000}`,
-        source_type: "ip_camera",
-        protocol,
+        name: cameraName,
+        source_type: isPhone ? "smartphone_ip_webcam" : "ip_camera",
+        protocol: cleanProtocol as any,
         temporary,
       });
       await qc.invalidateQueries({ queryKey: ["cameras"] });
@@ -110,18 +193,18 @@ export function ConnectModal() {
 
   return (
     <div
-      className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md grid place-items-center p-6 z-50 modal-backdrop-animate"
+      className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md grid place-items-center p-4 sm:p-6 z-50 modal-backdrop-animate overflow-y-auto"
       onClick={() => nav("/")}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-camera-title"
-        className="modal-content-animate w-full max-w-xl rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-white/10 p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors"
+        className="modal-content-animate w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-white/10 p-5 sm:p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4 mb-5">
+        <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3.5 mb-4">
           <div className="flex items-center gap-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-lg shadow-sm">
               <CameraIcon className="w-5 h-5 text-slate-700 dark:text-slate-300" />
@@ -131,7 +214,7 @@ export function ConnectModal() {
                 <span id="connect-camera-title">Connect Camera Source</span>
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Add a CCTV, IP camera, or network video source
+                Add a live phone camera over Wi-Fi, IP camera, or CCTV feed
               </p>
             </div>
           </div>
@@ -160,11 +243,55 @@ export function ConnectModal() {
 
         {step === 1 && (
           <>
+            {/* Quick Source Presets */}
+            <div className="mb-3.5 rounded-xl border border-slate-200 bg-slate-50/90 p-3.5 dark:border-slate-700 dark:bg-slate-950/60">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Quick Source Presets
+                </span>
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Wi-Fi Stream Boosted
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => applyPreset("10.80.5.52", "4747", "http", "video")}
+                  data-testid="preset-phone-live"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                >
+                  <span>⚡ Live Phone (10.80.5.52:4747)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset(address || "10.80.5.52", "4747", "http", "video")}
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  DroidCam (:4747)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset(address || "192.168.1.10", "8080", "http", "video")}
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  IP Webcam (:8080)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset(address || "192.168.1.100", "554", "rtsp", "stream1")}
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  RTSP CCTV (:554)
+                </button>
+              </div>
+            </div>
+
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950/60">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Source details</h3>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Enter the network details for your camera.</p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Enter the network details for your camera or select a preset.</p>
                 </div>
                 <span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 shadow-sm dark:bg-slate-800 dark:text-slate-400">Required</span>
               </div>
@@ -172,18 +299,7 @@ export function ConnectModal() {
                 Device IP address
                 <input
                   value={address}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    try {
-                      const parsed = new URL(value);
-                      setProtocol(parsed.protocol.replace(":", ""));
-                      setAddress(parsed.hostname);
-                      setPort(parsed.port);
-                      setStreamPath(parsed.pathname.replace(/^\/+/, "") || "video");
-                    } catch {
-                      setAddress(value);
-                    }
-                  }}
+                  onChange={(e) => handleAddressChange(e.target.value)}
                   placeholder="Device IP address"
                   data-testid="stream-url"
                   autoFocus
@@ -193,7 +309,7 @@ export function ConnectModal() {
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
                   Port
-                  <input value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))} placeholder="Port" inputMode="numeric" data-testid="camera-port" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-slate-300 dark:focus:ring-white/10" />
+                  <input value={port} onChange={(e) => handlePortChange(e.target.value)} placeholder="Port" inputMode="numeric" data-testid="camera-port" className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm font-normal text-slate-900 placeholder-slate-400 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:placeholder-slate-500 dark:focus:border-slate-300 dark:focus:ring-white/10" />
                 </label>
                 <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
                   Protocol

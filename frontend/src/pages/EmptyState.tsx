@@ -15,7 +15,7 @@ export function EmptyState({
           Connect your first source
         </h1>
         <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          Connect an RTSP or IP camera, or analyze video footage directly.
+          Connect a live smartphone camera over Wi-Fi, an RTSP/IP CCTV camera, or analyze video footage directly.
         </p>
 
         {/* Feature Highlights with sleek icons */}
@@ -51,7 +51,7 @@ export function EmptyState({
               className="inline-flex h-12 items-center justify-center gap-2.5 rounded-xl bg-slate-900 hover:bg-black text-white dark:bg-white dark:hover:bg-slate-100 dark:text-slate-950 px-6 text-sm font-semibold shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 cursor-pointer"
             >
               <CameraIcon className="w-4 h-4" />
-              <span>Connect CCTV / IP camera</span>
+              <span>Connect phone / CCTV camera</span>
             </button>
           ) : (
             <a
@@ -60,7 +60,7 @@ export function EmptyState({
               className="inline-flex h-12 items-center justify-center gap-2.5 rounded-xl bg-slate-900 hover:bg-black text-white dark:bg-white dark:hover:bg-slate-100 dark:text-slate-950 px-6 text-sm font-semibold shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 text-center"
             >
               <CameraIcon className="w-4 h-4" />
-              <span>Connect CCTV / IP camera</span>
+              <span>Connect phone / CCTV camera</span>
             </a>
           )}
           <a

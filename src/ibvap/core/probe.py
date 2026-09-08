@@ -9,8 +9,21 @@ import contextlib
 import hashlib
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 
 import av
+
+
+def normalize_mjpeg_url(url: str) -> str:
+    """Normalize stream URL, ensuring DroidCam (4747) and IP Webcam (8080) endpoints target the video feed."""
+    try:
+        parsed = urlparse(url)
+        path = parsed.path.lower().rstrip("/")
+        if parsed.port in (4747, 8080) and not path:
+            return urlunparse(parsed._replace(path="/video"))
+    except Exception:
+        pass
+    return url
 
 
 @dataclass(frozen=True)
@@ -50,6 +63,7 @@ def probe_url(
 
     Raises ProbeError on unsupported codec / no video track / timeout.
     """
+    url = normalize_mjpeg_url(url)
     start = time.monotonic()
     # FFmpeg-level network timeout in microseconds.
     # Do NOT pass timeout= kwarg to av.open() — PyAV's I/O callback
@@ -62,10 +76,36 @@ def probe_url(
         "analyzeduration": us,  # limit format analysis time
         "probesize": "500000",  # 500KB probe buffer (enough for MJPEG headers)
     }
-    try:
-        container = av.open(url, options=opts)
-    except Exception as e:
-        raise ProbeError(f"Failed to open: {e}", code="open_failed") from e
+    parsed_url = urlparse(url)
+    path = parsed_url.path.lower().rstrip("/")
+    is_ip_webcam_mjpeg = (
+        path in {"/video", "/videofeed", "/mjpegfeed"}
+        or parsed_url.port == 4747
+        or parsed_url.scheme == "mjpeg"
+        or path.endswith((".mjpg", ".mjpeg"))
+    )
+
+    container = None
+    max_open_attempts = 3 if is_ip_webcam_mjpeg else 1
+    for attempt in range(max_open_attempts):
+        try:
+            # IP Webcam / DroidCam serves an endless multipart/x-mixed-replace response.
+            # Explicit mpjpeg demuxer avoids format probing delays and network timeouts.
+            container = (
+                av.open(url, format="mpjpeg", options=opts)
+                if is_ip_webcam_mjpeg
+                else av.open(url, options=opts)
+            )
+            break
+        except Exception as e:
+            # Only retry transient I/O / socket busy errors on phone streams
+            if attempt < max_open_attempts - 1 and isinstance(e, (av.error.InvalidDataError, av.error.EOFError, ConnectionResetError)):
+                time.sleep(0.4)
+                continue
+            raise ProbeError(f"Failed to open: {e}", code="open_failed") from e
+
+    if container is None:
+        raise ProbeError("Failed to open container", code="open_failed")
 
     try:
         # Use context manager? av.Container supports closing

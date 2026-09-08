@@ -208,7 +208,7 @@
         <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <div class="mermaid">
 flowchart LR
-    A["1. Camera Connected\n(Phone: 10.53.109.95)"] --> B["2. Smooth Vector HUD\n(Person #1 • Face 91%)"]
+    A["1. Camera Connected\n(Phone: 10.80.5.52)"] --> B["2. Smooth Vector HUD\n(Person #1 • Face 91%)"]
     B --> C["3. Subject Crosses Zone\n(Footpoint in Polygon)"]
     C --> D["4. High-Urgency Alert\n(ZONE INTRUSION 92%)"]
     D --> E["5. Expand/Contract Drawer\n(Clean Audit Log)"]
@@ -254,7 +254,7 @@ flowchart LR
 graph TD
     subgraph S1 [1. Ingestion Layer]
         C1["Legacy CCTV / RTSP"] --> AV["PyAV Async Demuxer\n(cameras.py:42-135)"]
-        C2["DroidCam / Smartphone\n(10.53.109.95:4747)"] --> AV
+        C2["DroidCam / Smartphone\n(10.80.5.52:4747)"] --> AV
         C3["Static Video Uploads"] --> AV
     end
 

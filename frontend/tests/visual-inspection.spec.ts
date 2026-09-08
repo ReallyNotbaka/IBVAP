@@ -4,6 +4,20 @@ import path from 'path';
 test.describe('Visual Inspection & Bespoke Polish Suite', () => {
   test('inspects Cockpit, Video Overlay, Quick Inspector, Watchlist & Model Modals in Dark and Light Modes', async ({ page }) => {
     // Setup rich mocks
+    await page.route('**/api/v1/cameras/*/stream*', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'image/jpeg',
+        body: Buffer.from('data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'),
+      })
+    );
+    await page.route('**/api/v1/models', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([]),
+      })
+    );
     await page.route('**/api/v1/cameras', (route) =>
       route.fulfill({
         status: 200,
@@ -81,7 +95,7 @@ test.describe('Visual Inspection & Bespoke Polish Suite', () => {
     expect(['rgb(11, 13, 17)', 'rgb(12, 14, 18)', 'rgb(21, 21, 21)']).toContain(darkBg);
 
     // Verify overlay corner brackets and stroke
-    const cornerPath = page.locator('svg path[stroke="#dfd5c6"]').first();
+    const cornerPath = page.locator('svg path[stroke="#e8dfd2"], svg path[stroke="#dfd5c6"]').first();
     await expect(cornerPath).toBeVisible();
 
     // Verify Quick Inspector on target click (Dark Mode)

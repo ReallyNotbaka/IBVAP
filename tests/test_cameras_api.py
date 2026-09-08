@@ -1,12 +1,44 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 from ibvap.api.app import create_app
+from ibvap.core import probe as probe_module
 
 
 def _client() -> TestClient:
     return TestClient(create_app())
+
+
+def test_ip_webcam_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
+    calls = []
+
+    def fake_open(url: Any, **kwargs: Any):
+        calls.append((url, kwargs))
+        raise RuntimeError("stop after inspecting options")
+
+    monkeypatch.setattr(probe_module.av, "open", fake_open)
+
+    try:
+        probe_module.probe_url("http://192.168.1.20:8080/video", timeout=3)
+    except probe_module.ProbeError as error:
+        assert error.code == "open_failed"
+    assert calls == [
+        (
+            "http://192.168.1.20:8080/video",
+            {
+                "format": "mpjpeg",
+                "options": {
+                    "timeout": "3000000",
+                    "stimeout": "3000000",
+                    "analyzeduration": "3000000",
+                    "probesize": "500000",
+                },
+            },
+        )
+    ]
 
 
 def test_unsaved_test_blocks_credential_in_url() -> None:
@@ -170,3 +202,31 @@ def test_create_rejects_private_endpoint_without_allowlist() -> None:
     )
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "blocked_private"
+
+
+def test_droidcam_port_4747_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
+    calls = []
+
+    def fake_open(url: Any, **kwargs: Any):
+        calls.append((url, kwargs))
+        raise RuntimeError("stop after inspecting options")
+
+    monkeypatch.setattr(probe_module.av, "open", fake_open)
+
+    try:
+        probe_module.probe_url("http://10.80.5.52:4747", timeout=3)
+    except probe_module.ProbeError as error:
+        assert error.code == "open_failed"
+    assert len(calls) == 1
+    assert calls[0][0] == "http://10.80.5.52:4747/video"
+    assert calls[0][1]["format"] == "mpjpeg"
+
+
+def test_normalize_mjpeg_url() -> None:
+    assert probe_module.normalize_mjpeg_url("http://10.80.5.52:4747") == "http://10.80.5.52:4747/video"
+    assert probe_module.normalize_mjpeg_url("http://10.80.5.52:4747/") == "http://10.80.5.52:4747/video"
+    assert probe_module.normalize_mjpeg_url("http://10.80.5.52:4747/video") == "http://10.80.5.52:4747/video"
+    assert probe_module.normalize_mjpeg_url("http://192.168.1.50:8080") == "http://192.168.1.50:8080/video"
+    assert probe_module.normalize_mjpeg_url("rtsp://192.168.1.50:554/stream1") == "rtsp://192.168.1.50:554/stream1"
+
+

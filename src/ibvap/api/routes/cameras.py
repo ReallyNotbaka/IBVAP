@@ -12,6 +12,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import av
 import cv2
@@ -27,7 +28,7 @@ from ibvap.core.geometry import validate_polygon
 from ibvap.core.model_manager import get_shared_detector_handle
 from ibvap.core.night import NightDetector
 from ibvap.core.pipeline import MiniPipeline
-from ibvap.core.probe import ProbeError, probe_url
+from ibvap.core.probe import ProbeError, normalize_mjpeg_url, probe_url
 from ibvap.core.ssrf import SSRFError, SSRFPolicy, resolve_and_validate, validate_endpoint  # noqa: F401 - re-export
 from ibvap.core.zone_engine import Zone
 
@@ -78,9 +79,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         stream_epoch=cam["stream_epoch"],
         detector_handle=detector_handle,
         enable_face=True,
-        face_stride=4,
+        face_stride=2,
         sample_stride=1,
-        max_face_size=640,
+        max_face_size=960,
     )
     saved_fence = cam.get("fence")
     if isinstance(saved_fence, dict) and isinstance(saved_fence.get("polygon"), list):
@@ -287,7 +288,12 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         for track in pipeline.last_tracks
                     ],
                     "faces": [
-                        {"bbox_norm": f["bbox_norm"], "confidence": f["confidence"], "quality_passed": f.get("quality_passed", True)}
+                        {
+                            "bbox_norm": f["bbox_norm"],
+                            "confidence": f["confidence"],
+                            "quality_passed": f.get("quality_passed", True),
+                            "track_id": f.get("track_id", None),
+                        }
                         for f in pipeline.last_faces
                     ],
                     "plates": last_plates,
@@ -483,97 +489,133 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         _ACTIVE_PIPELINES.pop(camera_id, None)
         return
 
-    # ---------- LIVE STREAM: keep threaded analysis with worker sampling ----------
-    try:
-        container = av.open(cam["endpoint"], options={"timeout": "3000000", "stimeout": "3000000"})
-        stream = next((s for s in container.streams if s.type == "video"), None)
-        if stream is None:
-            raise RuntimeError("No video stream")
-        for frame in container.decode(stream):
-            if stop.is_set():
-                break
-            image = frame.to_ndarray(format="bgr24")
-            h, w = image.shape[:2]
-            preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
-            ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ok:
-                frame_bytes = encoded.tobytes()
-                with condition:
-                    _FRAMES[camera_id] = frame_bytes
-                    _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
-                    condition.notify_all()
-            with analysis_lock:
-                analysis_frame = image
-            analysis_ready.set()
-            frame_number += 1
-            samples = _HEALTH.setdefault(camera_id, [])
-            samples.append(
-                {
-                    "last_frame_age_ms": 0,
-                    "source_fps": float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0,
-                    "analysis_fps": round(last_analysis_fps or 30.0, 1),
-                    "inference_ms": round(last_inference_ms, 1),
-                    "queue_drops": 0,
-                    "decode_errors": 0,
-                    "reconnect_count": 0,
-                    "stream_epoch": cam["stream_epoch"],
-                }
-            )
-            del samples[:-10]
-    except Exception:
-        cam["observed_state"] = "UNREACHABLE"
-    finally:
-        with contextlib.suppress(Exception):
-            container.close()  # type: ignore[possibly-undefined]
+    # ---------- LIVE STREAM: low-latency, zero-copy MJPEG passthrough & WiFi error resilience ----------
+    endpoint = normalize_mjpeg_url(str(cam["endpoint"]))
+    parsed_endpoint = urlparse(endpoint)
+    path_lower = parsed_endpoint.path.lower().rstrip("/")
+    is_mjpeg_stream = (
+        path_lower in {"/video", "/videofeed", "/mjpegfeed"}
+        or parsed_endpoint.port == 4747
+        or cam.get("protocol") == "mjpeg"
+        or (parsed_endpoint.scheme in ("http", "mjpeg") and path_lower.endswith((".mjpg", ".mjpeg")))
+    )
+
+    stream_opts: dict[str, str] = {
+        "timeout": "3000000",
+        "stimeout": "3000000",
+        "fflags": "nobuffer",
+        "flags": "low_delay",
+        "max_delay": "500000",
+        "probesize": "500000",
+        "analyzeduration": "1000000",
+    }
+    if parsed_endpoint.scheme in ("rtsp", "rtsps"):
+        stream_opts["rtsp_transport"] = "tcp"
+
+    open_kwargs: dict[str, Any] = {"options": stream_opts}
+    if is_mjpeg_stream:
+        open_kwargs["format"] = "mpjpeg"
+
     reconnect_delay = 1.0
+    decode_errors = 0
+    reconnect_count = 0
+    fps_window_start = time.perf_counter()
+    fps_window_count = 0
+    measured_source_fps = 30.0
+
     while not stop.is_set():
         container = None
         try:
-            container = av.open(cam["endpoint"], options={"timeout": "3000000", "stimeout": "3000000"})
+            container = av.open(endpoint, **open_kwargs)
             stream = next((s for s in container.streams if s.type == "video"), None)
             if stream is None:
                 raise RuntimeError("No video stream")
             cam["observed_state"] = "STREAMING"
             reconnect_delay = 1.0
-            for frame in container.decode(stream):
+
+            for packet in container.demux(stream):
                 if stop.is_set():
                     break
-                image = frame.to_ndarray(format="bgr24")
-                h, w = image.shape[:2]
-                preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
-                ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                if ok:
-                    frame_bytes = encoded.tobytes()
-                    with condition:
-                        _FRAMES[camera_id] = frame_bytes
-                        _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
-                        condition.notify_all()
-                with analysis_lock:
-                    analysis_frame = image
-                analysis_ready.set()
-                frame_number += 1
-                samples = _HEALTH.setdefault(camera_id, [])
-                samples.append(
-                    {
-                        "last_frame_age_ms": 0,
-                        "source_fps": float(stream.average_rate) if stream.average_rate and stream.average_rate.denominator else 30.0,
-                        "analysis_fps": round(last_analysis_fps or 30.0, 1),
-                        "inference_ms": round(last_inference_ms, 1),
-                        "queue_drops": 0,
-                        "decode_errors": 0,
-                        "reconnect_count": 0,
-                        "stream_epoch": cam["stream_epoch"],
-                    }
-                )
-                del samples[:-10]
+
+                # Robust extraction for MJPEG feeds: packet bytes contains JPEG SOI (\xff\xd8) and EOI (\xff\xd9)
+                packet_bytes = bytes(packet)
+                soi_idx = packet_bytes.find(b"\xff\xd8")
+                eoi_idx = packet_bytes.rfind(b"\xff\xd9")
+                is_valid_jpeg = False
+
+                if soi_idx != -1 and eoi_idx > soi_idx:
+                    clean_jpeg = packet_bytes[soi_idx : eoi_idx + 2]
+                    if len(clean_jpeg) > 100:
+                        is_valid_jpeg = True
+                        with condition:
+                            _FRAMES[camera_id] = clean_jpeg
+                            _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
+                            condition.notify_all()
+
+                try:
+                    frames = packet.decode()
+                except (av.error.InvalidDataError, av.error.CorruptDataError):
+                    decode_errors += 1
+                    continue
+                except Exception:
+                    decode_errors += 1
+                    continue
+
+                for frame in frames:
+                    if stop.is_set():
+                        break
+                    image = frame.to_ndarray(format="bgr24")
+                    h, w = image.shape[:2]
+
+                    if not is_valid_jpeg:
+                        preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+                        ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                        if ok:
+                            frame_bytes = encoded.tobytes()
+                            with condition:
+                                _FRAMES[camera_id] = frame_bytes
+                                _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
+                                condition.notify_all()
+
+                    with analysis_lock:
+                        analysis_frame = image
+                    analysis_ready.set()
+                    frame_number += 1
+                    fps_window_count += 1
+                    now_perf = time.perf_counter()
+                    if now_perf - fps_window_start >= 1.0:
+                        measured_source_fps = round(fps_window_count / (now_perf - fps_window_start), 1)
+                        fps_window_count = 0
+                        fps_window_start = now_perf
+
+                    samples = _HEALTH.setdefault(camera_id, [])
+                    samples.append(
+                        {
+                            "_ts": time.time(),
+                            "last_frame_age_ms": 0,
+                            "source_fps": measured_source_fps,
+                            "analysis_fps": round(last_analysis_fps or measured_source_fps, 1),
+                            "inference_ms": round(last_inference_ms, 1),
+                            "queue_drops": 0,
+                            "decode_errors": decode_errors,
+                            "reconnect_count": reconnect_count,
+                            "stream_epoch": cam["stream_epoch"],
+                        }
+                    )
+                    del samples[:-10]
         except Exception:
+            if stop.is_set():
+                break
+            reconnect_count += 1
             cam["observed_state"] = "RECONNECTING"
-            time.sleep(reconnect_delay)
+            if stop.wait(reconnect_delay):
+                break
             reconnect_delay = min(reconnect_delay * 1.5, 5.0)
         finally:
             if container is not None:
                 with contextlib.suppress(Exception):
                     container.close()
+    analysis_ready.set()
     ocr_executor.shutdown(wait=False, cancel_futures=True)
     _ACTIVE_PIPELINES.pop(camera_id, None)
 
@@ -727,6 +769,12 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
 
     # Stage 1: Validating address
     stage("Validating address", "running")
+    if not file_endpoint and not req.endpoint.startswith("synthetic://"):
+        raw_ep = req.endpoint.strip()
+        if "://" not in raw_ep:
+            scheme = req.protocol or ("rtsp" if ":554" in raw_ep else "http")
+            raw_ep = f"{scheme}://{raw_ep}"
+        req.endpoint = normalize_mjpeg_url(raw_ep)
     try:
         parsed = validate_endpoint(req.endpoint, policy)
     except SSRFError as e:
@@ -830,6 +878,12 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
             raise HTTPException(status_code=400, detail={"code": "missing_file", "message": "Local footage file not found"})
         endpoint_value = endpoint_value.resolve()
     else:
+        if not is_synthetic:
+            raw_ep = req.endpoint.strip()
+            if "://" not in raw_ep:
+                scheme = req.protocol or ("rtsp" if ":554" in raw_ep else "http")
+                raw_ep = f"{scheme}://{raw_ep}"
+            req.endpoint = normalize_mjpeg_url(raw_ep)
         policy = _policy_from_request(req.site_cidr_allowlist)
         try:
             if not is_synthetic:
@@ -879,6 +933,7 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
     _STATE_MACHINES[cam_id] = sm
     # store encrypted creds separately (in-mem for Phase 2)
     _CAMERAS[cam_id]["_enc"] = {"username": enc_user, "password": enc_pass}
+    _CAMERAS[cam_id]["_site_cidr_allowlist"] = req.site_cidr_allowlist
     if file_endpoint:
         _PLAYBACK[cam_id] = {
             "state": "playing",
@@ -935,6 +990,7 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
             "Expires": "0",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
         },
     )
 
@@ -1048,7 +1104,11 @@ async def test_saved(camera_id: str) -> CameraTestResponse:
     cam = _CAMERAS.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
-    req = CameraTestRequest(endpoint=cam["endpoint"], protocol=cam.get("protocol"))
+    req = CameraTestRequest(
+        endpoint=cam["endpoint"],
+        protocol=cam.get("protocol"),
+        site_cidr_allowlist=cam.get("_site_cidr_allowlist"),
+    )
     return _run_test_stages(req)
 
 
@@ -1134,11 +1194,18 @@ async def camera_health(camera_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Camera not found")
     sm = _STATE_MACHINES.get(camera_id)
     samples = _HEALTH.get(camera_id, [])
+    now = time.time()
+    formatted_samples: list[dict[str, Any]] = []
+    for s in samples[-10:]:
+        s_copy = dict(s)
+        if "_ts" in s_copy:
+            s_copy["last_frame_age_ms"] = max(0, int((now - s_copy.pop("_ts")) * 1000))
+        formatted_samples.append(s_copy)
     return {
         "camera_id": camera_id,
         "observed_state": cam.get("observed_state"),
         "stream_epoch": cam.get("stream_epoch", 0),
         "retry_count": sm.retry_count if sm else 0,
-        "samples": samples[-10:],
+        "samples": formatted_samples,
         "is_disabled": sm.is_disabled() if sm else False,
     }

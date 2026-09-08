@@ -49,12 +49,23 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
 
     const updateTheme = () => {
       flushSync(() => setIsDark(next));
+      if (next) {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
       try {
         localStorage.setItem("ibvap-theme", next ? "dark" : "light");
       } catch {
         // LocalStorage disabled or quota exceeded
       }
     };
+
+    if (next) {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
 
     if ("startViewTransition" in document && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       document.startViewTransition(updateTheme);

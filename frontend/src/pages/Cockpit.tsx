@@ -310,7 +310,7 @@ export function Cockpit({
             No Video Feeds Connected
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Add a CCTV or IP camera from the top bar to begin monitoring.
+            Add a live phone camera, IP camera, or CCTV feed from the top bar to begin monitoring.
           </p>
         </div>
       )}

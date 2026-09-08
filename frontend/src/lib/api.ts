@@ -94,7 +94,12 @@ export type CameraObservations = {
     identity_locked?: boolean;
   }>;
   frame_at: number | null;
-  faces?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; quality_passed: boolean }>;
+  faces?: Array<{
+    bbox_norm: [number, number, number, number];
+    confidence: number;
+    quality_passed: boolean;
+    track_id?: number | null;
+  }>;
   plates?: Array<{ text: string; confidence: number }>;
   plate_detections?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; vehicle_class: string; track_id?: number; text?: string }>;
   night?: { is_night: boolean; illumination_score: number; motion_area: number; confidence: number; limitation: string };

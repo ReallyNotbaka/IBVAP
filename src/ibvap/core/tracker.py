@@ -342,10 +342,15 @@ class CentroidTracker:
             if trk.age > drop_limit:
                 terminated.append(self.tracks.pop(tid))
 
-        # Preserve confirmed and locked tracks through short detector misses.
-        visible_tracks = [
-            t
-            for t in self.tracks.values()
-            if t.age <= (12 if t.identity_locked and t.identity and t.identity.get("threat_level") == "CRITICAL" else 4)
-        ]
+        # Preserve confirmed and locked tracks through short detector misses,
+        # but suppress ghost duplicates if an active track (age == 0) overlaps an aged track.
+        active_tracks = [t for t in self.tracks.values() if t.age == 0]
+        visible_tracks: list[Track] = []
+        for t in self.tracks.values():
+            max_allowed_age = 12 if t.identity_locked and t.identity and t.identity.get("threat_level") == "CRITICAL" else 3
+            if t.age > max_allowed_age:
+                continue
+            if t.age > 0 and any(_iou(t.bbox_norm, act.bbox_norm) > 0.25 for act in active_tracks):
+                continue
+            visible_tracks.append(t)
         return visible_tracks, new_entries, terminated
