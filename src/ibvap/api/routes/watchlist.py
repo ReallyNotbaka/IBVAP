@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import base64
-import uuid
 import time
+import uuid
 from typing import Any
 
 import cv2
 import numpy as np
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ibvap.core.face import FaceDetector, FaceRecognizer
 from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store

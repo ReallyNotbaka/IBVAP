@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import concurrent.futures
-from pathlib import Path
 import threading
 import time
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from ibvap.core.detector import MockPersonDetector
 from ibvap.core.model_manager import (
+    YOLO_MODELS_MANIFEST,
     ModelDownloadManager,
     ModelRegistry,
     ThreadSafeDetectorHandle,
-    YOLO_MODELS_MANIFEST,
 )
 
 
@@ -27,12 +27,12 @@ class TestModelRegistry:
         # Create a fake installed model file in tmp_path
         (tmp_path / "yolo26n.onnx").write_bytes(b"fake-onnx-content")
         registry = ModelRegistry(models_dir=tmp_path)
-        
+
         models = registry.list_models()
         assert len(models) == 5
         n_mod = next(m for m in models if m.name == "yolo26n")
         assert n_mod.is_installed is True
-        
+
         x_mod = next(m for m in models if m.name == "yolo26x")
         assert x_mod.is_installed is False
 
@@ -41,7 +41,7 @@ class TestThreadSafeDetectorHandle:
     def test_acquire_and_detect(self) -> None:
         mock1 = MockPersonDetector(model_id="mock-1")
         handle = ThreadSafeDetectorHandle(initial_detector=mock1, active_model_name="mock-1")
-        
+
         with handle.acquire() as det:
             assert det.model_id == "mock-1"
             res = det.detect(np.zeros((100, 100, 3), dtype=np.uint8), 0)
@@ -50,9 +50,8 @@ class TestThreadSafeDetectorHandle:
     def test_concurrent_swapping_stress(self) -> None:
         """Stress test: 4 worker threads running continuous detections while 1 thread swaps detectors."""
         mock1 = MockPersonDetector(model_id="mock-1")
-        mock2 = MockPersonDetector(model_id="mock-2")
         handle = ThreadSafeDetectorHandle(initial_detector=mock1, active_model_name="mock-1")
-        
+
         stop_event = threading.Event()
         inference_count = [0]
         errors = []
@@ -92,14 +91,14 @@ class TestModelDownloadManager:
     @pytest.mark.asyncio
     async def test_download_progress_tracking(self, tmp_path: Path) -> None:
         mgr = ModelDownloadManager(models_dir=tmp_path)
-        
+
         # Test simulated download of a chunked stream
         content = b"ONNX-WEIGHTS-TEST-DATA" * 1024
         target_file = tmp_path / "test_model.onnx"
-        
+
         progress = mgr.get_or_create_progress("yolo26s")
         assert progress.status == "idle"
-        
+
         # Test file writing directly through manager's safe atomic write
         mgr.save_model_file("yolo26s", content)
         assert target_file.exists() or (tmp_path / "yolo26s.onnx").exists()

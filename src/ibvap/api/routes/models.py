@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -97,7 +96,7 @@ def activate_model(payload: ActivateModelRequest) -> dict[str, Any]:
     handle = get_shared_detector_handle()
     try:
         new_detector = ONNXDetectorProvider(str(model_file))
-    except Exception as ex:
+    except Exception:
         # Fallback to mock for test or invalid format
         new_detector = MockPersonDetector(model_id=model_name)
 

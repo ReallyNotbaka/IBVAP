@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+
 from fastapi import APIRouter, Query
 
 from ibvap.events.outbox import clear_events, list_events, list_outbox
@@ -52,10 +53,10 @@ async def get_events(
                 if not ("watchlist" in etype or "suspect" in etype):
                     continue
             elif tab_clean in {"intrusions", "intrusion"}:
-                if not ("intrusion" in etype):
+                if "intrusion" not in etype:
                     continue
             elif tab_clean in {"exits", "exit"}:
-                if not ("exit" in etype):
+                if "exit" not in etype:
                     continue
             elif tab_clean in {"system", "sys"}:
                 if not ("system" in etype or "low_vis" in etype or "offline" in etype or "reconnect" in etype):

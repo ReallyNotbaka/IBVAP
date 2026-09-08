@@ -10,13 +10,12 @@ Implements multi-vector gallery matching on the SFace embedding manifold S^127:
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, field
-from enum import Enum
 import json
 import logging
-from pathlib import Path
 import time
-from typing import Any
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
 
 import numpy as np
 
@@ -93,7 +92,7 @@ class WatchlistStore:
         if not self.storage_path.exists():
             return
         try:
-            with open(self.storage_path, "r", encoding="utf-8") as f:
+            with open(self.storage_path, encoding="utf-8") as f:
                 data = json.load(f)
             entries: dict[str, WatchlistEntry] = {}
             for item in data.get("entries", []):

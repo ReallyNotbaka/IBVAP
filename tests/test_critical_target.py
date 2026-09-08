@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from typing import Any
+
 import numpy as np
 import pytest
 
@@ -20,7 +21,6 @@ from ibvap.core.face import FaceDetection, FaceQuality
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.tracker import CentroidTracker, Track
 from ibvap.core.watchlist import (
-    MatchResult,
     ThreatLevel,
     WatchlistEntry,
     WatchlistStore,
@@ -387,7 +387,7 @@ class TestCriticalTargetPipelineIntegration:
 
         # 3. Process synthetic frame
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        event = pipeline.process_frame(frame)
+        _ = pipeline.process_frame(frame)
 
         # 4. Verify primary event or created events
         assert pipeline.events_created >= 1
@@ -417,6 +417,7 @@ class TestObservationsAPIWithCriticalTarget:
     def test_camera_observations_endpoint_returns_critical_identity(self) -> None:
         """API endpoint /api/v1/cameras/{id}/observations must preserve identity, name, threat level, and lock status."""
         from starlette.testclient import TestClient
+
         from ibvap.api.app import create_app
         from ibvap.api.routes.cameras import _CAMERAS, _OBSERVATIONS
 

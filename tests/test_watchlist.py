@@ -11,14 +11,13 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import numpy as np
-import pytest
 
-from ibvap.core.watchlist import WatchlistEntry, WatchlistStore, ThreatLevel, MatchResult
+import numpy as np
+
 from ibvap.core.association import associate_faces_to_tracks
 from ibvap.core.tracker import CentroidTracker, Track
+from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, WatchlistStore
 
 
 def _make_unit_vector(seed: int, dim: int = 128) -> np.ndarray:
@@ -31,11 +30,11 @@ def _make_unit_vector(seed: int, dim: int = 128) -> np.ndarray:
 class TestWatchlistMathAndStore:
     def test_exemplar_gallery_max_cosine(self, tmp_path: Path) -> None:
         store = WatchlistStore(storage_path=tmp_path / "watchlist.json")
-        
+
         # Create two distinct unit vectors representing frontal and profile angles of Suspect 1
         v_frontal = _make_unit_vector(101)
         v_profile = _make_unit_vector(102)
-        
+
         entry = WatchlistEntry(
             id="suspect-001",
             name="John Doe",
@@ -44,12 +43,12 @@ class TestWatchlistMathAndStore:
             created_at=1000.0,
         )
         store.add_entry(entry)
-        
+
         # A query close to profile should match profile with high score, unaffected by frontal
         noise = np.random.default_rng(999).standard_normal(128).astype(np.float32) * 0.02
         q_profile = v_profile + noise
         q_profile = q_profile / np.linalg.norm(q_profile)
-        
+
         res = store.identify(q_profile)
         assert res is not None
         assert res.entry_id == "suspect-001"
@@ -59,7 +58,7 @@ class TestWatchlistMathAndStore:
     def test_tri_tier_thresholds(self, tmp_path: Path) -> None:
         store = WatchlistStore(storage_path=tmp_path / "watchlist.json")
         v_target = _make_unit_vector(200)
-        
+
         store.add_entry(
             WatchlistEntry(
                 id="suspect-002",
@@ -69,7 +68,7 @@ class TestWatchlistMathAndStore:
                 created_at=1000.0,
             )
         )
-        
+
         # Test Red Alert tier (>= 0.52)
         v_rand1 = _make_unit_vector(201)
         v_ortho1 = v_rand1 - np.dot(v_rand1, v_target) * v_target
@@ -80,7 +79,7 @@ class TestWatchlistMathAndStore:
         assert res_red is not None
         assert res_red.score >= 0.52
         assert res_red.tier == "RED"
-        
+
         # Test Amber tier (0.42 <= S < 0.52)
         v_rand2 = _make_unit_vector(202)
         v_ortho2 = v_rand2 - np.dot(v_rand2, v_target) * v_target
@@ -91,7 +90,7 @@ class TestWatchlistMathAndStore:
         assert res_amber is not None
         assert 0.42 <= res_amber.score < 0.52
         assert res_amber.tier == "AMBER"
-        
+
         # Test Neutral Civilian (< 0.42)
         v_neutral = _make_unit_vector(300)
         res_neutral = store.identify(v_neutral)
@@ -102,7 +101,7 @@ class TestWatchlistMathAndStore:
         file_path = tmp_path / "sub" / "watchlist.json"
         store1 = WatchlistStore(storage_path=file_path)
         v = _make_unit_vector(42)
-        
+
         store1.add_entry(
             WatchlistEntry(
                 id="suspect-persist",
@@ -113,7 +112,7 @@ class TestWatchlistMathAndStore:
                 created_at=123456.0,
             )
         )
-        
+
         # Load in a second instance
         store2 = WatchlistStore(storage_path=file_path)
         assert len(store2.list_entries()) == 1
@@ -127,11 +126,11 @@ class TestWatchlistMathAndStore:
 class TestHungarianSpatialAssociation:
     def test_head_roi_association_in_crowd(self) -> None:
         """Verify Hungarian assignment correctly links face to upper 25% head region of correct person.
-        
+
         Scene setup:
         Person 1 (Foreground): [0.20, 0.20, 0.40, 0.80] -> Head ROI roughly [0.20, 0.20, 0.40, 0.35]
         Person 2 (Background, overlapping x): [0.25, 0.10, 0.45, 0.50] -> Head ROI [0.25, 0.10, 0.45, 0.20]
-        
+
         Face 1: at [0.28, 0.22, 0.34, 0.30] -> matches Person 1
         Face 2: at [0.32, 0.11, 0.38, 0.18] -> matches Person 2
         """
@@ -149,7 +148,7 @@ class TestHungarianSpatialAssociation:
             bbox_norm=(0.25, 0.10, 0.45, 0.50),
             confidence=0.82,
         )
-        
+
         face1 = {
             "bbox_norm": (0.28, 0.22, 0.34, 0.30),
             "confidence": 0.95,
@@ -160,7 +159,7 @@ class TestHungarianSpatialAssociation:
             "confidence": 0.91,
             "quality_passed": True,
         }
-        
+
         assignments = associate_faces_to_tracks([trk1, trk2], [face1, face2])
         # assignments: dict mapping track_id -> face dict
         assert assignments[1] == face1
@@ -203,7 +202,7 @@ class TestHungarianSpatialAssociation:
 class TestTrackerOcclusionAndReappearance:
     def test_identity_latching_and_reappearance(self) -> None:
         tracker = CentroidTracker(max_age=30)
-        
+
         # Simulate suspect track 1 entering
         det_person = {
             "bbox_norm": (0.4, 0.3, 0.6, 0.8),
@@ -215,17 +214,17 @@ class TestTrackerOcclusionAndReappearance:
         assert len(tracks) == 1
         tid = tracks[0].track_id
         trk = tracker.tracks[tid]
-        
+
         # Update 1 with suspect match
         trk.record_biometric_match("suspect-001", "John Doe", score=0.65, tier="RED")
         assert not trk.identity_locked  # 1-of-3, not confirmed yet
-        
+
         # Update 2 with suspect match -> 2-of-3 confirmed!
         trk.record_biometric_match("suspect-001", "John Doe", score=0.68, tier="RED")
         assert trk.identity_locked
         assert trk.identity is not None
         assert trk.identity["name"] == "John Doe"
-        
+
         # Simulate 10 frames of occlusion / looking away (no face match recorded)
         for i in range(10):
             det_person = {
@@ -239,12 +238,12 @@ class TestTrackerOcclusionAndReappearance:
             active_trk = next(t for t in tracks if t.track_id == tid)
             assert active_trk.identity_locked
             assert active_trk.identity["name"] == "John Doe"
-        
+
         # Person leaves scene for 35 frames (> max_age 30) -> Track terminates
         for i in range(35):
             tracks, _, term = tracker.update([], timestamp=2.0 + i * 0.033)
         assert tid not in tracker.tracks
-        
+
         # Person re-enters the scene later -> gets a NEW track_id
         det_reentry = {
             "bbox_norm": (0.1, 0.2, 0.3, 0.7),
@@ -256,7 +255,7 @@ class TestTrackerOcclusionAndReappearance:
         assert len(tracks_reentry) == 1
         new_tid = tracks_reentry[0].track_id
         assert new_tid != tid
-        
+
         new_trk = tracker.tracks[new_tid]
         # Re-identified on first frontal glance (1st match + 2nd match)
         new_trk.record_biometric_match("suspect-001", "John Doe", score=0.62, tier="RED")

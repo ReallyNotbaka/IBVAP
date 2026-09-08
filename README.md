@@ -1,17 +1,76 @@
-# IBVAP — Intelligent Border Video Analytics Platform
+<div align="center">
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Python: 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-19-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/)
-[![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-DirectML-005CED.svg)](https://onnxruntime.ai/)
-[![Vite](https://img.shields.io/badge/Vite-7-646CFF.svg?logo=vite&logoColor=white)](https://vitejs.dev/)
+# 🛡️ IBVAP
+### Intelligent Border Video Analytics Platform
 
-> **IBVAP** is an enterprise-grade, software-defined edge video analytics and tactical surveillance platform engineered for border defense, perimeter security, critical infrastructure monitoring, and high-throughput checkpoint analysis.
+**Next-generation, software-defined edge surveillance & tactical video analytics for critical border defense and perimeter security.**
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-0052CC.svg?style=for-the-badge)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python: 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688.svg?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React 19](https://img.shields.io/badge/React-19-20232A.svg?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
+[![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-DirectML-005CED.svg?style=for-the-badge&logo=windows&logoColor=white)](https://onnxruntime.ai/)
+[![Vite](https://img.shields.io/badge/Vite-7-646CFF.svg?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![TailwindCSS v4](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC.svg?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+
+[Key Capabilities](#-key-capabilities) •
+[System Architecture](#-system-architecture) •
+[Tactical UI Preview](#-tactical-cockpit-preview) •
+[Quick Start](#-quick-start) •
+[Camera Integration](#-camera-integration-guide) •
+[API Reference](#-api-endpoints) •
+[Documentation](#-documentation)
+
+</div>
 
 ---
 
-## Architecture Overview
+## 🎯 Executive Overview
+
+**IBVAP** is an enterprise-grade tactical surveillance engine designed for real-time threat classification, suspect re-identification, vehicle tracking, and automated perimeter violation alerting. Engineered specifically for edge compute nodes, it delivers ultra-low latency inference using DirectML GPU acceleration with intelligent zero-copy streaming pipelines.
+
+---
+
+## 🖼️ Tactical Cockpit Preview
+
+<div align="center">
+
+| Tactical Surveillance Grid | Theater Focus & Target Inspector |
+|:---:|:---:|
+| ![Tactical Grid](docs/assets/cockpit-overview.png) | ![Theater Focus](docs/assets/theater-mode.png) |
+| *Multi-camera situational overview with real-time HUD overlays* | *Expanded solo theater mode with deep target biometric inspection* |
+
+| Smart Device Onboarding Wizard | Biometric Watchlist & Enrollment |
+|:---:|:---:|
+| ![Device Connection](docs/assets/device-connection.png) | ![Biometric Watchlist](docs/assets/watchlist-biometrics.png) |
+| *Multi-stage stream probing with automated protocol normalization* | *128D facial vector database with tiered threat level alerting* |
+
+</div>
+
+---
+
+## ⚡ Key Capabilities
+
+- **🚀 High-Throughput Hardware-Accelerated CV**:
+  - **YOLO26 / YOLOv8 Detection**: Real-time identification of persons and vehicles powered by ONNX Runtime with DirectML GPU acceleration and graceful CPU fallback.
+  - **YuNet & SFace Biometrics**: 5-point facial landmark tracking, illumination/blur quality gating, and 128D cosine distance embedding matching.
+  - **PaddleOCR ANPR**: Edge-optimized vehicle license plate character extraction and spatial association.
+- **📡 Universal Source Ingestion & Normalization**:
+  - Native RTSP, RTSPS, HTTP, HTTPS, MJPEG, and offline evidence playback.
+  - Automatic detection and normalization for mobile camera streams (**DroidCam** `:4747`, **IP Webcam** `:8080`) to `/video` with transient socket retry resilience.
+- **🎯 Intelligent Spatial Tracking & Multi-Tier Deduplication**:
+  - Centroid & ByteTrack-style multi-object tracking with velocity-adaptive sub-pixel smoothing.
+  - Ghost track suppression eliminates stale boxes; IoU and containment analysis unify overlapping detections.
+- **🛡️ Tactical Perimeter Fencing & Watchlists**:
+  - Interactive polygon perimeter drawing with real-time Ray-Casting intrusion detection.
+  - Tiered suspect classification: `CRITICAL` (instant alert & lock), `HIGH`, `MEDIUM`, and `LOW`.
+- **🔒 Zero-Trust Defense & Network Security**:
+  - Strict SSRF policy engine with customizable CIDR allowlists (e.g., `10.0.0.0/8`, `192.168.0.0/16`).
+  - DNS-rebinding protection and AES-GCM encrypted credential vault.
+
+---
+
+## 🏗️ System Architecture
 
 ```
                                   +---------------------------------------+
@@ -70,65 +129,39 @@
 
 ---
 
-## Key Capabilities
+## 🛠️ Tech Stack Matrix
 
-- **Multi-Source Ingestion & Protocol Normalization**:
-  - Seamlessly handles RTSP, RTSPS, HTTP/HTTPS, MJPEG, and video footage playback.
-  - Native smartphone camera integration: automatically detects and normalizes **DroidCam** (`:4747`) and **IP Webcam** (`:8080`) feeds to `/video` with transient socket retry resilience.
-- **Hardware-Accelerated Computer Vision**:
-  - **YOLO26 (YOLOv8)** ONNX model for high-confidence person and vehicle detection with DirectML GPU acceleration and CPU fallback.
-  - **YuNet & SFace Biometrics**: 5-point facial landmark detection, quality assessment (blur, illumination, pose), and 128D feature embedding for suspect identification.
-  - **PaddleOCR ANPR**: Automatic license plate recognition with spatial vehicle-plate fusion.
-- **Advanced Spatial Tracking & Deduplication**:
-  - Centroid and ByteTrack-style tracking with velocity-adaptive smoothing and sub-pixel deadbands.
-  - Multi-tier deduplication: suppresses ghost duplicate tracks, resolves cross-class spatial conflicts, and unifies overlapping boxes with IoU and containment analysis.
-- **Tactical Cockpit & Geofencing**:
-  - Low-latency tactical grid with theater solo mode, infrared/low-light night vision indicators, and live target inspection.
-  - Interactive polygon perimeter drawing with real-time intrusion alarms.
-  - Watchlist management with tiered alerts (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`).
-- **Defensive Engineering & Zero-Trust Security**:
-  - Strict SSRF policy enforcement with configurable CIDR allowlists (protects internal subnets).
-  - DNS-rebinding defense and credentials encryption (Fernet / AES-GCM).
-  - Zero-copy JPEG packet passthrough to minimize CPU utilization.
-
----
-
-## Tech Stack
-
-| Component | Technologies | Purpose |
+| Layer | Technologies | Key Role |
 |---|---|---|
-| **Backend Core** | Python 3.12+, FastAPI, Uvicorn, Pydantic v2 | High-performance asynchronous REST & SSE services |
-| **Media Demuxing** | PyAV, FFmpeg 7 | Low-latency stream probing, decoding, and zero-copy packet extraction |
-| **Object Detection** | ONNX Runtime (DirectML / CPU), YOLO26 | Real-time person and vehicle classification |
-| **Facial Biometrics** | OpenCV YuNet, SFace ONNX | Landmark tracking, quality gating, and face identification |
-| **ANPR Engine** | PaddleOCR, OpenCV | License plate detection and text recognition |
-| **Frontend Cockpit**| React 19, TypeScript, Vite 7, Tailwind CSS v4 | High-density tactical surveillance UI |
-| **Quality & Tests** | Pytest, Pytest-Asyncio, Ruff, Pyright, Playwright | Strict validation, type safety, and E2E verification |
+| **Core Backend** | Python 3.12+, FastAPI, Uvicorn, Pydantic v2 | Asynchronous microservices & SSE stream dispatch |
+| **Media Demuxing**| PyAV (FFmpeg 7), OpenCV | Sub-millisecond stream probing and zero-copy packet slicing |
+| **Inference Engine** | ONNX Runtime (DirectML / CPU) | Accelerated edge execution for YOLO26 architectures |
+| **Biometrics** | OpenCV YuNet & SFace ONNX | 5-point facial landmarking & 128D feature representation |
+| **ANPR Engine** | PaddleOCR, OpenCV | Automatic license plate detection and OCR character extraction |
+| **Cockpit Frontend**| React 19, TypeScript, Vite 7, Tailwind CSS v4 | High-density tactical surveillance UI |
+| **Data & Storage** | SQLAlchemy Async, SQLite, Alembic | Durable events ledger, audit trails, and suspect store |
+| **Quality Control** | Pytest, Pytest-Asyncio, Ruff, Pyright, Playwright | Comprehensive unit, linting, type, and end-to-end testing |
 
 ---
 
-## Getting Started
+## 🚀 Quick Start
 
 ### Prerequisites
 - **Python**: `>= 3.12, < 3.14`
 - **Node.js**: `>= 20.x`
-- **uv**: Modern fast Python package manager (`pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- **uv**: Ultra-fast Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh` or `pip install uv`)
 
 ### 1. Installation
 
-Clone the repository:
 ```bash
+# Clone the repository
 git clone https://github.com/ReallyNotbaka/IBVAP.git
 cd IBVAP
-```
 
-Install backend dependencies using `uv`:
-```bash
+# Install backend dependencies with all hardware accelerators
 uv sync --all-extras
-```
 
-Install frontend dependencies:
-```bash
+# Install frontend dependencies
 cd frontend
 npm install
 cd ..
@@ -136,64 +169,85 @@ cd ..
 
 ---
 
-### 2. Running the System
+### 2. Running in Development
 
-#### Starting Backend
 ```bash
+# Terminal 1: Launch Backend API Server (port 8000)
 uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000 --reload
-```
-Interactive API Documentation will be available at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
 
-#### Starting Frontend (Development)
-```bash
+# Terminal 2: Launch Tactical Frontend Cockpit (port 5173)
 cd frontend
 npm run dev
 ```
-Open `http://localhost:5173` in your browser.
 
-#### Building for Production
+Visit **`http://localhost:5173`** to access the live dashboard.
+Interactive OpenAPI docs are available at **`http://localhost:8000/docs`**.
+
+---
+
+### 3. Production Deployment
+
 ```bash
+# Build the production single-page application
 cd frontend
 npm run build
 cd ..
+
+# FastAPI automatically mounts and serves frontend/dist
 uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000
 ```
-FastAPI automatically serves the precompiled SPA frontend when `frontend/dist` is present.
 
 ---
 
-## Connecting Cameras
+## 📹 Camera Integration Guide
 
-### Wi-Fi Smartphone Cameras
-1. Launch **DroidCam** or **IP Webcam** on your mobile device connected to the same local Wi-Fi network.
-2. Open the IBVAP Cockpit (`http://localhost:5173`) and click **Connect Camera**.
-3. Enter the device IP (e.g. `10.80.5.52`) and port (`4747` for DroidCam or `8080` for IP Webcam).
-4. The system automatically configures the protocol to `http`, targets the stream endpoint `/video`, and permits local private subnets (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`).
-5. Click **Test Connection** to inspect stream metrics and **Save & Monitor** to begin live analysis.
+### 📱 Wi-Fi Mobile Cameras (DroidCam / IP Webcam)
+1. Install **DroidCam** or **IP Webcam** on any iOS or Android phone connected to your local Wi-Fi.
+2. Open the IBVAP Cockpit and click **Connect Camera**.
+3. Input the device IP (e.g. `10.80.5.52`) and port (`4747` for DroidCam, `8080` for IP Webcam).
+4. The system automatically:
+   - Sets protocol to `http`.
+   - Targets the live endpoint `/video`.
+   - Permits your local subnet (`10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`) through SSRF policy.
+5. Click **Test Connection** to inspect stream metrics and **Save & Monitor**.
 
-### Standard CCTV / RTSP Feeds
-- Enter standard RTSP URLs (e.g. `rtsp://admin:password@192.168.1.100:554/h264Preview_01_main`).
-- Credentials are encrypted at rest and redacted from logging and telemetry surfaces.
+### 🎥 Standard RTSP / CCTV Infrastructure
+- Provide full RTSP connection strings:
+  ```
+  rtsp://admin:secret@192.168.1.120:554/live/ch0
+  ```
+- All credentials are encrypted in-memory and at rest (AES-GCM/Fernet) and permanently redacted from client-facing logs and diagnostics.
 
 ---
 
-## Verification & Testing
+## 🔌 API Endpoints
 
-Run full backend unit tests:
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/v1/cameras` | List all active cameras and observed streaming states |
+| `POST` | `/api/v1/cameras` | Register and provision a new camera feed |
+| `POST` | `/api/v1/cameras/test` | Non-destructive multi-stage probe of raw camera endpoint |
+| `GET` | `/api/v1/cameras/{id}/stream` | High-frequency multipart/x-mixed-replace MJPEG feed |
+| `GET` | `/api/v1/cameras/{id}/observations` | Real-time AI detections, track states, faces, and plates |
+| `GET` | `/api/v1/cameras/{id}/health` | Stream diagnostics, decode errors, and frame latency telemetry |
+| `PUT` | `/api/v1/cameras/{id}/fence` | Configure virtual perimeter polygon coordinate fence |
+| `GET` | `/api/v1/watchlist` | Retrieve enrolled suspect biometric profiles |
+| `POST` | `/api/v1/watchlist` | Enroll new suspect with photo and threat classification |
+| `GET` | `/api/v1/alerts/stream` | Server-Sent Events (SSE) firehose for security alerts |
+
+---
+
+## 🧪 Verification & Testing
+
 ```bash
+# Run full backend test suite (172 tests)
 uv run pytest -q
-```
 
-Run static type checking and linting:
-```bash
+# Run static analysis and linting
 uv run ruff check .
 uv run pyright src/
-```
 
-Run frontend typecheck and end-to-end Playwright tests:
-```bash
+# Run frontend unit & Playwright E2E suites
 cd frontend
 npm run typecheck
 npx playwright test
@@ -202,7 +256,7 @@ cd ..
 
 ---
 
-## Project Structure
+## 📁 Repository Structure
 
 ```
 IBVAP/
@@ -233,24 +287,30 @@ IBVAP/
 │   │   │   └── Watchlist.tsx     # Suspect enrollment & biometric management
 │   │   └── lib/api.ts            # Client API client & types
 │   └── tests/                    # Playwright visual & operational test suites
-├── docs/                         # Architecture Decision Records (ADRs) & threat models
+├── docs/
+│   ├── assets/                   # Architectural diagrams & UI screenshots
+│   ├── threat-model.md           # Formal STRIDE threat modeling & security controls
+│   ├── deployment.md             # Production edge deployment manual
+│   ├── benchmarks.md             # Latency & throughput performance metrics
+│   ├── traceability.md           # Requirements-to-code traceability matrix
+│   └── adr/                      # Architecture Decision Records
 ├── tests/                        # Pytest backend test suite (172+ test cases)
 └── pyproject.toml                # Project dependencies & metadata
 ```
 
 ---
 
-## Documentation
+## 📚 Technical Documentation
 
-In-depth technical specifications and architectural documentation are available in the [`docs/`](docs/) directory:
-- [`docs/threat-model.md`](docs/threat-model.md) — Threat modeling & defensive security controls
-- [`docs/deployment.md`](docs/deployment.md) — Production edge deployment guide
-- [`docs/benchmarks.md`](docs/benchmarks.md) — Performance benchmarks & latency measurements
-- [`docs/traceability.md`](docs/traceability.md) — Feature-to-code traceability matrix
-- [`docs/adr/`](docs/adr/) — Architecture Decision Records
+Explore detailed engineering specifications in the [`docs/`](docs/) directory:
+- [🛡️ Threat Model & Security Posture](docs/threat-model.md)
+- [⚡ Latency & Edge Performance Benchmarks](docs/benchmarks.md)
+- [📦 Production Deployment Manual](docs/deployment.md)
+- [📋 Architectural Traceability Matrix](docs/traceability.md)
+- [🏛️ Architectural Decision Records (ADRs)](docs/adr/)
 
 ---
 
-## License
+## ⚖️ License
 
 This project is licensed under the terms of the GNU Affero General Public License v3.0 ([AGPL-3.0](LICENSE)).

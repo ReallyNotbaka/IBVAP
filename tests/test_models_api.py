@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
 from starlette.testclient import TestClient
 
 from ibvap.api.app import create_app
 from ibvap.core.model_manager import (
-    YOLO_MODELS_MANIFEST,
     get_download_manager,
     get_model_registry,
     get_shared_detector_handle,
@@ -21,7 +21,7 @@ def test_client(tmp_path: Path):
     registry.models_dir = tmp_path
     dm = get_download_manager()
     dm.models_dir = tmp_path
-    
+
     app = create_app()
     with TestClient(app) as client:
         yield client
@@ -47,11 +47,11 @@ class TestModelsAPI:
         content = b"ONNX-MODEL-HEADER" + b"X" * 2000
         files = {"file": ("yolo26s.onnx", content, "application/octet-stream")}
         data = {"model_name": "yolo26s"}
-        
+
         resp = test_client.post("/api/v1/models/upload", data=data, files=files)
         assert resp.status_code == 200
         assert resp.json()["status"] == "uploaded"
-        
+
         # Verify it now shows as installed
         resp_list = test_client.get("/api/v1/models")
         s_mod = next(m for m in resp_list.json()["models"] if m["name"] == "yolo26s")

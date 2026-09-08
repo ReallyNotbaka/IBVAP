@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import io
 from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
@@ -18,7 +18,7 @@ def test_client(tmp_path: Path):
     store = get_watchlist_store()
     store.storage_path = tmp_path / "watchlist.json"
     store._entries.clear()
-    
+
     app = create_app()
     with TestClient(app) as client:
         yield client

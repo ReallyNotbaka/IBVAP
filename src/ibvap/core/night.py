@@ -96,7 +96,7 @@ class NightDetector:
         persistence = sum(1 for v in self._motion_history if v > 0.005)
         camera_motion = 0.0
         confidence = 0.7 if motion_area > 0.01 and persistence >= 3 else 0.3 if motion_area > 0 else 0.0
-        
+
         if self._mode == "night":
             if lum < 15.0:
                 limitation = "severe low visibility (<15 lux)"
