@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import time
 import uuid
 from pathlib import Path
 
+import structlog
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -15,9 +17,14 @@ from ibvap.core.upload import ALLOWED_EXTS, MAX_SIZE_BYTES, promoted_path, quara
 
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
+logger = structlog.get_logger(__name__)
+
 _UPLOADS: dict[str, dict[str, object]] = {}
 UPLOAD_RETENTION_SECONDS = 24 * 60 * 60
 UPLOAD_ROOTS = (Path("data/uploads"), Path("data/quarantine"))
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB streaming chunks (no unbounded read)
+_CLEANUP_THROTTLE_SECONDS = 60.0
+_LAST_CLEANUP: float = 0.0
 
 
 def _remove_path(path_value: object) -> None:
@@ -57,7 +64,12 @@ class UploadCreateResponse(BaseModel):
 
 @router.post("", response_model=UploadCreateResponse)
 async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  # noqa: B008
-    cleanup_expired_uploads()
+    global _LAST_CLEANUP
+    now = time.time()
+    # Throttle expiry scans: full dir stat sweep at most once per minute.
+    if now - _LAST_CLEANUP >= _CLEANUP_THROTTLE_SECONDS:
+        _LAST_CLEANUP = now
+        await asyncio.to_thread(cleanup_expired_uploads, now)
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename required")
     try:
@@ -74,13 +86,12 @@ async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  
 
     sha256 = hashlib.sha256()
     total = 0
-    CHUNK_SIZE = 1024 * 1024  # 1MB
     is_first_chunk = True
 
     try:
         with qpath.open("wb") as out:
             while True:
-                chunk = await file.read(CHUNK_SIZE)
+                chunk = await file.read(UPLOAD_CHUNK_SIZE)
                 if not chunk:
                     break
                 total += len(chunk)
@@ -91,7 +102,7 @@ async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  
                     if chunk[:4] == b"<!DO" or chunk[:5] == b"<html":
                         raise HTTPException(status_code=400, detail="Invalid media container")
                     is_first_chunk = False
-                out.write(chunk)
+                await asyncio.to_thread(out.write, chunk)
             # handle empty file case: no chunk read, total==0, first check not needed
             # if file was empty, is_first_chunk remains True - no html to check
     except HTTPException:
@@ -116,8 +127,19 @@ async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  
     return UploadCreateResponse(upload_id=upload_id, filename=file.filename, size=total, sha256=sha, status="quarantined")
 
 
+def _public_upload_payload(data: dict[str, object]) -> dict[str, object]:
+    """Return upload metadata without internal absolute paths."""
+    public = dict(data)
+    raw_path = str(data.get("path", ""))
+    # Expose basename only (e.g. "<upload_id>.mp4") to avoid leaking server layout.
+    public["path"] = Path(raw_path).name if raw_path else ""
+    return public
+
+
 @router.delete("/{upload_id}", response_model=dict[str, str])
 async def delete_upload(upload_id: str) -> dict[str, str]:
+    # TODO: require authentication/authorization for mutating routes (would break tests today).
+    logger.warning("unauthenticated_delete", route="DELETE /api/v1/uploads/{upload_id}")
     data = _UPLOADS.pop(upload_id, None)
     if not data:
         raise HTTPException(status_code=404, detail="Upload not found")
@@ -130,7 +152,7 @@ async def get_upload(upload_id: str) -> dict[str, object]:
     data = _UPLOADS.get(upload_id)
     if not data:
         raise HTTPException(status_code=404, detail="Upload not found")
-    return data
+    return _public_upload_payload(data)
 
 
 @router.post("/{upload_id}/finalize", response_model=dict[str, object])
@@ -143,7 +165,8 @@ async def finalize_upload(upload_id: str) -> dict[str, object]:
     if not qpath.exists():
         raise HTTPException(status_code=404, detail="Quarantined file missing")
     # sandboxed probe would run here via PyAV - for Phase 2 we just check hash
-    sha = streaming_hash(qpath)
+    # streaming_hash does blocking file IO — offload from event loop.
+    sha = await asyncio.to_thread(streaming_hash, qpath)
     if sha != data["sha256"]:
         raise HTTPException(status_code=400, detail="Hash mismatch")
     # promote
@@ -152,7 +175,7 @@ async def finalize_upload(upload_id: str) -> dict[str, object]:
     qpath.rename(ppath)
     data["status"] = "promoted"
     data["path"] = str(ppath)
-    return data
+    return _public_upload_payload(data)
 
 
 @router.post("/{upload_id}/analyze", response_model=dict[str, object])
@@ -185,37 +208,43 @@ async def analyze_upload(
     try:
         from ibvap.core.pipeline import MiniPipeline
 
-        pipeline = MiniPipeline(
-            camera_id=f"upload-{upload_id}",
-            enable_face=enable_face,
-            sample_stride=sample_stride,
-            face_stride=face_stride,
-        )
-        # process_video_file is already optimized (PyAV + sampling)
-        events = pipeline.process_video_file(
-            str(path),
-            max_frames=max_frames,
-            sample_stride=sample_stride,
-            enable_face=enable_face,
-            face_stride=face_stride,
-        )
-        # Collect stats
-        return {
-            "upload_id": upload_id,
-            "path": str(path),
-            "analyzed_frames": max_frames,
-            "sample_stride": sample_stride,
-            "face_stride": face_stride,
-            "events_created": pipeline.events_created,
-            "queue_drops": pipeline.q_demux_to_sample.dropped + pipeline.q_sample_to_infer.dropped,
-            "faces_analyzed": pipeline.faces_analyzed,
-            "frames_skipped": pipeline.frames_skipped,
-            "last_detections": pipeline.last_detections,
-            "last_tracks": [
-                {"track_id": t.track_id, "class_name": t.class_name, "confidence": t.confidence, "bbox_norm": t.bbox_norm} for t in pipeline.last_tracks
-            ],
-            "last_faces": pipeline.last_faces,
-            "events": events[:20],
-        }
+        def _run_analysis() -> dict[str, object]:
+            pipeline = MiniPipeline(
+                camera_id=f"upload-{upload_id}",
+                enable_face=enable_face,
+                sample_stride=sample_stride,
+                face_stride=face_stride,
+            )
+            # process_video_file is already optimized (PyAV + sampling)
+            events = pipeline.process_video_file(
+                str(path),
+                max_frames=max_frames,
+                sample_stride=sample_stride,
+                enable_face=enable_face,
+                face_stride=face_stride,
+            )
+            # Collect stats
+            return {
+                "upload_id": upload_id,
+                "path": Path(str(path)).name,
+                "analyzed_frames": max_frames,
+                "sample_stride": sample_stride,
+                "face_stride": face_stride,
+                "events_created": pipeline.events_created,
+                "queue_drops": pipeline.q_demux_to_sample.dropped + pipeline.q_sample_to_infer.dropped,
+                "faces_analyzed": pipeline.faces_analyzed,
+                "frames_skipped": pipeline.frames_skipped,
+                "last_detections": pipeline.last_detections,
+                "last_tracks": [
+                    {"track_id": t.track_id, "class_name": t.class_name, "confidence": t.confidence, "bbox_norm": t.bbox_norm} for t in pipeline.last_tracks
+                ],
+                "last_faces": pipeline.last_faces,
+                "events": events[:20],
+            }
+
+        # CPU-heavy decode/inference must not block the event loop.
+        return await asyncio.to_thread(_run_analysis)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}") from e
+        # Log full detail server-side; return generic message to avoid info disclosure.
+        logger.error("upload_analysis_failed", upload_id=upload_id, error=str(e))
+        raise HTTPException(status_code=500, detail="Analysis failed") from e

@@ -18,6 +18,13 @@ def ensure_dirs() -> None:
     PROMOTED_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _ensure_dir(path: Path) -> None:
+    # Fast path: skip mkdir syscall when dir already exists.
+    if path.is_dir():
+        return
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def validate_filename(name: str) -> None:
     p = Path(name)
     if p.suffix.lower() not in ALLOWED_EXTS:
@@ -28,7 +35,7 @@ def validate_filename(name: str) -> None:
 
 
 def quarantine_path(upload_id: str, original_name: str) -> Path:
-    ensure_dirs()
+    _ensure_dir(QUARANTINE_DIR)
     ext = Path(original_name).suffix.lower()
     # generated object name - no client path
     safe = f"{upload_id}{ext}"
@@ -36,7 +43,7 @@ def quarantine_path(upload_id: str, original_name: str) -> Path:
 
 
 def promoted_path(upload_id: str, original_name: str) -> Path:
-    ensure_dirs()
+    _ensure_dir(PROMOTED_DIR)
     ext = Path(original_name).suffix.lower()
     return PROMOTED_DIR / f"{upload_id}{ext}"
 

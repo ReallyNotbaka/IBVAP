@@ -86,6 +86,7 @@ def get_system_info() -> dict[str, Any]:
         res = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader,nounits"],
             text=True,
+            timeout=10,
         ).strip()
         parts = [p.strip() for p in res.split(",")]
         if len(parts) >= 3:

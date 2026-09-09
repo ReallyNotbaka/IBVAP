@@ -23,9 +23,12 @@ class Alert:
     state: AlertState = "open"
     assignee: str | None = None
     audit: list[dict] = field(default_factory=list)
+    max_audit: int = 100  # bound per-alert audit memory
 
     def _log(self, action: str, actor: str, note: str = "") -> None:
         self.audit.append({"ts": time.time(), "action": action, "actor": actor, "note": note, "state": self.state})
+        if len(self.audit) > self.max_audit:
+            del self.audit[: len(self.audit) - self.max_audit]
 
     def acknowledge(self, actor: str) -> None:
         if self.state != "open":

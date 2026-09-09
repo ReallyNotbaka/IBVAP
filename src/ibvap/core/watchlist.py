@@ -75,9 +75,7 @@ def is_valid_exemplar(arr: np.ndarray) -> bool:
     if norm < 1e-4:
         return False
     var = float(np.var(arr))
-    if var < 1e-4:
-        return False
-    return True
+    return var >= 1e-4
 
 
 class WatchlistStore:

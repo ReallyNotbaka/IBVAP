@@ -205,4 +205,3 @@ def test_face_geometry_validation_and_quality() -> None:
     assert is_valid_exemplar(np.ones(128, dtype=np.float32)) is False
     assert is_valid_exemplar(np.array([np.nan] * 128, dtype=np.float32)) is False
     assert is_valid_exemplar(np.ones(64, dtype=np.float32)) is False
-

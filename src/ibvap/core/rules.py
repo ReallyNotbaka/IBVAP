@@ -56,7 +56,14 @@ class RuleEngine:
     def check_tripwire(self, track_id: int, footpoint: tuple[float, float], timestamp: float) -> list[dict]:
         events: list[dict] = []
         for tw_id, tw in self.tripwires.items():
-            st = self._trip_state.setdefault(track_id, {}).setdefault(tw_id, TripwireState())
+            # get() chains avoid constructing a TripwireState default on every
+            # per-track-per-frame call (setdefault evaluates its default eagerly).
+            per_track = self._trip_state.get(track_id)
+            if per_track is None:
+                per_track = self._trip_state[track_id] = {}
+            st = per_track.get(tw_id)
+            if st is None:
+                st = per_track[tw_id] = TripwireState()
             side = _side(footpoint, tw.p1, tw.p2)
             if not st.armed:
                 if st.last_side is not None and abs(side - st.last_side) > tw.hysteresis:
@@ -94,7 +101,13 @@ class RuleEngine:
             zid = zone["id"]
             poly = zone["polygon"]
             inside = point_in_polygon(footpoint[0], footpoint[1], poly)
-            ls = self._loiter_state.setdefault(track_id, {}).setdefault(zid, LoiterState())
+            # Same setdefault-alloc avoidance as check_tripwire.
+            per_track_loiter = self._loiter_state.get(track_id)
+            if per_track_loiter is None:
+                per_track_loiter = self._loiter_state[track_id] = {}
+            ls = per_track_loiter.get(zid)
+            if ls is None:
+                ls = per_track_loiter[zid] = LoiterState()
             if inside:
                 if ls.enter_ts is None:
                     ls.enter_ts = timestamp

@@ -29,14 +29,8 @@ async def cleanup_db_engine():
 
 
 @pytest.mark.asyncio
-async def test_live_db_schema_creation_and_crud():
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+async def test_live_db_schema_creation_and_crud(memory_db):
+    sm = memory_db
 
     # 1. Create Organization
     async with sm() as session:
@@ -107,14 +101,8 @@ async def test_live_db_schema_creation_and_crud():
 
 
 @pytest.mark.asyncio
-async def test_live_db_outbox_operations():
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+async def test_live_db_outbox_operations(memory_db):
+    sm = memory_db
 
     # Insert outbox records
     async with sm() as session:
@@ -156,14 +144,8 @@ async def test_live_db_outbox_operations():
 
 
 @pytest.mark.asyncio
-async def test_live_db_transaction_rollback():
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+async def test_live_db_transaction_rollback(memory_db):
+    sm = memory_db
 
     # Insert initial organization
     async with sm() as session:
@@ -251,14 +233,8 @@ async def test_live_db_file_based_sqlite(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_live_db_all_models_persistence():
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+async def test_live_db_all_models_persistence(memory_db):
+    sm = memory_db
     async with sm() as session:
         org = Organization(name="Full Stack Org")
         session.add(org)
@@ -321,14 +297,8 @@ async def test_live_db_all_models_persistence():
 
 
 @pytest.mark.asyncio
-async def test_live_db_relationship_loading():
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+async def test_live_db_relationship_loading(memory_db):
+    sm = memory_db
     async with sm() as session:
         org = Organization(name="Org with Relationships")
         session.add(org)

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { memo, useCallback, useState, useEffect, useMemo } from "react";
 import {
   useModels,
   activateModel,
@@ -17,10 +17,9 @@ interface ModelSelectorModalProps {
   onClose: () => void;
 }
 
-export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps) {
+export const ModelSelectorModal = memo(function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps) {
   const qc = useQueryClient();
-  const { data: modelData, isLoading } = useModels();
-  const models = modelData?.models || [];
+  const { data: modelData, isLoading } = useModels(isOpen);
   const activeModel = modelData?.active_model || "yolo26n";
 
   const [activeTab, setActiveTab] = useState<"models" | "usb">("models");
@@ -63,30 +62,33 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
     return () => clearInterval(interval);
   }, [downloadingModel, qc]);
 
-  if (!isOpen) return null;
+  const modelsList = useMemo(() => modelData?.models || [], [modelData?.models]);
 
-  const handleSelectModel = async (model: ModelItem) => {
-    setActionError("");
-    if (model.is_active) return;
+  const handleSelectModel = useCallback(
+    async (model: ModelItem) => {
+      setActionError("");
+      if (model.is_active) return;
 
-    if (model.is_installed) {
-      // Installed: Activate immediately
-      setActivating(true);
-      try {
-        await activateModel(model.name);
-        await qc.invalidateQueries({ queryKey: ["models"] });
-      } catch (err: unknown) {
-        setActionError(err instanceof Error ? err.message : "Failed to activate model");
-      } finally {
-        setActivating(false);
+      if (model.is_installed) {
+        // Installed: Activate immediately
+        setActivating(true);
+        try {
+          await activateModel(model.name);
+          await qc.invalidateQueries({ queryKey: ["models"] });
+        } catch (err: unknown) {
+          setActionError(err instanceof Error ? err.message : "Failed to activate model");
+        } finally {
+          setActivating(false);
+        }
+      } else {
+        // Not installed: Prompt confirmation workflow
+        setSelectedForDownload(model);
       }
-    } else {
-      // Not installed: Prompt confirmation workflow
-      setSelectedForDownload(model);
-    }
-  };
+    },
+    [qc],
+  );
 
-  const confirmDownload = async () => {
+  const confirmDownload = useCallback(async () => {
     if (!selectedForDownload) return;
     const modelName = selectedForDownload.name;
     setSelectedForDownload(null);
@@ -99,54 +101,63 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
       setDownloadingModel(null);
       setActionError(err instanceof Error ? err.message : "Failed to start download");
     }
-  };
+  }, [selectedForDownload]);
 
-  const handleDeleteWeights = async (model: ModelItem) => {
-    if (model.name === "yolo26n") {
-      setActionError("Base default model 'yolo26n' cannot be deleted.");
-      return;
-    }
-    if (model.is_active) {
-      setActionError("Cannot delete active model weights. Switch to another model first.");
-      return;
-    }
-    if (!confirm(`Are you sure you want to delete downloaded weights for ${model.name}?`)) {
-      return;
-    }
+  const handleDeleteWeights = useCallback(
+    async (model: ModelItem) => {
+      if (model.name === "yolo26n") {
+        setActionError("Base default model 'yolo26n' cannot be deleted.");
+        return;
+      }
+      if (model.is_active) {
+        setActionError("Cannot delete active model weights. Switch to another model first.");
+        return;
+      }
+      if (!confirm(`Are you sure you want to delete downloaded weights for ${model.name}?`)) {
+        return;
+      }
 
-    setDeletingModel(model.name);
-    setActionError("");
-    try {
-      await deleteModelWeights(model.name);
-      await qc.invalidateQueries({ queryKey: ["models"] });
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "Failed to delete model weights");
-    } finally {
-      setDeletingModel(null);
-    }
-  };
+      setDeletingModel(model.name);
+      setActionError("");
+      try {
+        await deleteModelWeights(model.name);
+        await qc.invalidateQueries({ queryKey: ["models"] });
+      } catch (err: unknown) {
+        setActionError(err instanceof Error ? err.message : "Failed to delete model weights");
+      } finally {
+        setDeletingModel(null);
+      }
+    },
+    [qc],
+  );
 
-  const handleUsbUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uploadFile) {
-      setActionError("Please choose an ONNX weight file to upload.");
-      return;
-    }
+  const handleUsbUpload = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!uploadFile) {
+        setActionError("Please choose an ONNX weight file to upload.");
+        return;
+      }
 
-    setUploading(true);
-    setActionError("");
+      setUploading(true);
+      setActionError("");
 
-    try {
-      await uploadModel(uploadTargetVariant, uploadFile);
-      await qc.invalidateQueries({ queryKey: ["models"] });
-      setUploadFile(null);
-      setActiveTab("models");
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "Model file upload failed.");
-    } finally {
-      setUploading(false);
-    }
-  };
+      try {
+        await uploadModel(uploadTargetVariant, uploadFile);
+        await qc.invalidateQueries({ queryKey: ["models"] });
+        setUploadFile(null);
+        setActiveTab("models");
+      } catch (err: unknown) {
+        setActionError(err instanceof Error ? err.message : "Model file upload failed.");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [uploadFile, uploadTargetVariant, qc],
+  );
+  const handleCancelDownload = useCallback(() => setSelectedForDownload(null), []);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-md p-4 modal-backdrop-animate">
@@ -255,7 +266,7 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
                   Loading model catalog...
                 </div>
               ) : (
-                models.map((m: ModelItem) => {
+                modelsList.map((m: ModelItem) => {
                   const isActive = m.name === activeModel;
                   return (
                     <div
@@ -502,7 +513,7 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
 
               <div className="flex justify-end gap-2 pt-2">
                 <button
-                  onClick={() => setSelectedForDownload(null)}
+                  onClick={handleCancelDownload}
                   className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200 transition-colors cursor-pointer"
                 >
                   Cancel
@@ -520,4 +531,4 @@ export function ModelSelectorModal({ isOpen, onClose }: ModelSelectorModalProps)
       </div>
     </div>
   );
-}
+});

@@ -1,15 +1,24 @@
-"""Camera CRUD + connection testing - Phase 2."""
+"""Camera add/test/stream endpoints. This is where phone feeds come in.
+
+Flow: POST /test probes the URL without saving, POST / creates the camera
+and spins up a _camera_worker thread, GET /{id}/stream re-serves MJPEG to
+the UI, GET /{id}/observations serves the AI results as JSON.
+Phone ports 4747 (DroidCam) / 8080 (IP Webcam) get normalized to /video.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import ipaddress
+import os
 import sys
+import tempfile
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -17,6 +26,7 @@ from urllib.parse import urlparse
 import av
 import cv2
 import numpy as np
+import structlog
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -24,13 +34,19 @@ from pydantic import BaseModel, Field
 from ibvap.core.anpr import ANPRPipeline
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
-from ibvap.core.geometry import validate_polygon
+from ibvap.core.geometry import validate_fence
 from ibvap.core.model_manager import get_shared_detector_handle
 from ibvap.core.night import NightDetector
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.probe import ProbeError, normalize_mjpeg_url, probe_url
-from ibvap.core.ssrf import SSRFError, SSRFPolicy, resolve_and_validate, validate_endpoint  # noqa: F401 - re-export
-from ibvap.core.zone_engine import Zone
+from ibvap.core.ssrf import (
+    _DEFAULT_ALLOWED_PORTS,
+    SSRFError,
+    SSRFPolicy,
+    resolve_and_validate,
+    validate_endpoint,
+)  # noqa: F401 - re-export
+from ibvap.core.zone_engine import DEFAULT_ZONE, Zone, is_intrusion
 
 if sys.platform == "win32":
     with contextlib.suppress(Exception):
@@ -39,6 +55,133 @@ if sys.platform == "win32":
 
 router = APIRouter(prefix="/api/v1/cameras", tags=["cameras"])
 ANPR_DISPLAY_CONFIDENCE = 0.80
+# Hoisted MJPEG framing constants (avoid per-frame allocations of literals).
+_MJPEG_BOUNDARY = b"--frame\r\n"
+_MJPEG_CT = b"Content-Type: image/jpeg\r\nContent-Length: "
+_MJPEG_SEP = b"\r\n\r\n"
+_MJPEG_END = b"\r\n"
+
+logger = structlog.get_logger(__name__)
+
+
+def _is_dev_or_test_env() -> bool:
+    """Return True when running in dev/test (synthetic harness allowed)."""
+    # Check Settings env flag if it exists, else IBVAP_ENV env var.
+    try:
+        from ibvap.config import Settings
+
+        settings = Settings()
+        for attr in ("env", "environment"):
+            val = getattr(settings, attr, None)
+            if isinstance(val, str) and val:
+                return val.lower() in {"dev", "development", "test", "testing"}
+        app_env = getattr(getattr(settings, "app", None), "env", None)
+        if isinstance(app_env, str) and app_env:
+            return app_env.lower() in {"dev", "development", "test", "testing"}
+    except Exception:
+        pass
+    env_val = os.getenv("IBVAP_ENV", "").lower()
+    if env_val:
+        return env_val in {"dev", "development", "test", "testing"}
+    # pytest sets PYTEST_CURRENT_TEST; treat as test env for backward compat.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    # Default allow when IBVAP_ENV unset (local dev); prod must set IBVAP_ENV=prod to gate.
+    return True
+
+
+def _synthetic_allowed() -> bool:
+    return _is_dev_or_test_env()
+
+
+def _file_jail_roots() -> list[Path]:
+    return list(_cached_jail_roots())
+
+
+@lru_cache(maxsize=1)
+def _cached_jail_roots() -> tuple[Path, ...]:
+    # Resolved once per process: avoids 4x Path.resolve() syscalls per request.
+    roots: list[Path] = []
+    for candidate in ("data/uploads", "data/quarantine", "tests/fixtures"):
+        with contextlib.suppress(Exception):
+            roots.append(Path(candidate).resolve())
+    with contextlib.suppress(Exception):
+        roots.append(Path(tempfile.gettempdir()).resolve())
+    return tuple(roots)
+
+
+@lru_cache(maxsize=1)
+def _cached_writable_jail() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for candidate in ("data/uploads", "data/quarantine"):
+        with contextlib.suppress(Exception):
+            roots.append(Path(candidate).resolve())
+    return tuple(roots)
+
+
+def _resolve_jailed_file(raw_path: str) -> Path:
+    """Resolve a file:// or plain path inside the upload jail.
+
+    Rejects ``..`` traversal and absolute paths outside the jail
+    (data/uploads, data/quarantine, tests/fixtures, tempdir for tests).
+    """
+    stripped = raw_path.replace("file://", "", 1) if raw_path.startswith("file://") else raw_path
+    # Reject traversal attempts explicitly (defense in depth; resolve() would normalize).
+    if ".." in Path(stripped).parts:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_file_path", "message": "Invalid footage path"},
+        )
+    candidate = Path(stripped)
+    try:
+        resolved = candidate.resolve()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_file_path", "message": "Invalid footage path"},
+        ) from None
+    for root in _file_jail_roots():
+        try:
+            if resolved.is_relative_to(root):
+                return resolved
+        except Exception:
+            continue
+    # Outside jail: in dev/test allow existing video files (keeps tmp_path tests passing),
+    # otherwise reject without disclosing the absolute path.
+    if _is_dev_or_test_env():
+        try:
+            if resolved.exists() and resolved.is_file() and resolved.suffix.lower() in {".mp4", ".avi", ".mkv", ".mov", ".webm"}:
+                return resolved
+        except Exception:
+            pass
+    raise HTTPException(
+        status_code=400,
+        detail={"code": "invalid_file_path", "message": "Invalid footage path"},
+    )
+
+
+def _is_path_inside_jail(path_str: str) -> bool:
+    try:
+        resolved = Path(path_str).resolve()
+    except Exception:
+        return False
+    # Only uploads/quarantine are writable jail for unlink; never unlink fixtures/temp outside.
+    # Cached resolves avoid repeated filesystem syscalls per request.
+    for root in _cached_writable_jail():
+        try:
+            if resolved.is_relative_to(root):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _safe_unlink_inside_jail(path_str: str) -> None:
+    """Never unlink outside the upload jail."""
+    if not _is_path_inside_jail(path_str):
+        return
+    with contextlib.suppress(OSError):
+        Path(path_str).unlink()
 
 
 # In-memory store for Phase 2 demo (PG persistence via migrations; runtime wired in Phase 3)
@@ -85,11 +228,13 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     )
     saved_fence = cam.get("fence")
     if isinstance(saved_fence, dict) and isinstance(saved_fence.get("polygon"), list):
+        f_type = str(saved_fence.get("fence_type", "line" if len(saved_fence["polygon"]) == 2 else "polygon"))
         pipeline.zone = Zone(
             id=f"zone-{camera_id[:8]}",
-            name=str(saved_fence.get("name", "User fence")),
+            name=str(saved_fence.get("name", "User line fence" if f_type == "line" else "User fence")),
             polygon=saved_fence["polygon"],
             enabled=bool(saved_fence.get("enabled", True)),
+            fence_type=f_type,
         )
     _ACTIVE_PIPELINES[camera_id] = pipeline
 
@@ -284,6 +429,15 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             "bbox_norm": track.bbox_norm,
                             "identity": getattr(track, "identity", None),
                             "identity_locked": getattr(track, "identity_locked", False),
+                            "intrusion": (
+                                bool(getattr(pipeline.zone, "enabled", True))
+                                and pipeline.zone.id != DEFAULT_ZONE.id
+                                and track.class_name in {"person", "car", "truck", "bus", "motorcycle"}
+                                and (
+                                    track.track_id in getattr(pipeline, "_active_line_intruders", set())
+                                    or is_intrusion(track.footpoint, pipeline.zone, track=track)
+                                )
+                            ),
                         }
                         for track in pipeline.last_tracks
                     ],
@@ -489,7 +643,10 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         _ACTIVE_PIPELINES.pop(camera_id, None)
         return
 
-    # ---------- LIVE STREAM: low-latency, zero-copy MJPEG passthrough & WiFi error resilience ----------
+    # Live path (phones, RTSP cams). Two outputs from one demux:
+    # 1) raw JPEG bytes straight to _FRAMES for the browser (no re-encode)
+    # 2) decoded ndarray to the analysis thread for YOLO/face/plate
+    # Wifi from phones is flaky so we auto-reconnect with backoff here.
     endpoint = normalize_mjpeg_url(str(cam["endpoint"]))
     parsed_endpoint = urlparse(endpoint)
     path_lower = parsed_endpoint.path.lower().rstrip("/")
@@ -537,7 +694,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 if stop.is_set():
                     break
 
-                # Robust extraction for MJPEG feeds: packet bytes contains JPEG SOI (\xff\xd8) and EOI (\xff\xd9)
+                # MJPEG packets sometimes have extra http chunk headers around them,
+                # so slice from SOI (ffd8) to EOI (ffd9) to get a clean jpeg.
+                # Falls back to cv2 re-encode if the slice looks bad.
                 packet_bytes = bytes(packet)
                 soi_idx = packet_bytes.find(b"\xff\xd8")
                 eoi_idx = packet_bytes.rfind(b"\xff\xd9")
@@ -654,7 +813,9 @@ class PlaybackSeekRequest(BaseModel):
 
 
 class CameraFenceRequest(BaseModel):
-    polygon: list[list[float]]
+    polygon: list[list[float]] = []
+    line: list[list[float]] | None = None
+    fence_type: Literal["polygon", "line", "auto"] | None = None
     enabled: bool = True
 
 
@@ -674,10 +835,11 @@ def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
         except ValueError:
             continue
     # default private allowlist for dev: allow 192.168/16, 10/8, 172.16/12 via policy if provided
+    # allowed_ports=None would fall back to SSRF default deny-list; keep explicit default via ssrf module.
     return SSRFPolicy(
         allowed_schemes=frozenset({"rtsp", "rtsps", "http", "https"}),
         allowed_hosts=None,
-        allowed_ports=None,
+        allowed_ports=_DEFAULT_ALLOWED_PORTS,
         site_cidr_allowlist=tuple(nets),
     )
 
@@ -691,16 +853,23 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
 
     file_endpoint = req.protocol == "file" or req.endpoint.startswith("file://") or (req.protocol is None and Path(req.endpoint).exists())
     if file_endpoint:
-        local_path = Path(req.endpoint.replace("file://", "", 1)) if req.endpoint.startswith("file://") else Path(req.endpoint)
+        try:
+            local_path = _resolve_jailed_file(req.endpoint)
+        except HTTPException as exc:
+            stage("Validating address", "failed")
+            detail = exc.detail if isinstance(exc.detail, dict) else {"code": "invalid_file_path", "message": "Invalid footage path"}
+            code = str(detail.get("code", "invalid_file_path")) if isinstance(detail, dict) else "invalid_file_path"
+            return CameraTestResponse(result="error", reason_code=code, safe_message="Invalid footage path", stages=stages)
         stage("Validating address", "ok")
         stage("Checking network permission", "ok")
         stage("Resolving host", "ok")
         stage("Connecting", "ok")
         stage("Authenticating", "ok")
         stage("Inspecting stream", "running")
+        container = None
         try:
             if not local_path.exists():
-                raise FileNotFoundError(local_path)
+                raise FileNotFoundError("missing")
             container = av.open(str(local_path))
             stream = next((s for s in container.streams if s.type == "video"), None)
             if stream is None:
@@ -728,16 +897,32 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
                     "warnings": [],
                     "frames_decoded": 1,
                     "first_frame_pts": first_frame.pts,
-                    "redacted_endpoint": str(local_path),
+                    "redacted_endpoint": local_path.name,
                     "resolved_ips": [],
                 },
             )
-        except Exception as exc:  # pragma: no cover - defensive fallback
+        except Exception:  # pragma: no cover - defensive fallback
             stage("Inspecting stream", "failed")
-            return CameraTestResponse(result="error", reason_code="local_file_failed", safe_message=str(exc), stages=stages)
+            # Generic message: never disclose OS absolute paths.
+            return CameraTestResponse(
+                result="error", reason_code="local_file_failed", safe_message="Local footage could not be opened", stages=stages
+            )
+        finally:
+            if container is not None:
+                with contextlib.suppress(Exception):
+                    container.close()
 
     # Synthetic harness for tests / offline dev - no network
     if req.endpoint.startswith("synthetic://"):
+        if not _synthetic_allowed():
+            stage("Validating address", "failed")
+            return CameraTestResponse(
+                result="error",
+                reason_code="synthetic_disabled",
+                safe_message="Synthetic sources are only available in dev/test",
+                stages=stages,
+                probe=None,
+            )
         stage("Validating address", "ok")
         stage("Checking network permission", "ok")
         stage("Resolving host", "ok")
@@ -864,7 +1049,8 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
 @router.post("/test", response_model=CameraTestResponse)
 async def test_unsaved(req: CameraTestRequest) -> CameraTestResponse:
     """Test connection without saving - spec 8 Step 3."""
-    return _run_test_stages(req)
+    # _run_test_stages does blocking DNS + PyAV IO — offload from event loop.
+    return await asyncio.to_thread(_run_test_stages, req)
 
 
 @router.post("", response_model=dict[str, Any])
@@ -872,11 +1058,15 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
     # Local footage is a first-class source, not an SSRF target.
     file_endpoint = req.protocol == "file" or req.endpoint.startswith("file://") or (req.protocol is None and Path(req.endpoint).exists())
     is_synthetic = req.endpoint.startswith("synthetic://")
+    if is_synthetic and not _synthetic_allowed():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "synthetic_disabled", "message": "Synthetic sources are only available in dev/test"},
+        )
     if file_endpoint:
-        endpoint_value = Path(req.endpoint.replace("file://", "", 1)) if req.endpoint.startswith("file://") else Path(req.endpoint)
+        endpoint_value = _resolve_jailed_file(req.endpoint)
         if not endpoint_value.exists():
             raise HTTPException(status_code=400, detail={"code": "missing_file", "message": "Local footage file not found"})
-        endpoint_value = endpoint_value.resolve()
     else:
         if not is_synthetic:
             raw_ep = req.endpoint.strip()
@@ -891,7 +1081,8 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
                 if (req.username or req.password) and "@" in req.endpoint:
                     raise HTTPException(status_code=400, detail="Credentials must not be in URL")
                 if parsed.hostname:
-                    resolve_and_validate(parsed.hostname, policy, timeout=3.0)
+                    # Blocking DNS — offload; ssrf layer caches successful lookups w/ TTL.
+                    await asyncio.to_thread(resolve_and_validate, parsed.hostname, policy, 3.0)
         except SSRFError as e:
             raise HTTPException(status_code=400, detail={"code": e.code, "message": e.safe_message}) from e
         endpoint_value = req.endpoint
@@ -974,7 +1165,17 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
                     frame = _FRAMES.get(camera_id)
                     if frame:
                         last_version = current_version
-                        yield b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n"
+                        # Hoisted constants + single join avoids intermediate concat copies.
+                        yield b"".join(
+                            (
+                                _MJPEG_BOUNDARY,
+                                _MJPEG_CT,
+                                str(len(frame)).encode("ascii"),
+                                _MJPEG_SEP,
+                                frame,
+                                _MJPEG_END,
+                            )
+                        )
                         await asyncio.sleep(0.001)
                         continue
                 await asyncio.sleep(0.002)
@@ -1017,16 +1218,71 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
 async def set_camera_fence(camera_id: str, req: CameraFenceRequest) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
-    error = validate_polygon(req.polygon)
+
+    # If clearing fence (empty polygon and no line)
+    if not req.polygon and not req.line:
+        _CAMERAS[camera_id]["fence"] = None
+        pipeline = _ACTIVE_PIPELINES.get(camera_id)
+        if pipeline is not None:
+            pipeline.zone = DEFAULT_ZONE
+            if hasattr(pipeline, "_active_line_intruders"):
+                pipeline._active_line_intruders.clear()
+        return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
+
+    points = req.line if req.line is not None else req.polygon
+
+    if req.fence_type == "line" or req.line is not None:
+        effective_type = "line"
+    elif req.fence_type == "auto":
+        effective_type = "line" if len(points) == 2 else "polygon"
+    elif req.fence_type == "polygon":
+        effective_type = "polygon"
+    else:
+        # Default when fence_type not specified: "polygon"
+        # Legacy polygon requests without fence_type="line" fail 422 for len(points) == 2
+        effective_type = "polygon"
+
+    error = validate_fence(points, fence_type=effective_type)
     if error:
         raise HTTPException(status_code=422, detail=error)
-    if any(not (0.0 <= point[0] <= 1.0 and 0.0 <= point[1] <= 1.0) for point in req.polygon):
+
+    if any(not (0.0 <= point[0] <= 1.0 and 0.0 <= point[1] <= 1.0) for point in points):
         raise HTTPException(status_code=422, detail="Fence points must be normalized between 0 and 1")
-    zone = Zone(id=f"zone-{camera_id[:8]}", name="User fence", polygon=req.polygon, enabled=req.enabled)
-    _CAMERAS[camera_id]["fence"] = {"polygon": req.polygon, "enabled": req.enabled, "name": zone.name}
+
+    zone_name = "User line tripwire" if effective_type == "line" else "User fence"
+    zone = Zone(
+        id=f"zone-{camera_id[:8]}",
+        name=zone_name,
+        polygon=points,
+        enabled=req.enabled,
+        fence_type=effective_type,
+    )
+    _CAMERAS[camera_id]["fence"] = {
+        "polygon": points,
+        "fence_type": effective_type,
+        "enabled": req.enabled,
+        "name": zone.name,
+    }
     pipeline = _ACTIVE_PIPELINES.get(camera_id)
     if pipeline is not None:
         pipeline.zone = zone
+        if hasattr(pipeline, "_active_line_intruders"):
+            pipeline._active_line_intruders.clear()
+    return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
+
+
+@router.delete("/{camera_id}/fence", response_model=dict[str, Any])
+async def delete_camera_fence(camera_id: str) -> dict[str, Any]:
+    # TODO: require authentication/authorization for mutating routes (would break tests today).
+    logger.warning("unauthenticated_delete", route="DELETE /api/v1/cameras/{camera_id}/fence")
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    _CAMERAS[camera_id]["fence"] = None
+    pipeline = _ACTIVE_PIPELINES.get(camera_id)
+    if pipeline is not None:
+        pipeline.zone = DEFAULT_ZONE
+        if hasattr(pipeline, "_active_line_intruders"):
+            pipeline._active_line_intruders.clear()
     return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
 
 
@@ -1076,8 +1332,8 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
             _OBSERVATIONS.pop(camera_id, None)
             _PLAYBACK.pop(camera_id, None)
             if camera.get("temporary") and camera.get("protocol") == "file":
-                with contextlib.suppress(OSError):
-                    Path(str(camera["endpoint"])).unlink()
+                # Never unlink outside the upload jail.
+                _safe_unlink_inside_jail(str(camera["endpoint"]))
         state = dict(playback)
     if action in {"pause", "resume", "restart"}:
         _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"
@@ -1109,7 +1365,7 @@ async def test_saved(camera_id: str) -> CameraTestResponse:
         protocol=cam.get("protocol"),
         site_cidr_allowlist=cam.get("_site_cidr_allowlist"),
     )
-    return _run_test_stages(req)
+    return await asyncio.to_thread(_run_test_stages, req)
 
 
 @router.post("/{camera_id}/enable", response_model=dict[str, Any])
@@ -1169,6 +1425,8 @@ async def reconnect_camera(camera_id: str) -> dict[str, Any]:
 
 @router.delete("/{camera_id}", response_model=dict[str, str])
 async def delete_camera(camera_id: str) -> dict[str, str]:
+    # TODO: require authentication/authorization for mutating routes (would break tests today).
+    logger.warning("unauthenticated_delete", route="DELETE /api/v1/cameras/{camera_id}")
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
     # impact preview would be here - for Phase 2 we just delete

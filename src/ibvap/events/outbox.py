@@ -24,6 +24,10 @@ class OutboxEntry:
 
 _OUTBOX: list[OutboxEntry] = []
 _EVENTS: list[dict[str, Any]] = []
+# O(1) indexes to avoid O(n) scans per write/deliver on large streams.
+_DEDUP_EVENT_INDEX: dict[str, dict[str, Any]] = {}
+_DEDUP_OUTBOX_INDEX: dict[str, OutboxEntry] = {}
+_OUTBOX_ID_INDEX: dict[str, OutboxEntry] = {}
 
 
 def transactional_write(
@@ -33,12 +37,9 @@ def transactional_write(
 ) -> OutboxEntry:
     """Simulate single PG transaction writing event + outbox. Idempotent via dedup_key."""
     if dedup_key:
-        for e in _EVENTS:
-            if e.get("dedup_key") == dedup_key:
-                # already exists - return existing outbox
-                for o in _OUTBOX:
-                    if o.dedup_key == dedup_key:
-                        return o
+        existing = _DEDUP_OUTBOX_INDEX.get(dedup_key)
+        if existing is not None and _DEDUP_EVENT_INDEX.get(dedup_key) is not None:
+            return existing
     eid = str(uuid.uuid4())
     event["id"] = eid
     event["dedup_key"] = dedup_key
@@ -46,6 +47,10 @@ def transactional_write(
     _EVENTS.append(event)
     entry = OutboxEntry(id=str(uuid.uuid4()), topic=topics[0], payload=event, dedup_key=dedup_key)
     _OUTBOX.append(entry)
+    _OUTBOX_ID_INDEX[entry.id] = entry
+    if dedup_key:
+        _DEDUP_EVENT_INDEX[dedup_key] = event
+        _DEDUP_OUTBOX_INDEX[dedup_key] = entry
     return entry
 
 
@@ -60,18 +65,27 @@ def list_outbox(status: str | None = None) -> list[OutboxEntry]:
 
 
 def mark_delivered(outbox_id: str) -> None:
+    entry = _OUTBOX_ID_INDEX.get(outbox_id)
+    if entry is not None:
+        entry.status = "done"
+        return
     for o in _OUTBOX:
         if o.id == outbox_id:
             o.status = "done"
+            _OUTBOX_ID_INDEX[outbox_id] = o
             break
 
 
 def clear_events() -> int:
     count = len(_EVENTS)
     _EVENTS.clear()
+    _DEDUP_EVENT_INDEX.clear()
     return count
 
 
 def clear_all() -> None:
     _EVENTS.clear()
     _OUTBOX.clear()
+    _DEDUP_EVENT_INDEX.clear()
+    _DEDUP_OUTBOX_INDEX.clear()
+    _OUTBOX_ID_INDEX.clear()

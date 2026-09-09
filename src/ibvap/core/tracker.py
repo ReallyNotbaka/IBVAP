@@ -1,7 +1,8 @@
-"""Simple centroid tracker - ByteTrack stub for Phase 3 slice.
+"""Keeps IDs on boxes across frames. Simple centroid matcher for now.
 
-Spec 12: ByteTrack as initial tracker; Phase 3 uses this minimal centroid tracker
-to prove ID persistence within camera+epoch without heavy supervision deps.
+Matches new detections to old tracks by distance, ages out ones that vanish.
+footpoint (bottom-center) is what the fence check uses. record_biometric_match
+handles the watchlist latch - critical locks right away, others need 2-of-3.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ class Track:
     identity_locked: bool = False
     match_history: list[dict[str, Any]] = field(default_factory=list)
     last_bio_frame: int = -999
+    prev_bbox_norm: tuple[float, float, float, float] | None = None
 
     @property
     def center(self) -> tuple[float, float]:
@@ -38,6 +40,13 @@ class Track:
     def footpoint(self) -> tuple[float, float]:
         # bottom-center per spec 11 for person/vehicle zone logic
         x1, y1, x2, y2 = self.bbox_norm
+        return ((x1 + x2) / 2.0, y2)
+
+    @property
+    def prev_footpoint(self) -> tuple[float, float] | None:
+        if self.prev_bbox_norm is None:
+            return None
+        x1, y1, x2, y2 = self.prev_bbox_norm
         return ((x1 + x2) / 2.0, y2)
 
     def record_biometric_match(
@@ -67,9 +76,12 @@ class Track:
         if len(self.match_history) > 6:
             self.match_history.pop(0)
 
-        # Evaluate last 3 matches: require at least 2 RED tier matches for this suspect
-        recent = self.match_history[-3:]
-        red_matches = [m for m in recent if m["entry_id"] == entry_id and m["tier"] == "RED"]
+        # Evaluate last 3 matches: require at least 2 RED tier matches for this suspect.
+        # Count without building an intermediate list (hot on face frames).
+        red_count = 0
+        for m in self.match_history[-3:]:
+            if m["entry_id"] == entry_id and m["tier"] == "RED":
+                red_count += 1
         is_critical = tl_str == "CRITICAL"
 
         # If already locked to an identity:
@@ -84,13 +96,15 @@ class Track:
                 return True
 
             # Different suspect: protect the existing locked identity!
-            # AMBER matches NEVER overwrite a locked identity
+            # AMBER matches NEVER overwrite a locked identity.
+            # Return False: this entry_id is not the locked identity, so the
+            # caller must not credit a sighting to it.
             if tier != "RED":
-                return True
+                return False
 
             # If currently locked to a CRITICAL target, non-critical matches cannot overwrite
             if curr_threat == "CRITICAL" and not is_critical:
-                return True
+                return False
 
             # Precedence: CRITICAL target incoming over non-critical locked target
             if is_critical and curr_threat != "CRITICAL":
@@ -105,7 +119,7 @@ class Track:
                 return True
 
             # Both same tier: require 2 RED matches and strictly higher score to reassign
-            if len(red_matches) >= 2 and score > self.identity.get("score", 0.0):
+            if red_count >= 2 and score > self.identity.get("score", 0.0):
                 self.identity = {
                     "entry_id": entry_id,
                     "name": name,
@@ -116,7 +130,8 @@ class Track:
                 }
                 return True
 
-            return True
+            # Locked to a different identity and no override: do not confirm B.
+            return False
 
         # Not locked yet:
         # Critical target locks immediately on first RED tier match
@@ -133,13 +148,9 @@ class Track:
             return True
 
         # Non-critical suspect confirmed on 2 of 3 RED matches
-        if len(red_matches) >= 2:
+        if red_count >= 2:
             self.identity_locked = True
-            prev_score = (
-                self.identity["score"]
-                if (self.identity and self.identity.get("entry_id") == entry_id)
-                else score
-            )
+            prev_score = self.identity["score"] if (self.identity and self.identity.get("entry_id") == entry_id) else score
             self.identity = {
                 "entry_id": entry_id,
                 "name": name,
@@ -222,17 +233,34 @@ class CentroidTracker:
         new_entries: list[Track] = []
         unmatched_dets: list[dict[str, Any]] = []
 
+        iou_threshold = self.iou_threshold
+        smooth = self.smoothing
+        inv_smooth = 1.0 - smooth
+        iou_fn = _iou
+        # Snapshot + precomputed centers: avoids re-iterating the dict and
+        # recomputing trk.center per (det, track) pair. Centers of matched
+        # tracks go stale, but matched ids are skipped afterwards, so this
+        # is exactly equivalent.
+        track_items = list(self.tracks.items())
+        track_centers: list[tuple[int, Track, float, float]] = [
+            (tid, trk, (trk.bbox_norm[0] + trk.bbox_norm[2]) / 2.0, (trk.bbox_norm[1] + trk.bbox_norm[3]) / 2.0) for tid, trk in track_items
+        ]
+
         # Stage 1: match same class with IoU (with centroid proximity fallback for fast motion)
         for det in detections:
+            if not track_items:
+                unmatched_dets.append(det)
+                continue
             bbox = det["bbox_norm"]
+            det_class = det["class_name"]
             best_id: int | None = None
-            best_iou = self.iou_threshold
-            for tid, trk in self.tracks.items():
+            best_iou = iou_threshold
+            for tid, trk in track_items:
                 if tid in matched:
                     continue
-                if trk.class_name != det["class_name"]:
+                if trk.class_name != det_class:
                     continue
-                iou = _iou(trk.bbox_norm, bbox)
+                iou = iou_fn(trk.bbox_norm, bbox)
                 if iou > best_iou:
                     best_iou = iou
                     best_id = tid
@@ -242,12 +270,11 @@ class CentroidTracker:
                 det_cx = (bbox[0] + bbox[2]) / 2.0
                 det_cy = (bbox[1] + bbox[3]) / 2.0
                 best_dist = 0.14
-                for tid, trk in self.tracks.items():
+                for tid, trk, trk_cx, trk_cy in track_centers:
                     if tid in matched:
                         continue
-                    if trk.class_name != det["class_name"]:
+                    if trk.class_name != det_class:
                         continue
-                    trk_cx, trk_cy = trk.center
                     dist = ((det_cx - trk_cx) ** 2 + (det_cy - trk_cy) ** 2) ** 0.5
                     if dist < best_dist:
                         best_dist = dist
@@ -255,11 +282,15 @@ class CentroidTracker:
 
             if best_id is not None:
                 trk = self.tracks[best_id]
+                trk.prev_bbox_norm = trk.bbox_norm
                 previous = trk.bbox_norm
-                trk.bbox_norm = tuple(
-                    (1.0 - self.smoothing) * old + self.smoothing * new
-                    for old, new in zip(previous, bbox, strict=True)
-                )  # type: ignore[assignment]
+                # Explicit 4-float lerp: same math, no generator/zip alloc.
+                trk.bbox_norm = (
+                    inv_smooth * previous[0] + smooth * bbox[0],
+                    inv_smooth * previous[1] + smooth * bbox[1],
+                    inv_smooth * previous[2] + smooth * bbox[2],
+                    inv_smooth * previous[3] + smooth * bbox[3],
+                )
                 trk.confidence = float(det["confidence"])
                 trk.age = 0
                 trk.hits += 1
@@ -272,25 +303,26 @@ class CentroidTracker:
                 unmatched_dets.append(det)
 
         # Stage 2: Cross-class spatial overlap deduplication
-        # If an unmatched detection heavily overlaps an existing active track (IoU > 0.40),
+        # If an unmatched detection heavily overlaps an existing active track (IoU > 0.60),
         # it is the exact same physical object classified as a different class (e.g. car vs motorcycle/person).
         for det in unmatched_dets:
             bbox = det["bbox_norm"]
             conf = float(det["confidence"])
             overlapping_tid: int | None = None
-            best_overlap_iou = 0.40
-            for tid, trk in self.tracks.items():
-                iou = _iou(trk.bbox_norm, bbox)
+            best_overlap_iou = 0.60
+            # Snapshot iteration: tracks spawned below are added to `matched`
+            # immediately, so excluding them here is exactly equivalent.
+            for tid, trk in track_items:
+                if tid in matched:
+                    continue
+                iou = iou_fn(trk.bbox_norm, bbox)
                 if iou > best_overlap_iou:
                     best_overlap_iou = iou
                     overlapping_tid = tid
 
             if overlapping_tid is not None:
                 trk = self.tracks[overlapping_tid]
-                has_person_identity = (
-                    trk.class_name == "person"
-                    and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
-                )
+                has_person_identity = trk.class_name == "person" and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
                 if conf > trk.confidence and not (has_person_identity and det["class_name"] != "person"):
                     trk.class_name = det["class_name"]
                     trk.class_id = int(det["class_id"])
@@ -298,11 +330,15 @@ class CentroidTracker:
                 trk.age = 0
                 trk.hits += 1
                 trk.last_seen = timestamp
+                trk.prev_bbox_norm = trk.bbox_norm
                 previous = trk.bbox_norm
-                trk.bbox_norm = tuple(
-                    (1.0 - self.smoothing) * old + self.smoothing * new
-                    for old, new in zip(previous, bbox, strict=True)
-                )  # type: ignore[assignment]
+                # Explicit 4-float lerp: same math, no generator/zip alloc.
+                trk.bbox_norm = (
+                    inv_smooth * previous[0] + smooth * bbox[0],
+                    inv_smooth * previous[1] + smooth * bbox[1],
+                    inv_smooth * previous[2] + smooth * bbox[2],
+                    inv_smooth * previous[3] + smooth * bbox[3],
+                )
                 trk.trajectory.append(trk.center)
                 if len(trk.trajectory) > 64:
                     trk.trajectory.pop(0)
@@ -344,13 +380,15 @@ class CentroidTracker:
 
         # Preserve confirmed and locked tracks through short detector misses,
         # but suppress ghost duplicates if an active track (age == 0) overlaps an aged track.
-        active_tracks = [t for t in self.tracks.values() if t.age == 0]
+        active_boxes = [t.bbox_norm for t in self.tracks.values() if t.age == 0]
         visible_tracks: list[Track] = []
         for t in self.tracks.values():
             max_allowed_age = 12 if t.identity_locked and t.identity and t.identity.get("threat_level") == "CRITICAL" else 3
             if t.age > max_allowed_age:
                 continue
-            if t.age > 0 and any(_iou(t.bbox_norm, act.bbox_norm) > 0.25 for act in active_tracks):
-                continue
+            if t.age > 0 and active_boxes:
+                t_box = t.bbox_norm
+                if any(iou_fn(t_box, act_box) > 0.25 for act_box in active_boxes):
+                    continue
             visible_tracks.append(t)
         return visible_tracks, new_entries, terminated

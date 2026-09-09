@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from ibvap.core.detector import (
     SECURITY_CLASSES,
@@ -14,30 +15,31 @@ from ibvap.core.pipeline import MiniPipeline
 from ibvap.events.outbox import clear_all, list_events
 
 
-def test_onnx_detector_initialization_and_properties() -> None:
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+@pytest.mark.slow
+def test_onnx_detector_initialization_and_properties(shared_onnx_detector: ONNXDetectorProvider) -> None:
+    detector = shared_onnx_detector
     assert detector.model_id == "yolo26n"
     assert detector.input_size == 640
     assert detector.runtime in ("directml", "cpu")
 
 
-def test_onnx_detector_blank_frame_returns_empty() -> None:
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+def test_onnx_detector_blank_frame_returns_empty(shared_onnx_detector: ONNXDetectorProvider) -> None:
+    detector = shared_onnx_detector
     blank = np.zeros((480, 640, 3), dtype=np.uint8)
     dets = detector.detect(blank, frame_id=0)
     assert isinstance(dets, list)
     assert len(dets) == 0
 
 
-def test_onnx_detector_empty_frame_handling() -> None:
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+def test_onnx_detector_empty_frame_handling(shared_onnx_detector: ONNXDetectorProvider) -> None:
+    detector = shared_onnx_detector
     empty = np.zeros((0, 0, 3), dtype=np.uint8)
     dets = detector.detect(empty, frame_id=0)
     assert dets == []
 
 
-def test_onnx_detector_preprocessing_letterbox() -> None:
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+def test_onnx_detector_preprocessing_letterbox(shared_onnx_detector: ONNXDetectorProvider) -> None:
+    detector = shared_onnx_detector
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     blob, scale, pad_x, pad_y = detector._preprocess(frame)
 
@@ -50,8 +52,10 @@ def test_onnx_detector_preprocessing_letterbox() -> None:
     assert np.max(blob) <= 1.0
 
 
-def test_onnx_detector_simulated_detections_and_coordinate_bounds() -> None:
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+def test_onnx_detector_simulated_detections_and_coordinate_bounds(
+    shared_onnx_detector: ONNXDetectorProvider,
+) -> None:
+    detector = shared_onnx_detector
 
     # Create mock session output to verify parsing, NMS, and coordinate normalization
     # Shape: (1, 84, 8400)
@@ -131,9 +135,11 @@ def test_pipeline_explicit_detector_injection() -> None:
     assert len(list_events()) == 1
 
 
-def test_onnx_detector_class_aware_nms_preserves_colocated_classes() -> None:
+def test_onnx_detector_class_aware_nms_preserves_colocated_classes(
+    shared_onnx_detector: ONNXDetectorProvider,
+) -> None:
     """Class-aware NMS must preserve co-located person and vehicle without inter-class suppression."""
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+    detector = shared_onnx_detector
 
     # Mock output with:
     # 1. Person at cx=320, cy=320, w=100, h=200, conf=0.92
@@ -168,9 +174,11 @@ def test_onnx_detector_class_aware_nms_preserves_colocated_classes() -> None:
         detector._session.run = orig_run
 
 
-def test_onnx_detector_preprocessing_aspect_ratios_buffer_reuse() -> None:
+def test_onnx_detector_preprocessing_aspect_ratios_buffer_reuse(
+    shared_onnx_detector: ONNXDetectorProvider,
+) -> None:
     """Reusable canvas buffer must handle dynamic aspect ratios and frame sizes seamlessly."""
-    detector = ONNXDetectorProvider(model_path="models/yolo26n.onnx")
+    detector = shared_onnx_detector
 
     # 1. 1080p landscape
     frame_1080 = np.ones((1080, 1920, 3), dtype=np.uint8) * 50
@@ -192,4 +200,3 @@ def test_onnx_detector_preprocessing_aspect_ratios_buffer_reuse() -> None:
     assert blob3.shape == (1, 3, 640, 640)
     assert pad_x3 == 140.0
     assert pad_y3 == 0.0
-

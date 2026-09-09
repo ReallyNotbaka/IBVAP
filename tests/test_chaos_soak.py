@@ -20,15 +20,17 @@ import numpy as np
 import pytest
 from sqlalchemy import select
 
-from ibvap.config import DBConfig, Settings
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.detector import MockPersonDetector
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.tracker import CentroidTracker
-from ibvap.db import dispose_engine, get_engine, get_sessionmaker
 from ibvap.events.outbox import clear_all, list_events, list_outbox, transactional_write
-from ibvap.models import Base, Camera, Organization, Outbox, Site
+from ibvap.models import Camera, Organization, Outbox, Site
+
+# Metadata only — full suite still runs by default; enables targeted runs
+# (e.g. `pytest -m "not slow"`) without changing coverage.
+pytestmark = [pytest.mark.slow, pytest.mark.soak]
 
 
 def test_bounded_queue_backpressure_chaos() -> None:
@@ -153,7 +155,7 @@ def test_camera_rapid_reconnect_epoch_isolation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transactional_outbox_failure_isolation() -> None:
+async def test_transactional_outbox_failure_isolation(memory_db) -> None:
     """Test transactional outbox failure isolation and rollback.
 
     Verifies:
@@ -181,13 +183,8 @@ async def test_transactional_outbox_failure_isolation() -> None:
     assert len(list_outbox()) == 1
 
     # 2. Live Async SQLAlchemy Database Transactional Failure & Rollback
-    settings = Settings(db=DBConfig(url="sqlite+aiosqlite:///:memory:"))
-    await dispose_engine()
-    engine = get_engine(settings)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    sm = get_sessionmaker(settings)
+    # (in-memory DB provided by the shared `memory_db` fixture)
+    sm = memory_db
 
     # Seed organization and site
     org_id = uuid.uuid4()
@@ -262,8 +259,6 @@ async def test_transactional_outbox_failure_isolation() -> None:
 
         res_cam_ok = await session.execute(select(Camera).where(Camera.name == "Thermal-Chaos-01"))
         assert res_cam_ok.scalar_one().name == "Thermal-Chaos-01"
-
-    await dispose_engine()
 
 
 def test_continuous_soak_memory_stability() -> None:

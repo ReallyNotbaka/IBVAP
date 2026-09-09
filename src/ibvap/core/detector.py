@@ -1,7 +1,8 @@
-"""DetectorProvider - vendor-neutral abstraction and ONNX implementation.
+"""Person/vehicle detection. ONNX YOLO under the hood.
 
-Provides DetectorProvider protocol, MockPersonDetector for testing,
-and real ONNXDetectorProvider with DirectML and CPU execution providers.
+Tries DirectML first (Windows GPU), falls back to CPU if that's missing.
+Only keeps security classes - person, car, bus, truck, bike, motorcycle.
+Mock detector exists for tests when there's no model file around.
 """
 
 from __future__ import annotations
@@ -49,6 +50,10 @@ class ONNXDetectorProvider:
     Supports DirectML acceleration on Windows with fallback to CPU.
     Filters detections to security classes (person, vehicles) with NMS and letterboxing.
     """
+
+    # Cached security-class lookups: avoids per-frame list/np.array allocs.
+    _SEC_IDS: tuple[int, ...] = tuple(SECURITY_CLASSES.keys())
+    _SEC_IDS_ARR: np.ndarray = np.array(tuple(SECURITY_CLASSES.keys()), dtype=np.int32)
 
     def __init__(
         self,
@@ -152,10 +157,7 @@ class ONNXDetectorProvider:
         top = int(round(dh - 0.1))
         left = int(round(dw - 0.1))
 
-        if (
-            self._canvas is None
-            or self._canvas.shape != (self._input_size, self._input_size, 3)
-        ):
+        if self._canvas is None or self._canvas.shape != (self._input_size, self._input_size, 3):
             self._canvas = np.full((self._input_size, self._input_size, 3), 114, dtype=np.uint8)
             self._last_pad_sig = None
 
@@ -205,8 +207,7 @@ class ONNXDetectorProvider:
         boxes = preds[:, :4]
         class_scores = preds[:, 4:]
 
-        sec_class_ids = list(SECURITY_CLASSES.keys())
-        sec_scores = class_scores[:, sec_class_ids]
+        sec_scores = class_scores[:, self._SEC_IDS]
         best_sec_local_idx = np.argmax(sec_scores, axis=1)
         best_sec_scores = np.max(sec_scores, axis=1)
 
@@ -216,7 +217,7 @@ class ONNXDetectorProvider:
 
         valid_boxes = boxes[mask]
         valid_scores = best_sec_scores[mask]
-        valid_class_ids = np.array(sec_class_ids, dtype=np.int32)[best_sec_local_idx[mask]]
+        valid_class_ids = self._SEC_IDS_ARR[best_sec_local_idx[mask]]
 
         cx = valid_boxes[:, 0]
         cy = valid_boxes[:, 1]
@@ -234,35 +235,38 @@ class ONNXDetectorProvider:
             return []
 
         detections: list[Detection] = []
-        for idx in np.array(indices).flatten():
-            i = int(idx)
-            x1 = x1_lb[i]
-            y1 = y1_lb[i]
-            x2 = x1 + w[i]
-            y2 = y1 + h[i]
-
-            x1_orig = (x1 - pad_x) / scale
-            y1_orig = (y1 - pad_y) / scale
-            x2_orig = (x2 - pad_x) / scale
-            y2_orig = (y2 - pad_y) / scale
-
-            x1_norm = float(np.clip(x1_orig / orig_w, 0.0, 1.0))
-            y1_norm = float(np.clip(y1_orig / orig_h, 0.0, 1.0))
-            x2_norm = float(np.clip(x2_orig / orig_w, 0.0, 1.0))
-            y2_norm = float(np.clip(y2_orig / orig_h, 0.0, 1.0))
-
-            if x2_norm < x1_norm:
-                x1_norm, x2_norm = x2_norm, x1_norm
-            if y2_norm < y1_norm:
-                y1_norm, y2_norm = y2_norm, y1_norm
-
+        # Vectorised letterbox inversion + normalisation for all kept boxes:
+        # one numpy pass replaces 4x np.clip + float ops per box in Python.
+        # Math is identical to the scalar path (same op order), then only the
+        # person sanity gates run per box (few survivors after NMS).
+        keep_idx = np.asarray(indices, dtype=np.intp).ravel()
+        kx1 = x1_lb[keep_idx]
+        ky1 = y1_lb[keep_idx]
+        kw = w[keep_idx]
+        kh = h[keep_idx]
+        # Same op order as the scalar path: ((v - pad) / scale) / dim.
+        vx1 = np.clip((kx1 - pad_x) / scale / orig_w, 0.0, 1.0)
+        vy1 = np.clip((ky1 - pad_y) / scale / orig_h, 0.0, 1.0)
+        vx2 = np.clip((kx1 + kw - pad_x) / scale / orig_w, 0.0, 1.0)
+        vy2 = np.clip((ky1 + kh - pad_y) / scale / orig_h, 0.0, 1.0)
+        # Replicates the scalar x1/x2 swap for (theoretical) negative w/h.
+        x_lo = np.minimum(vx1, vx2)
+        x_hi = np.maximum(vx1, vx2)
+        y_lo = np.minimum(vy1, vy2)
+        y_hi = np.maximum(vy1, vy2)
+        bw_all = x_hi - x_lo
+        bh_all = y_hi - y_lo
+        survivors = np.nonzero((bw_all > 0.005) & (bh_all > 0.005))[0]
+        for k in survivors:
+            kk = int(k)
+            x1_norm = float(x_lo[kk])
+            y1_norm = float(y_lo[kk])
+            x2_norm = float(x_hi[kk])
+            y2_norm = float(y_hi[kk])
             bw_norm = x2_norm - x1_norm
             bh_norm = y2_norm - y1_norm
 
-            # Reject zero or degenerate boxes
-            if bw_norm <= 0.005 or bh_norm <= 0.005:
-                continue
-
+            i = int(keep_idx[kk])
             cid = int(valid_class_ids[i])
             cname = SECURITY_CLASSES.get(cid, "unknown")
             conf = float(valid_scores[i])
@@ -317,7 +321,6 @@ class MockPersonDetector:
         return self._input_size
 
     def detect(self, frame: np.ndarray, frame_id: int) -> list[Detection]:
-        _ = frame.shape  # keep frame param used
         # For synthetic test: if frame is synthetic (we check via frame_id parity or via mean)
         # Return a box that moves diagonally, entering a central zone at frame 10
         # This is deterministic and test-friendly.
@@ -344,8 +347,10 @@ class MockPersonDetector:
                 )
             ]
         # Also detect person if frame has non-zero content (for real synthetic video)
-        # Fallback: if frame not empty, return centered person
-        if np.mean(frame) > 5:
+        # Fallback: if frame not empty, return centered person.
+        # Mean is estimated on a strided (zero-copy) view: ~16x fewer pixels,
+        # exact for uniform frames. Preserves the >5 threshold semantics.
+        if float(np.mean(frame[::4, ::4])) > 5:
             return [
                 Detection(
                     class_id=0,

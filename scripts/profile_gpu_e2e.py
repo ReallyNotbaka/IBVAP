@@ -15,15 +15,14 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+
 import av
 import cv2
 import numpy as np
-import onnxruntime as ort
 
-from ibvap.core.detector import ONNXDetectorProvider, SECURITY_CLASSES
+from ibvap.core.detector import SECURITY_CLASSES, ONNXDetectorProvider
 from ibvap.core.face import FaceDetector, FaceRecognizer
 from ibvap.core.pipeline import MiniPipeline
-from ibvap.core.tracker import CentroidTracker
 
 
 def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", loops: int = 5, max_frames: int = 50):
@@ -48,7 +47,11 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
             break
     container.close()
 
-    print(f"Decoded {len(frames)} frames. PyAV decode to_ndarray: mean={np.mean(decode_times):.2f}ms, min={np.min(decode_times):.2f}ms, max={np.max(decode_times):.2f}ms")
+    print(
+        f"Decoded {len(frames)} frames. PyAV decode to_ndarray: "
+        f"mean={np.mean(decode_times):.2f}ms, "
+        f"min={np.min(decode_times):.2f}ms, max={np.max(decode_times):.2f}ms"
+    )
 
     # 2. JPEG encoding latency
     jpeg_times = []
@@ -130,18 +133,26 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
 
             # Stage D: NMS
             t0 = time.perf_counter()
-            indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, detector._conf_threshold, detector._iou_threshold)
+            _ = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, detector._conf_threshold, detector._iou_threshold)
             t1 = time.perf_counter()
             nms_times.append((t1 - t0) * 1000.0)
 
             total_det_times.append((time.perf_counter() - t_start) * 1000.0)
 
     print("\n--- Detector Timing Breakdown (Per Frame) ---")
-    print(f"Preprocessing:        mean={np.mean(preprocess_times):.2f}ms (p50={np.median(preprocess_times):.2f}ms, p95={np.percentile(preprocess_times, 95):.2f}ms)")
+    print(
+        f"Preprocessing:        mean={np.mean(preprocess_times):.2f}ms "
+        f"(p50={np.median(preprocess_times):.2f}ms, p95={np.percentile(preprocess_times, 95):.2f}ms)"
+    )
     print(f"Inference:            mean={np.mean(infer_times):.2f}ms (p50={np.median(infer_times):.2f}ms, p95={np.percentile(infer_times, 95):.2f}ms)")
-    print(f"Postprocessing:       mean={np.mean(postprocess_times):.2f}ms (p50={np.median(postprocess_times):.2f}ms, p95={np.percentile(postprocess_times, 95):.2f}ms)")
+    print(
+        f"Postprocessing:       mean={np.mean(postprocess_times):.2f}ms "
+        f"(p50={np.median(postprocess_times):.2f}ms, p95={np.percentile(postprocess_times, 95):.2f}ms)"
+    )
     print(f"NMS (cv2.dnn):        mean={np.mean(nms_times):.2f}ms (p50={np.median(nms_times):.2f}ms, p95={np.percentile(nms_times, 95):.2f}ms)")
-    print(f"Total Detect Call:    mean={np.mean(total_det_times):.2f}ms (p50={np.median(total_det_times):.2f}ms, p95={np.percentile(total_det_times, 95):.2f}ms)")
+    print(
+        f"Total Detect Call:    mean={np.mean(total_det_times):.2f}ms (p50={np.median(total_det_times):.2f}ms, p95={np.percentile(total_det_times, 95):.2f}ms)"
+    )
     print(f"Detector Standalone FPS: {1000.0 / np.mean(total_det_times):.1f} FPS")
 
     # 4. Face Detection (YuNet) and Recognition (SFace) Timing
@@ -153,7 +164,7 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
         for _ in range(loops):
             for img in frames:
                 t0 = time.perf_counter()
-                f_res = yunet.detect(img)
+                _ = yunet.detect(img)
                 t1 = time.perf_counter()
                 yunet_times.append((t1 - t0) * 1000.0)
         print(f"\nYuNet Face Detect:    mean={np.mean(yunet_times):.2f}ms (p50={np.median(yunet_times):.2f}ms, p95={np.percentile(yunet_times, 95):.2f}ms)")

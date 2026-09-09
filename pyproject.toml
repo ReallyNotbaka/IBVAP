@@ -63,11 +63,24 @@ dev = [
 [tool.ruff]
 line-length = 160
 target-version = "py312"
+cache-dir = ".ruff_cache"
+extend-exclude = [
+    ".venv/",
+    ".ruff_cache/",
+    "__pycache__/",
+    "frontend/",
+    "node_modules/",
+    "frontend/dist/",
+    "data/",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 ignore = []
 fixable = ["ALL"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ibvap", "scripts", "tests"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -77,6 +90,8 @@ typeCheckingMode = "strict"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
+include = ["src", "tests", "scripts", "run.py"]
+exclude = ["**/node_modules", "**/__pycache__", "**/.venv", ".venv", "frontend", ".pytest_cache", "data"]
 reportMissingTypeStubs = false
 reportUnknownVariableType = false
 reportUnknownMemberType = false
@@ -92,8 +107,19 @@ reportReturnType = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --durations=10"
+cache_dir = ".pytest_cache"
+norecursedirs = [".venv", ".git", ".ruff_cache", "frontend", "node_modules", "dist", "build", "data", "__pycache__"]
+xfail_strict = true
+markers = [
+    "slow: timing-heavy tests (deselect with '-m \"not slow\"' for a fast gate)",
+    "soak: long-running stability/soak tests",
+    "benchmark: hardware benchmark tests, timing-sensitive",
+    "live: requires live external services (DB, MediaMTX)",
+    "gpu: requires a GPU execution provider",
+]
 filterwarnings = [
     "ignore:Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead:DeprecationWarning",
 ]

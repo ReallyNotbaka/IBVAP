@@ -1,7 +1,8 @@
-"""Face detection and biometric identity recognition - Phase 6, spec 15.
+"""Face stuff - YuNet finds faces, SFace turns them into embeddings.
 
-Uses dedicated detector (YuNet) and recognizer (SFace) from OpenCV Zoo.
-Identity matching is disabled by default behind an authorization/privacy gate.
+Both from OpenCV Zoo so no extra downloads. Quality gate drops blurry /
+bad-light faces before matching. Matching itself goes against the watchlist
+store (cosine distance), not done here.
 """
 
 from __future__ import annotations
@@ -40,9 +41,7 @@ class FaceDetection:
     raw_row: np.ndarray | None = None
 
 
-def _pt_line_distance(
-    px: float, py: float, ax: float, ay: float, bx: float, by: float
-) -> float:
+def _pt_line_distance(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
     """Perpendicular distance from point (px, py) to line segment (ax, ay)-(bx, by)."""
     line_len = math.hypot(bx - ax, by - ay)
     if line_len < 1e-6:
@@ -180,12 +179,7 @@ class FaceQualityAssessment:
             pose_yaw = 0.0
 
         geometry_valid = cls.validate_geometry(fw, fh, landmarks, min_size=min_size)
-        passed = bool(
-            geometry_valid
-            and blur >= 10.0
-            and 15.0 <= illumination <= 245.0
-            and conf >= conf_threshold
-        )
+        passed = bool(geometry_valid and blur >= 10.0 and 15.0 <= illumination <= 245.0 and conf >= conf_threshold)
 
         return FaceQuality(
             blur=blur,
@@ -288,15 +282,18 @@ class FaceDetector:
             return []
 
         results: list[FaceDetection] = []
+        conf_threshold = self.conf_threshold
         for face in faces:
             x, y, fw, fh = float(face[0]), float(face[1]), float(face[2]), float(face[3])
             conf = float(face[14])
 
             # Normalized bounding box [0, 1] clamped
-            x1 = max(0.0, x) / w
-            y1 = max(0.0, y) / h
-            x2 = min(float(w), x + fw) / w
-            y2 = min(float(h), y + fh) / h
+            x1 = min(max(x / w, 0.0), 1.0)
+            y1 = min(max(y / h, 0.0), 1.0)
+            x2 = min(max((x + fw) / w, 0.0), 1.0)
+            y2 = min(max((y + fh) / h, 0.0), 1.0)
+            if x2 <= x1 or y2 <= y1:
+                continue
             bbox_norm = (float(x1), float(y1), float(x2), float(y2))
 
             # 5 facial landmarks: right eye, left eye, nose tip, right mouth corner, left mouth corner
@@ -308,10 +305,7 @@ class FaceDetector:
             px2 = min(w, int(round(x + fw)))
             py2 = min(h, int(round(y + fh)))
 
-            if px2 > px1 and py2 > py1:
-                crop = frame[py1:py2, px1:px2]
-            else:
-                crop = np.empty((0, 0, 3), dtype=np.uint8)
+            crop = frame[py1:py2, px1:px2] if px2 > px1 and py2 > py1 else np.empty((0, 0, 3), dtype=np.uint8)
 
             quality = FaceQualityAssessment.assess(
                 crop=crop,
@@ -319,7 +313,7 @@ class FaceDetector:
                 fh=fh,
                 landmarks=landmarks,
                 conf=conf,
-                conf_threshold=self.conf_threshold,
+                conf_threshold=conf_threshold,
             )
 
             results.append(
@@ -383,7 +377,9 @@ class FaceRecognizer:
 
     def extract_feature(self, aligned_crop: np.ndarray) -> np.ndarray:
         """Extract 128-dimensional embedding from aligned 112x112 crop."""
-        if self._recognizer is None or aligned_crop.size == 0 or np.all(aligned_crop == 0):
+        # np.any short-circuits the all-zeros guard without materialising a
+        # temporary boolean array (identical semantics to all == 0).
+        if self._recognizer is None or aligned_crop.size == 0 or not np.any(aligned_crop):
             return np.zeros((1, 128), dtype=np.float32)
 
         if aligned_crop.shape[:2] != (112, 112):

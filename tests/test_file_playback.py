@@ -10,7 +10,6 @@ Verifies:
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 from pathlib import Path
@@ -31,6 +30,7 @@ from ibvap.api.routes.cameras import (
 )
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+from tests.conftest import wait_until, wait_until_async
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +47,7 @@ def cleanup_cameras():
     _OBSERVATIONS.clear()
 
 
+@pytest.mark.slow
 def test_file_playback_native_fps_and_continuous_looping() -> None:
     """Video file playback must decode at real-time FPS and loop continuously past EOF."""
     test_video = Path("tests/fixtures/test_upload_face.mp4")
@@ -70,16 +71,19 @@ def test_file_playback_native_fps_and_continuous_looping() -> None:
     worker.start()
 
     # The video has 20 frames at 10 FPS (2.0s duration).
-    # Running for 3.2s must decode > 20 frames (proving continuous loop).
-    t0 = time.time()
-    while time.time() - t0 < 3.2:
-        time.sleep(0.2)
+    # Warmup (model load + first decode, ~0.4s warm / ~1.4s cold) is excluded:
+    # steady-state needs 2s for a full pass + loop, so allow 3.5s post-warmup.
+    # Early-exit as soon as the loop is proven instead of sleeping the full window.
+    warmed = wait_until(lambda: _FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=5.0)
+    assert warmed, "Worker never produced first frame (warmup failed)"
+    baseline = _FRAME_VERSIONS.get(cam_id, 0)
+    wait_until(lambda: _FRAME_VERSIONS.get(cam_id, 0) >= baseline + 21, timeout_s=3.5)
 
     stop.set()
     worker.join(timeout=2.0)
 
     total_decoded = _FRAME_VERSIONS.get(cam_id, 0)
-    assert total_decoded > 20, f"Expected > 20 frames decoded across loop, got {total_decoded}"
+    assert total_decoded >= baseline + 21, f"Expected full 20-frame pass + loop post-warmup, got {total_decoded - baseline}"
     assert _CAMERAS[cam_id]["observed_state"] == "STREAMING"
 
     obs = _OBSERVATIONS.get(cam_id, {})
@@ -108,17 +112,23 @@ def test_decoupled_analysis_does_not_block_decode_loop() -> None:
     _WORKERS[cam_id] = (stop, worker)
     worker.start()
 
-    # Let it run for 2 seconds
-    t0 = time.time()
-    while time.time() - t0 < 2.0:
-        time.sleep(0.2)
+    # Warmup excluded from the rate measurement: worker init loads the shared
+    # ONNX handle + ANPR/face models (~0.4s warm, ~1.4s cold), during which no
+    # frames decode. Steady-state decode runs at native 10 FPS once warmed.
+    warmed = wait_until(lambda: _FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=5.0)
+    assert warmed, "Worker never produced first frame (warmup failed)"
+    baseline = _FRAME_VERSIONS.get(cam_id, 0)
+
+    # Measure steady-state rate: 14 frames at 10 FPS need ~1.4s post-warmup;
+    # allow 2.5s for loaded CI machines.
+    wait_until(lambda: _FRAME_VERSIONS.get(cam_id, 0) >= baseline + 14, timeout_s=2.5)
 
     stop.set()
     worker.join(timeout=2.0)
 
     total_decoded = _FRAME_VERSIONS.get(cam_id, 0)
     # At 10 FPS, 2 seconds should yield ~14-20 frames
-    assert total_decoded >= 14, f"Decode loop fell behind: got {total_decoded} frames in 2s"
+    assert total_decoded >= baseline + 14, f"Decode loop fell behind: got {total_decoded - baseline} frames in 2s post-warmup"
     assert _CAMERAS[cam_id]["observed_state"] == "STREAMING"
 
 
@@ -139,7 +149,7 @@ async def test_camera_stream_delivers_mjpeg_with_headers() -> None:
     }
 
     _start_camera_worker(cam_id)
-    await asyncio.sleep(0.4)
+    await wait_until_async(lambda: _FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=2.0)
 
     resp = await camera_stream(cam_id)
     assert resp.media_type == "multipart/x-mixed-replace; boundary=frame"
@@ -194,7 +204,8 @@ def test_critical_target_in_file_footage_observations() -> None:
         _WORKERS[cam_id] = (stop, worker)
         worker.start()
 
-        time.sleep(1.0)
+        # Wait for observations to populate (was a fixed 1.0s sleep).
+        wait_until(lambda: all(k in _OBSERVATIONS.get(cam_id, {}) for k in ("tracks", "detections", "faces")), timeout_s=2.0)
         stop.set()
         worker.join(timeout=2.0)
 
@@ -239,19 +250,19 @@ def test_analysis_worker_resilient_to_inference_exceptions(monkeypatch: pytest.M
     _WORKERS[cam_id] = (stop, worker)
     worker.start()
 
-    # Allow worker to run across faulty frames into recovered frames
-    t0 = time.time()
+    # Allow worker to run across faulty frames into recovered frames.
+    # Poll at 50ms (was 200ms) and stop as soon as recovery is observed.
+    t0 = time.monotonic()
     recovered = False
-    while time.time() - t0 < 2.5:
-        time.sleep(0.2)
+    while time.monotonic() - t0 < 2.5:
         obs = _OBSERVATIONS.get(cam_id, {})
         if call_count > 2 and obs.get("frame_at"):
             recovered = True
             break
+        time.sleep(0.05)
 
     stop.set()
     worker.join(timeout=2.0)
 
     assert call_count > 2, f"Expected >2 calls through analyze worker, got {call_count}"
     assert recovered, "Analysis worker crashed instead of recovering from simulated exception"
-

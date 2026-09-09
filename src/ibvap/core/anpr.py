@@ -1,13 +1,12 @@
-"""ANPR - Automated Number Plate Recognition.
-
-Morphological plate localization + OCR text recognition + multi-frame consensus.
+"""Number plate reading. Finds the plate rect inside a vehicle crop,
+runs OCR, votes across frames for a stable consensus string.
+Skips tiny/low-res crops - OCR just hallucinates on those.
 """
 
 from __future__ import annotations
 
 import os
 import re
-import sys
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -34,11 +33,12 @@ class PlateResult:
 
 
 _JURISDICTION_RE = re.compile(r"^[A-Z0-9]{4,10}$")
+_NON_ALNUM_RE = re.compile(r"[^A-Z0-9]")
 
 
 def normalize_plate(text: str) -> str:
     """Normalize plate text by removing non-alphanumerics and converting to uppercase."""
-    t = re.sub(r"[^A-Z0-9]", "", text.upper())
+    t = _NON_ALNUM_RE.sub("", text.upper())
     if not _JURISDICTION_RE.match(t):
         return t  # Return raw alphanumeric representation
     return t
@@ -58,6 +58,8 @@ class PlateDetector:
         self.max_ar = max_ar
         self.min_area_ratio = min_area_ratio
         self.max_area_ratio = max_area_ratio
+        # Cached kernel: avoids a getStructuringElement alloc per vehicle crop.
+        self._close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3))
 
     def detect(self, vehicle_crop: np.ndarray) -> list[tuple[float, float, float, float]]:
         """Localize plate candidates using morphological operations and vertical gradient energy.
@@ -89,8 +91,7 @@ class PlateDetector:
         _, thresh = cv2.threshold(sobel, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # Morphological closing with rectangular kernel (17, 3) to merge characters into plate blob
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3))
-        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, self._close_kernel)
 
         # Find external contours
         contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -168,8 +169,6 @@ class OCRReader:
 
         try:
             if self._paddle_ocr is None:
-                if "torch" not in sys.modules:
-                    sys.modules["torch"] = None
                 from paddleocr import PaddleOCR
 
                 self._paddle_ocr = PaddleOCR(
@@ -236,6 +235,26 @@ class ANPRPipeline:
         self.ocr = ocr or OCRReader()
         self._history: dict[int, list[str]] = {}
 
+    @staticmethod
+    def _remap_box(
+        inner: tuple[float, float, float, float],
+        ox1: int,
+        oy1: int,
+        ox2: int,
+        oy2: int,
+        w: int,
+        h: int,
+    ) -> tuple[float, float, float, float]:
+        """Map a plate-relative normalized box into vehicle-crop normalized coords."""
+        ow = ox2 - ox1
+        oh = oy2 - oy1
+        return (
+            max(0.0, min(1.0, (ox1 + inner[0] * ow) / w)),
+            max(0.0, min(1.0, (oy1 + inner[1] * oh) / h)),
+            max(0.0, min(1.0, (ox1 + inner[2] * ow) / w)),
+            max(0.0, min(1.0, (oy1 + inner[3] * oh) / h)),
+        )
+
     def consensus_for(self, vehicle_id: int, text: str) -> str:
         """Maintain sliding window of last 10 reads and return majority vote consensus."""
         norm = normalize_plate(text)
@@ -244,6 +263,8 @@ class ANPRPipeline:
         hist.append(val)
         if len(hist) > 10:
             hist.pop(0)
+        if len(hist) == 1:
+            return val
         return Counter(hist).most_common(1)[0][0] if hist else val
 
     def process_vehicle_crop(self, vehicle_crop: np.ndarray, vehicle_id: int) -> PlateResult | None:
@@ -269,12 +290,7 @@ class ANPRPipeline:
                 plate_crop = vehicle_crop[by1:by2, bx1:bx2]
                 cands = self.ocr.recognize(plate_crop)
                 for cand in cands:
-                    cand_box = (
-                        max(0.0, min(1.0, (bx1 + cand.bbox_norm[0] * (bx2 - bx1)) / w)),
-                        max(0.0, min(1.0, (by1 + cand.bbox_norm[1] * (by2 - by1)) / h)),
-                        max(0.0, min(1.0, (bx1 + cand.bbox_norm[2] * (bx2 - bx1)) / w)),
-                        max(0.0, min(1.0, (by1 + cand.bbox_norm[3] * (by2 - by1)) / h)),
-                    )
+                    cand_box = self._remap_box(cand.bbox_norm, bx1, by1, bx2, by2, w, h)
                     candidates.append(
                         PlateCandidate(
                             text=cand.text,
@@ -292,12 +308,7 @@ class ANPRPipeline:
                 if plate_crop.size > 0:
                     cands = self.ocr.recognize(plate_crop)
                     for cand in cands:
-                        cand_box = (
-                            max(0.0, min(1.0, (x1 + cand.bbox_norm[0] * (x2 - x1)) / w)),
-                            max(0.0, min(1.0, (y1 + cand.bbox_norm[1] * (y2 - y1)) / h)),
-                            max(0.0, min(1.0, (x1 + cand.bbox_norm[2] * (x2 - x1)) / w)),
-                            max(0.0, min(1.0, (y1 + cand.bbox_norm[3] * (y2 - y1)) / h)),
-                        )
+                        cand_box = self._remap_box(cand.bbox_norm, x1, y1, x2, y2, w, h)
                         candidates.append(
                             PlateCandidate(
                                 text=cand.text,

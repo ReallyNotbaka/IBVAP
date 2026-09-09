@@ -44,14 +44,17 @@ class BoundedQueue:
 
     def get_latest(self) -> object | None:
         """Get latest eligible frame, dropping stale."""
+        if not self._q:
+            return None
         now = time.monotonic() * 1000
-        while self._q:
-            ts, item = self._q[-1]
-            if (now - ts) <= self.max_age_ms:
-                return item
-            self._q.pop()
-            self.dropped += 1
-        return None
+        # Timestamps are non-decreasing, so a stale newest item means every
+        # entry is stale: drop all at once (O(1)) instead of popping one by one.
+        ts, item = self._q[-1]
+        if (now - ts) > self.max_age_ms:
+            self.dropped += len(self._q)
+            self._q.clear()
+            return None
+        return item
 
     def get(self) -> object | None:
         if not self._q:

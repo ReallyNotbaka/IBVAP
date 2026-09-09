@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -21,6 +22,28 @@ from ibvap.api.routes.watchlist import router as watchlist_router
 from ibvap.api.routes.ws import router as ws_router
 from ibvap.config import Settings
 from ibvap.logging_setup import setup_logging
+
+# Hoisted error-envelope maps (avoid per-exception dict allocations).
+_CODE_MAP: dict[int, str] = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    409: "conflict",
+    413: "payload_too_large",
+    422: "unprocessable_entity",
+    500: "internal_error",
+}
+_TITLE_MAP: dict[int, str] = {
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    409: "Conflict",
+    413: "Payload Too Large",
+    422: "Unprocessable Entity",
+    500: "Internal Server Error",
+}
 
 
 @asynccontextmanager
@@ -48,36 +71,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Correlation-ID"],
     )
+    # Compress JSON/MJPEG-manifest payloads >=1KB (no new deps; starlette built-in).
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     # problem-details error envelope
     def _http_exception_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail  # type: ignore[attr-defined]
         # derive machine-readable code
-        if isinstance(detail, dict) and "code" in detail:
-            code = str(detail["code"])
-        else:
-            _code_map = {
-                400: "bad_request",
-                401: "unauthorized",
-                403: "forbidden",
-                404: "not_found",
-                409: "conflict",
-                413: "payload_too_large",
-                422: "unprocessable_entity",
-                500: "internal_error",
-            }
-            code = _code_map.get(exc.status_code, f"http_{exc.status_code}")  # type: ignore[attr-defined]
-        _title_map = {
-            400: "Bad Request",
-            401: "Unauthorized",
-            403: "Forbidden",
-            404: "Not Found",
-            409: "Conflict",
-            413: "Payload Too Large",
-            422: "Unprocessable Entity",
-            500: "Internal Server Error",
-        }
-        title = _title_map.get(exc.status_code, f"HTTP {exc.status_code}")  # type: ignore[attr-defined]
+        code = str(detail["code"]) if isinstance(detail, dict) and "code" in detail else _CODE_MAP.get(exc.status_code, f"http_{exc.status_code}")  # type: ignore[attr-defined]
+        title = _TITLE_MAP.get(exc.status_code, f"HTTP {exc.status_code}")  # type: ignore[attr-defined]
         return JSONResponse(
             status_code=exc.status_code,  # type: ignore[attr-defined]
             content={
@@ -139,10 +141,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             response = await super().get_response("index.html", scope)
                         else:
                             raise
-                    if path in {"", "index.html"} or not Path(path).suffix:
+                    suffix = Path(path).suffix
+                    if path in {"", "index.html"} or not suffix:
                         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
                         response.headers["Pragma"] = "no-cache"
                         response.headers["Expires"] = "0"
+                    elif suffix in {".js", ".css", ".woff2", ".png", ".jpg", ".svg"}:
+                        # Immutable hashed build assets: safe long cache.
+                        response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
                     return response
 
             # mount after API routes so /api/* takes precedence

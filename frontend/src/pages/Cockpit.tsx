@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { setCameraFence, useCameras, useModels, useWatchlist, useEvents } from "../lib/api";
+import { deleteCameraFence, setCameraFence, useCameras, useModels, useWatchlist, useEvents } from "../lib/api";
 import { CameraTile, type TargetInspectData } from "../components/CameraTile";
 import { AlertRail } from "../components/AlertRail";
 import { HealthBar } from "../components/HealthBar";
@@ -16,7 +16,77 @@ import {
   PercentIcon,
 } from "../components/Icons";
 
-export function Cockpit({
+const EMPTY_FENCE: [number, number][] = [];
+
+const CockpitTile = memo(function CockpitTile({
+  camera,
+  preset,
+  showPeople,
+  showFaces,
+  showLabels,
+  showConfidence,
+  isSolo,
+  fencePoints,
+  showFence,
+  fenceDrawing,
+  onInspectTarget,
+  onSoloToggle,
+  onSelectCamera,
+  onFencePoint,
+  onRemoveFencePoint,
+  onStopped,
+}: {
+  camera: Parameters<typeof CameraTile>[0]["camera"];
+  preset: OverlayPreset;
+  showPeople: boolean;
+  showFaces: boolean;
+  showLabels: boolean;
+  showConfidence: boolean;
+  isSolo: boolean;
+  fencePoints: [number, number][];
+  showFence: boolean;
+  fenceDrawing: boolean;
+  onInspectTarget?: (target: TargetInspectData) => void;
+  onSoloToggle: (id: string) => void;
+  onSelectCamera: (id: string) => void;
+  onFencePoint: (cameraId: string, point: [number, number]) => void;
+  onRemoveFencePoint: (cameraId: string, index: number) => void;
+  onStopped: () => void;
+}) {
+  const cameraId = camera.id;
+  const handleSolo = useCallback(() => onSoloToggle(cameraId), [onSoloToggle, cameraId]);
+  const handleSelect = useCallback(() => onSelectCamera(cameraId), [onSelectCamera, cameraId]);
+  const handlePoint = useCallback(
+    (point: [number, number]) => onFencePoint(cameraId, point),
+    [onFencePoint, cameraId],
+  );
+  const handleRemovePoint = useCallback(
+    (index: number) => onRemoveFencePoint(cameraId, index),
+    [onRemoveFencePoint, cameraId],
+  );
+  return (
+    <CameraTile
+      camera={camera}
+      preset={preset}
+      showPeople={showPeople}
+      showFaces={showFaces}
+      showLabels={showLabels}
+      showConfidence={showConfidence}
+      isSolo={isSolo}
+      onSolo={handleSolo}
+      onInspectTarget={onInspectTarget}
+      onStopped={onStopped}
+      fencePoints={fencePoints}
+      showFence={showFence}
+      fenceDrawing={fenceDrawing}
+      onSelectCamera={handleSelect}
+      onFencePoint={handlePoint}
+      onRemoveFencePoint={handleRemovePoint}
+    />
+  );
+});
+
+export const Cockpit = memo(function Cockpit({
   modalOpen,
   onOpenWatchlist,
   onInspectTarget,
@@ -34,6 +104,7 @@ export function Cockpit({
 
   const activeModel = modelData?.active_model || "yolo26n";
   const [solo, setSolo] = useState<string | null>(null);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
 
   // Overlay state & presets: "clean" | "all" | "alerts"
   const [preset, setPreset] = useState<OverlayPreset>("all");
@@ -47,16 +118,103 @@ export function Cockpit({
   const [fencePoints, setFencePoints] = useState<Record<string, [number, number][]>>({});
   const [drawingFenceFor, setDrawingFenceFor] = useState<string | null>(null);
   const [showFence, setShowFence] = useState(false);
+  const [fenceSaveState, setFenceSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   const n = cameras.length;
-  const soloCamera = solo ? cameras.find((c) => c.id === solo) : null;
-  const displayedCameras = soloCamera ? [soloCamera] : cameras;
+  const soloCamera = useMemo(
+    () => (solo ? cameras.find((c) => c.id === solo) ?? null : null),
+    [solo, cameras],
+  );
+  const displayedCameras = useMemo(() => (soloCamera ? [soloCamera] : cameras), [soloCamera, cameras]);
   const displayN = soloCamera ? 1 : n;
 
-  const suspectList = Array.isArray(suspects) ? suspects : [];
-  const eventList = Array.isArray(events) ? events : [];
+  const suspectList = useMemo(() => (Array.isArray(suspects) ? suspects : []), [suspects]);
+  const eventList = useMemo(() => (Array.isArray(events) ? events : []), [events]);
   const alertCount = eventList.length;
-  const suspectSightings = suspectList.filter((s) => (s && s.sight_count) ? s.sight_count > 0 : false);
+  const suspectSightings = useMemo(
+    () => suspectList.filter((s) => (s && s.sight_count ? s.sight_count > 0 : false)),
+    [suspectList],
+  );
+
+  const handleSoloToggle = useCallback((id: string) => {
+    setSolo((prev) => (prev === id ? null : id));
+  }, []);
+  const handleSelectCamera = useCallback((id: string) => {
+    setSelectedCameraId(id);
+  }, []);
+  const handleFencePoint = useCallback((cameraId: string, point: [number, number]) => {
+    setFencePoints((previous) => {
+      const current = previous[cameraId] ?? [];
+      if (current.length >= 32) return previous;
+      if (current.length > 0) {
+        const last = current[current.length - 1];
+        if (Math.hypot(point[0] - last[0], point[1] - last[1]) < 0.015) {
+          return previous;
+        }
+      }
+      return { ...previous, [cameraId]: [...current, point] };
+    });
+  }, []);
+  const handleRemoveFencePoint = useCallback((cameraId: string, index: number) => {
+    setFencePoints((previous) => {
+      const current = previous[cameraId] ?? [];
+      return { ...previous, [cameraId]: current.filter((_, idx) => idx !== index) };
+    });
+  }, []);
+  const handleStopped = useCallback(() => navigate("/"), [navigate]);
+  const handleToggleDrawer = useCallback(() => setDrawerOpen((v) => !v), []);
+  const handleCloseDrawer = useCallback(() => setDrawerOpen(false), []);
+  const handleToggleShowFence = useCallback(() => setShowFence((visible) => !visible), []);
+  const handleExitSolo = useCallback(() => setSolo(null), []);
+  const tileFencePoints = useMemo(() => {
+    const m: Record<string, [number, number][]> = {};
+    for (const c of displayedCameras) {
+      m[c.id] = fencePoints[c.id] ?? c.fence?.polygon ?? EMPTY_FENCE;
+    }
+    return m;
+  }, [displayedCameras, fencePoints]);
+  const tileShowFence = useMemo(() => {
+    const m: Record<string, boolean> = {};
+    for (const c of displayedCameras) {
+      m[c.id] = showFence && Boolean(c.fence?.polygon?.length);
+    }
+    return m;
+  }, [displayedCameras, showFence]);
+  const tileDrawing = useMemo(() => {
+    const m: Record<string, boolean> = {};
+    for (const c of displayedCameras) {
+      m[c.id] = drawingFenceFor === c.id;
+    }
+    return m;
+  }, [displayedCameras, drawingFenceFor]);
+
+  useEffect(() => {
+    if (!drawingFenceFor) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        setFencePoints((prev) => {
+          const pts = prev[drawingFenceFor] ?? [];
+          if (pts.length === 0) return prev;
+          return { ...prev, [drawingFenceFor]: pts.slice(0, -1) };
+        });
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [drawingFenceFor]);
+
+  const activeFenceCamera = useMemo(
+    () =>
+      soloCamera ??
+      (drawingFenceFor
+        ? cameras.find((c) => c.id === drawingFenceFor) ?? cameras[0]
+        : selectedCameraId
+          ? cameras.find((c) => c.id === selectedCameraId) ?? cameras[0]
+          : cameras[0]),
+    [soloCamera, drawingFenceFor, cameras, selectedCameraId],
+  );
 
   return (
     <div className="flex flex-col gap-5 max-w-[1400px] mx-auto w-full">
@@ -74,18 +232,17 @@ export function Cockpit({
           </span>
           {soloCamera && (
             <button
-              onClick={() => setSolo(null)}
+              onClick={handleExitSolo}
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg px-2.5 py-1 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
               title="Back to overview"
             >
-              <CompressIcon className="w-3.5 h-3.5" />
-              <span>Back to overview</span>
+              ← Back to Grid
             </button>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium hidden md:inline">
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
             Model:
           </span>
           <span className="font-mono text-xs font-bold uppercase px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700">
@@ -103,7 +260,7 @@ export function Cockpit({
           data-testid="cockpit-grid"
         >
           {displayedCameras.map((c) => (
-            <CameraTile
+            <CockpitTile
               key={c.id}
               camera={c}
               preset={preset}
@@ -112,13 +269,15 @@ export function Cockpit({
               showLabels={showLabels}
               showConfidence={showConfidence}
               isSolo={Boolean(soloCamera)}
-              onSolo={() => setSolo((prev) => (prev === c.id ? null : c.id))}
               onInspectTarget={onInspectTarget}
-              onStopped={() => navigate("/")}
-              fencePoints={fencePoints[c.id] ?? c.fence?.polygon ?? []}
-              showFence={showFence && Boolean(c.fence?.polygon?.length)}
-              fenceDrawing={drawingFenceFor === c.id}
-              onFencePoint={(point) => setFencePoints((previous) => ({ ...previous, [c.id]: [...(previous[c.id] ?? []), point] }))}
+              onSoloToggle={handleSoloToggle}
+              onSelectCamera={handleSelectCamera}
+              onFencePoint={handleFencePoint}
+              onRemoveFencePoint={handleRemoveFencePoint}
+              onStopped={handleStopped}
+              fencePoints={tileFencePoints[c.id] ?? EMPTY_FENCE}
+              showFence={tileShowFence[c.id] ?? false}
+              fenceDrawing={tileDrawing[c.id] ?? false}
             />
           ))}
         </div>
@@ -126,48 +285,160 @@ export function Cockpit({
         {/* Video Control Pill Bar */}
         {n > 0 && (
           <div className="control-pill-bar mt-3 w-full max-w-[1200px] flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-2xl bg-white/85 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-white/10 shadow-md transition-colors">
-            {/* Left: Exit Solo mode when active, or overlay label */}
-            <div className="flex items-center gap-2">
-              {n === 1 && (cameras[0]?.fence?.polygon?.length ?? 0) > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowFence((visible) => !visible)}
-                  className="secondary-button border border-cyan-300/60 bg-cyan-50 text-cyan-900 dark:border-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-100 cursor-pointer"
-                >
-                  {showFence ? "Hide fence" : "Show fence"}
-                </button>
-              )}
-              {n === 1 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const camera = cameras[0];
-                    setFencePoints((previous) => ({ ...previous, [camera.id]: camera.fence?.polygon ?? [] }));
-                    setDrawingFenceFor((current) => (current === camera.id ? null : camera.id));
-                  }}
-                  className="secondary-button border border-amber-300/60 bg-amber-50 text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 cursor-pointer"
-                >
-                  {drawingFenceFor ? "Finish fence" : "Draw fence"}
-                </button>
-              )}
-              {n === 1 && drawingFenceFor && (fencePoints[drawingFenceFor]?.length ?? 0) >= 3 && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const camera = cameras[0];
-                    await setCameraFence(camera.id, fencePoints[camera.id] ?? []);
-                    await qc.invalidateQueries({ queryKey: ["cameras"] });
-                    setDrawingFenceFor(null);
-                    setShowFence(true);
-                  }}
-                  className="primary-button bg-amber-400 text-amber-950 hover:bg-amber-300 cursor-pointer"
-                >
-                  Save fence
-                </button>
+            {/* Left: Fence Controls */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeFenceCamera && (
+                <>
+                  {/* Show/Hide fence toggle */}
+                  {(activeFenceCamera.fence?.polygon?.length ?? 0) > 0 && !drawingFenceFor && (
+                    <button
+                      type="button"
+                      onClick={handleToggleShowFence}
+                      className="secondary-button border border-cyan-300/60 bg-cyan-50 text-cyan-900 dark:border-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-100 cursor-pointer text-xs"
+                      title={showFence ? "Hide fence overlay" : "Show fence overlay"}
+                    >
+                      {showFence ? "Hide fence" : "Show fence"}
+                    </button>
+                  )}
+
+                  {/* Draw / Cancel button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFenceSaveState("idle");
+                      if (drawingFenceFor === activeFenceCamera.id) {
+                        setDrawingFenceFor(null);
+                        setFencePoints((previous) => {
+                          const next = { ...previous };
+                          delete next[activeFenceCamera.id];
+                          return next;
+                        });
+                      } else {
+                        setDrawingFenceFor(activeFenceCamera.id);
+                        setFencePoints((previous) => ({
+                          ...previous,
+                          [activeFenceCamera.id]: [],
+                        }));
+                      }
+                    }}
+                    className="secondary-button border border-amber-300/60 bg-amber-50 text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100 cursor-pointer text-xs"
+                  >
+                    {drawingFenceFor === activeFenceCamera.id
+                      ? "Cancel drawing"
+                      : (activeFenceCamera.fence?.polygon?.length ?? 0) > 0
+                      ? "Redraw fence"
+                      : "Draw fence"}
+                  </button>
+
+                  {/* Drawing Active controls */}
+                  {drawingFenceFor === activeFenceCamera.id && (
+                    <>
+                      <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-200 border border-amber-300/50 dark:border-amber-700/50">
+                        {fencePoints[activeFenceCamera.id]?.length ?? 0} pts
+                        {(fencePoints[activeFenceCamera.id]?.length ?? 0) === 2
+                          ? " (Line Tripwire)"
+                          : (fencePoints[activeFenceCamera.id]?.length ?? 0) >= 3
+                          ? " (Polygon Zone)"
+                          : ""}
+                      </span>
+
+                      {/* Undo point */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFencePoints((prev) => {
+                            const pts = prev[activeFenceCamera.id] ?? [];
+                            return { ...prev, [activeFenceCamera.id]: pts.slice(0, -1) };
+                          });
+                        }}
+                        disabled={(fencePoints[activeFenceCamera.id]?.length ?? 0) === 0}
+                        className="secondary-button border border-slate-300 dark:border-slate-700 text-xs px-2.5 py-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        title="Remove last placed point (or press Backspace)"
+                      >
+                        Undo point
+                      </button>
+
+                      {/* Clear all points */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFencePoints((prev) => ({ ...prev, [activeFenceCamera.id]: [] }));
+                        }}
+                        disabled={(fencePoints[activeFenceCamera.id]?.length ?? 0) === 0}
+                        className="secondary-button border border-rose-300/60 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-200 text-xs px-2.5 py-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        title="Clear all points being drawn"
+                      >
+                        Clear points
+                      </button>
+
+                      {/* Save button: enabled for >= 2 points */}
+                      {(fencePoints[activeFenceCamera.id]?.length ?? 0) >= 2 && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const pts = fencePoints[activeFenceCamera.id] ?? [];
+                            const fenceType = pts.length === 2 ? "line" : "polygon";
+                            setFenceSaveState("saving");
+                            try {
+                              await setCameraFence(activeFenceCamera.id, pts, true, fenceType);
+                              await qc.invalidateQueries({ queryKey: ["cameras"] });
+                              setDrawingFenceFor(null);
+                              setShowFence(true);
+                              setFencePoints((prev) => {
+                                const next = { ...prev };
+                                delete next[activeFenceCamera.id];
+                                return next;
+                              });
+                              setFenceSaveState("saved");
+                            } catch {
+                              setFenceSaveState("error");
+                            }
+                          }}
+                          disabled={fenceSaveState === "saving"}
+                          className="primary-button bg-amber-400 text-amber-950 hover:bg-amber-300 text-xs px-3 py-1 cursor-pointer disabled:cursor-wait disabled:opacity-60 font-semibold"
+                        >
+                          {fenceSaveState === "saving"
+                            ? "Saving..."
+                            : fenceSaveState === "error"
+                            ? "Retry save"
+                            : fenceSaveState === "saved"
+                            ? "Saved!"
+                            : (fencePoints[activeFenceCamera.id]?.length ?? 0) === 2
+                            ? "Save line fence"
+                            : "Save polygon fence"}
+                        </button>
+                      )}
+                    </>
+                  )}
+
+                  {/* Delete saved fence */}
+                  {(activeFenceCamera.fence?.polygon?.length ?? 0) > 0 && !drawingFenceFor && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await deleteCameraFence(activeFenceCamera.id);
+                          setFencePoints((prev) => {
+                            const next = { ...prev };
+                            delete next[activeFenceCamera.id];
+                            return next;
+                          });
+                          await qc.invalidateQueries({ queryKey: ["cameras"] });
+                        } catch {
+                          // ignore or retry
+                        }
+                      }}
+                      className="secondary-button border border-rose-300/50 bg-rose-50/50 text-rose-800 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300 text-xs px-2.5 py-1 cursor-pointer hover:bg-rose-100 dark:hover:bg-rose-900/50"
+                      title="Delete saved perimeter fence"
+                    >
+                      Delete fence
+                    </button>
+                  )}
+                </>
               )}
               {soloCamera ? (
                 <button
-                  onClick={() => setSolo(null)}
+                  onClick={handleExitSolo}
                   className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all cursor-pointer shadow-sm active:scale-95"
                   title="Exit Theater Solo Mode"
                 >
@@ -279,7 +550,7 @@ export function Cockpit({
 
               {/* Drawer Toggle Button */}
               <button
-                onClick={() => setDrawerOpen((v) => !v)}
+                onClick={handleToggleDrawer}
                 className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition-all cursor-pointer shadow-sm active:scale-95 ${
                   drawerOpen
                     ? "bg-rose-600 text-white border-rose-600"
@@ -325,7 +596,7 @@ export function Cockpit({
       {drawerOpen && (
         <div
           className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs transition-opacity flex justify-end modal-backdrop-animate"
-          onClick={() => setDrawerOpen(false)}
+          onClick={handleCloseDrawer}
         >
           <div
             className="drawer-slide-animate w-full max-w-md h-full bg-white/95 dark:bg-slate-900/95 backdrop-blur-2xl border-l border-slate-200/80 dark:border-white/10 shadow-2xl flex flex-col p-6 text-slate-900 dark:text-slate-100 overflow-y-auto"
@@ -477,4 +748,4 @@ export function Cockpit({
       {modalOpen ? <span className="hidden" data-testid="modal-open" /> : null}
     </div>
   );
-}
+});

@@ -29,6 +29,7 @@ class PacketRingBuffer:
         self.max_bytes = max_bytes
         self._packets: deque[tuple[float, bytes, bool]] = deque()  # ts, data, is_keyframe
         self._bytes = 0
+        self._dirs_ensured: set[str] = set()
 
     def push(self, data: bytes, is_keyframe: bool) -> None:
         now = time.time()
@@ -43,17 +44,35 @@ class PacketRingBuffer:
         """Return (snapshot_jpeg, clip_bytes) placeholder - caller would remux."""
         if not self._packets:
             return None, None
-        # snapshot: last keyframe-ish packet
+        # snapshot: last keyframe-ish packet (no copy — reference existing bytes)
         snap = self._packets[-1][1] if self._packets else None
-        # clip: all packets in window
+        # clip: packets in window, capped to avoid oversized join on long buffers.
+        # Cap at 8MB: beyond that callers only hash/truncate anyway.
         now = time.time()
-        clip_parts = [d for ts, d, _ in self._packets if (now - ts) <= (pre_seconds + post_seconds)]
+        window = pre_seconds + post_seconds
+        clip_parts: list[bytes] = []
+        clip_bytes = 0
+        for ts, d, _ in self._packets:
+            if (now - ts) > window:
+                continue
+            # Stop accumulating once cap reached (packets are time-ordered).
+            if clip_bytes + len(d) > 8 * 1024 * 1024 and clip_parts:
+                break
+            clip_parts.append(d)
+            clip_bytes += len(d)
         clip = b"".join(clip_parts) if clip_parts else None
         return snap, clip
 
     def manifest_for(self, event_id: str, snap: bytes | None, clip: bytes | None) -> EvidenceManifest:
         def sha(b: bytes | None) -> str | None:
-            return hashlib.sha256(b).hexdigest() if b else None
+            if not b:
+                return None
+            # Incremental hash avoids holding a second full copy.
+            h = hashlib.sha256()
+            mv = memoryview(b)
+            for off in range(0, len(mv), 1024 * 1024):
+                h.update(mv[off : off + 1024 * 1024])
+            return h.hexdigest()
 
         # In prod, write to FS/S3 and compute paths
         snap_path = f"data/evidence/{event_id}_snap.jpg" if snap else None

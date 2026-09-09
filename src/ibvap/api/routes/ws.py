@@ -6,6 +6,7 @@ Envelope per spec 20: schema_version, message_id, message_type, timestamp, seque
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 import uuid
@@ -17,6 +18,15 @@ router = APIRouter(tags=["ws"])
 # In-mem per-client queue - bounded as spec
 MAX_QUEUE = 64
 
+_HEARTBEAT_TEMPLATE = {
+    "schema_version": "v1",
+    "message_type": "heartbeat",
+    "camera_id": "any",
+    "site_id": "any",
+    "stream_epoch": 0,
+    "payload": {"status": "ok"},
+}
+
 
 @router.websocket("/api/v1/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
@@ -24,18 +34,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     seq = 0
     try:
-        for _ in range(3):
+        for _ in range(min(3, MAX_QUEUE)):
             envelope = {
-                "schema_version": "v1",
+                **_HEARTBEAT_TEMPLATE,
                 "message_id": str(uuid.uuid4()),
-                "message_type": "heartbeat",
                 "timestamp": time.time(),
                 "sequence": seq,
-                "camera_id": "any",
-                "site_id": "any",
-                "stream_epoch": 0,
                 "correlation_id": str(uuid.uuid4()),
-                "payload": {"status": "ok"},
             }
             await ws.send_text(json.dumps(envelope))
             seq += 1
@@ -45,7 +50,5 @@ async def ws_endpoint(ws: WebSocket) -> None:
     except Exception:
         pass
     finally:
-        import contextlib
-
         with contextlib.suppress(Exception):
             await ws.close()

@@ -28,39 +28,48 @@ class NightDetector:
         self._last_switch = 0.0
         self._mode: str = "day"
         self._motion_history: list[float] = []
+        # Cached structuring element: avoids a getStructuringElement alloc per frame.
+        self._open_kernel: np.ndarray = np.ones((3, 3), np.uint8)
 
     @property
     def current_mode(self) -> str:
         return self._mode
 
-    def _luminance(self, frame: np.ndarray) -> float:
+    @staticmethod
+    def _to_gray(frame: np.ndarray) -> np.ndarray:
         if frame.ndim == 3 and frame.shape[2] == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        elif frame.ndim == 3 and frame.shape[2] == 4:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-        else:
-            gray = frame
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if frame.ndim == 3 and frame.shape[2] == 4:
+            return cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        return frame
 
+    def _luminance(self, frame: np.ndarray) -> float:
+        return self._luminance_from_gray(self._to_gray(frame))
+
+    @staticmethod
+    def _luminance_from_gray(gray: np.ndarray) -> float:
         mean_lum = float(np.mean(gray))
-        # Percentile and histogram analysis to resist headlight/streetlight skew
-        p10 = float(np.percentile(gray, 10))
-        p50 = float(np.percentile(gray, 50))
-        p90 = float(np.percentile(gray, 90))
+        # Percentile / dark-ratio stats run on a strided (zero-copy) view:
+        # sorts and the boolean mask then touch ~4x fewer pixels. Exact for
+        # uniform frames; a close approximation otherwise.
+        small = gray[::2, ::2]
+        p10 = float(np.percentile(small, 10))
+        p50 = float(np.percentile(small, 50))
 
         # Gamma / contrast assessment: ratio of pixels in lower quartile
-        dark_pixel_ratio = float(np.count_nonzero(gray < 45)) / max(1, gray.size)
+        dark_pixel_ratio = float(np.count_nonzero(small < 45)) / max(1, small.size)
 
         # Composite illumination score:
         # If the majority of the frame is dark (>60% dark pixels), headlights/torches shouldn't fool it into day
-        if dark_pixel_ratio > 0.65:
-            composite = 0.50 * p10 + 0.35 * p50 + 0.15 * mean_lum
-        else:
-            composite = 0.40 * p50 + 0.35 * mean_lum + 0.25 * p10
+        composite = 0.50 * p10 + 0.35 * p50 + 0.15 * mean_lum if dark_pixel_ratio > 0.65 else 0.40 * p50 + 0.35 * mean_lum + 0.25 * p10
 
         return float(np.clip(composite, 0.0, 255.0))
 
     def update(self, frame: np.ndarray, timestamp: float | None = None) -> NightResult:
-        lum = self._luminance(frame)
+        # Single BGR->gray conversion per frame, shared by the luminance and
+        # motion paths (previously converted twice).
+        gray = self._to_gray(frame)
+        lum = self._luminance_from_gray(gray)
         now = timestamp if timestamp is not None else 0.0
         if self._mode == "day" and lum < self.night_threshold and (now - self._last_switch) >= self.temporal_seconds:
             self._mode = "night"
@@ -68,13 +77,6 @@ class NightDetector:
         elif self._mode == "night" and lum > self.day_threshold and (now - self._last_switch) >= self.temporal_seconds:
             self._mode = "day"
             self._last_switch = now
-
-        if frame.ndim == 3 and frame.shape[2] == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        elif frame.ndim == 3 and frame.shape[2] == 4:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-        else:
-            gray = frame
 
         gray_f = gray.astype(np.float32)
         if self._bg is None or self._bg.shape != gray_f.shape:
@@ -86,7 +88,7 @@ class NightDetector:
         # In night mode, adapt threshold to prevent sensor grain noise
         threshold_val = 30 if self._mode == "night" else 25
         _, thresh = cv2.threshold(diff, threshold_val, 255, cv2.THRESH_BINARY)
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._open_kernel)
         motion_pixels = int(np.count_nonzero(cleaned))
         total = frame.shape[0] * frame.shape[1]
         motion_area = motion_pixels / max(1, total)

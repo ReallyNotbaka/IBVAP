@@ -1,6 +1,9 @@
-"""Minimal pipeline for Phase 3 slice - synthetic video -> mock detector -> tracker -> zone -> outbox.
+"""Per-camera analytics pipeline. One of these runs for each connected camera.
 
-Spec 6: Bounded queues + sampling. This slice proves one video creates one persisted event.
+Frame in -> YOLO detect -> track -> face/plate -> zone check -> event out.
+Queues are bounded (size 2) so if inference lags we drop old frames instead
+of building up delay. sample_stride skips detector on some frames, face_stride
+skips YuNet even more - keeps it realtime on weak edge boxes.
 """
 
 from __future__ import annotations
@@ -11,10 +14,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ibvap.core.association import associate_faces_to_tracks
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker
+from ibvap.core.watchlist import get_watchlist_store
 from ibvap.core.zone_engine import DEFAULT_ZONE, is_intrusion
 from ibvap.events.outbox import transactional_write
 
@@ -63,7 +68,9 @@ class MiniPipeline:
         self.events_created = 0
         self.alerted_tracks: set[int] = set()
         self.watchlist_alerted_tracks: set[int] = set()
+        self._active_line_intruders: set[int] = set()
         self._track_outside_count: dict[int, int] = {}
+        self._line_miss_count: dict[int, int] = {}
         self._last_intrusion_alert_time: dict[tuple[str, int], float] = {}
         self._last_exit_alert_time: dict[int, float] = {}
         self.last_detections: list[dict] = []
@@ -89,6 +96,7 @@ class MiniPipeline:
         elif enable_face and Path("models/face_recognition_sface_2021dec.onnx").exists():
             try:
                 from ibvap.core.face import FaceRecognizer
+
                 self.face_recognizer = FaceRecognizer()
             except Exception:
                 self.face_recognizer = None
@@ -98,15 +106,27 @@ class MiniPipeline:
         self.last_faces: list[dict] = []
         self.faces_analyzed = 0
         self.frames_skipped = 0
+        # Cache key for the rule-engine zone mirror (rebuilt only on change).
+        self._rule_zone_id: str | None = None
+
+    def reset_epoch(self, new_epoch: int) -> None:
+        """Reset stream epoch and clear all per-track alert/latch state."""
+        self.stream_epoch = new_epoch
+        self.tracker.reset_epoch(new_epoch)
+        self.alerted_tracks.clear()
+        self.watchlist_alerted_tracks.clear()
+        self._active_line_intruders.clear()
+        self._track_outside_count.clear()
+        self._line_miss_count.clear()
+        self._last_intrusion_alert_time.clear()
+        self._last_exit_alert_time.clear()
 
     def process_frame(self, frame: np.ndarray) -> dict | None:
-        """Process one frame; return event dict if intrusion detected else None.
+        """Run one frame through detect/track/face/zone. Returns event if something fired.
 
-        Optimisation:
-        - bounded queues drop stale frames (spec 10 overload -> drop old, not grow latency)
-        - sample_stride: run heavy detector only every Nth frame (uploaded video 5 FPS cadence = stride 6 for 30 FPS source)
-        - face_stride: run YuNet only every M sampled frames (e.g. 3 => face every 3rd analysis frame)
-        - large-frame downscale for face (max_face_size) to keep YuNet <10ms
+        Skips heavy work on stride frames to save time - keeps last results
+        around so the UI doesn't flicker. Face runs even less often than YOLO
+        since YuNet is pricey on big frames (we downscale to max_face_size first).
         """
         # ---- sampling optimisation: skip heavy inference for non-sampled frames ----
         if self.sample_stride > 1 and (self.frame_idx % self.sample_stride) != 0:
@@ -126,14 +146,14 @@ class MiniPipeline:
         if infer_frame is None:
             return None
 
-        # detect (person/vehicle)
+        # detect (person/vehicle) on the queued infer_frame (bounded-queue sync path)
         if self.detector_handle is not None and hasattr(self.detector_handle, "acquire"):
             with self.detector_handle.acquire() as det:
-                detections = det.detect(frame, self.frame_idx)
+                detections = det.detect(infer_frame, self.frame_idx)
                 self.model_id = getattr(det, "model_id", "yolo26n")
                 self.runtime = getattr(det, "runtime", "directml")
         else:
-            detections = self.detector.detect(frame, self.frame_idx)
+            detections = self.detector.detect(infer_frame, self.frame_idx)
             self.model_id = getattr(self.detector, "model_id", "yolo26n")
             self.runtime = getattr(self.detector, "runtime", "cpu")
 
@@ -147,28 +167,29 @@ class MiniPipeline:
             for d in detections
         ]
         self.last_detections = det_dicts
-        tracks, new_entries, terminated = self.tracker.update(det_dicts, timestamp=time.time())
+        # Single clock read per frame shared by tracker + all debounce logic.
+        now_ts = time.time()
+        tracks, new_entries, terminated = self.tracker.update(det_dicts, timestamp=now_ts)
         self.last_tracks = tracks
+        model_id = getattr(self, "model_id", "yolo26n")
 
         # ---- face detection (optimized, sampled) ----
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
         new_faces_detected = False
-        if not hasattr(self, "last_faces"):
-            self.last_faces = []
         if self.enable_face and self.face_detector is not None:
             # Run YuNet only every face_stride sampled frames to save ~8ms per frame
             sampled_idx = self.frame_idx // self.sample_stride if self.sample_stride > 1 else self.frame_idx
             if (sampled_idx % self.face_stride) == 0:
                 try:
                     # Native resolution processing (do not drop resolution for maximum detection accuracy)
-                    fd_frame = frame
+                    fd_frame = infer_frame
                     if self.max_face_size is not None and self.max_face_size > 0:
-                        h, w = frame.shape[:2]
+                        h, w = infer_frame.shape[:2]
                         if max(h, w) > self.max_face_size:
                             scale = self.max_face_size / float(max(h, w))
                             nw, nh = int(w * scale), int(h * scale)
                             if nw > 0 and nh > 0:
-                                fd_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+                                fd_frame = cv2.resize(infer_frame, (nw, nh), interpolation=cv2.INTER_AREA)
                     raw_faces = self.face_detector.detect(fd_frame)  # type: ignore[union-attr]
                     self._last_face_frame = fd_frame
                     self.last_faces = [
@@ -191,14 +212,12 @@ class MiniPipeline:
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
         if new_faces_detected and self.last_faces and self.face_recognizer is not None:
             try:
-                from ibvap.core.association import associate_faces_to_tracks
-                from ibvap.core.watchlist import get_watchlist_store
-
                 assignments = associate_faces_to_tracks(tracks, self.last_faces)
                 wl_store = get_watchlist_store()
-                crop_frame = getattr(self, "_last_face_frame", frame)
+                crop_frame = getattr(self, "_last_face_frame", infer_frame)
+                track_by_id = {t.track_id: t for t in tracks}
                 for trk_id, face_info in assignments.items():
-                    target_track = next((t for t in tracks if t.track_id == trk_id), None)
+                    target_track = track_by_id.get(trk_id)
                     if target_track is None:
                         continue
                     # Check locked state and threat level
@@ -227,62 +246,99 @@ class MiniPipeline:
                                 tier=match.tier,
                                 threat_level=match.threat_level,
                             )
-                            if confirmed:
+                            # Only credit the sighting if the track is locked
+                            # to this entry_id (protects against A-locked/B-match).
+                            if confirmed and target_track.identity and target_track.identity.get("entry_id") == match.entry_id:
                                 wl_store.record_sighting(match.entry_id, time.time())
             except Exception:
                 pass
 
         primary_event: dict | None = None
         intrusion_track_ids: set[int] = set()
-        now_ts = time.time()
-        if self.zone.id != DEFAULT_ZONE.id:
-            self.rule_engine.zones = [{"id": self.zone.id, "polygon": self.zone.polygon}]
+        # Hoisted per-frame locals: avoids repeated attribute lookups and
+        # getattr-with-default scans across the per-track event loops.
+        camera_id = self.camera_id
+        stream_epoch = self.stream_epoch
+        zone = self.zone
+        zone_id = zone.id
+        zone_name = zone.name
+        is_line_zone = getattr(zone, "is_line", False)
+        if zone_id != DEFAULT_ZONE.id:
+            # Mirror the active zone into the rule engine only when it changed,
+            # instead of rebuilding the list/dict wrapper every frame. The
+            # stored dict keeps a reference to the live polygon list, so
+            # in-place edits stay visible; identity check catches reassignment.
+            cached_zones = self.rule_engine.zones
+            if self._rule_zone_id != zone_id or not cached_zones or cached_zones[0].get("polygon") is not zone.polygon:
+                self.rule_engine.zones = [{"id": zone_id, "polygon": zone.polygon}]
+                self._rule_zone_id = zone_id
             for trk in tracks:
                 for rule_event in self.rule_engine.check_zones(trk.track_id, trk.footpoint, now_ts):
                     event = {
-                        "camera_id": self.camera_id,
-                        "stream_epoch": self.stream_epoch,
+                        "camera_id": camera_id,
+                        "stream_epoch": stream_epoch,
                         "event_type": "suspicious_loitering",
-                        "zone_id": self.zone.id,
+                        "zone_id": zone_id,
                         "track_id": trk.track_id,
                         "bbox_norm": trk.bbox_norm,
                         "confidence": trk.confidence,
                         "explanation": self.rule_engine.explain(rule_event),
-                        "model_id": getattr(self, "model_id", "yolo26n"),
+                        "model_id": model_id,
                     }
-                    transactional_write(event, dedup_key=f"{self.camera_id}:loiter:{self.zone.id}:{trk.track_id}")
+                    transactional_write(event, dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}")
                     self.events_created += 1
                     if primary_event is None:
                         primary_event = event
 
-        # 1. Restricted Zone Intrusion (with hysteresis and debounce cooldown)
+        # 1. Restricted Zone / Tripwire Intrusion (with hysteresis and debounce cooldown)
+        intrusion_classes = {"person", "car", "truck", "bus", "motorcycle"}
         for trk in tracks:
-            if trk.class_name not in {"person", "car", "truck", "bus", "motorcycle"}:
+            if trk.class_name not in intrusion_classes:
                 continue
-            if is_intrusion(trk.footpoint, self.zone):
+            is_line = is_line_zone
+            intruding = is_intrusion(trk.footpoint, zone, track=trk)
+            if is_line:
+                if intruding:
+                    self._active_line_intruders.add(trk.track_id)
+                    self._line_miss_count[trk.track_id] = 0
+                elif trk.track_id in self._active_line_intruders:
+                    # Hysteresis latch: expire after N consecutive non-intrusions
+                    # so the exit-count path stays reachable.
+                    misses = self._line_miss_count.get(trk.track_id, 0) + 1
+                    self._line_miss_count[trk.track_id] = misses
+                    if misses < 5:
+                        intruding = True
+                    else:
+                        self._active_line_intruders.discard(trk.track_id)
+                        self._line_miss_count.pop(trk.track_id, None)
+
+            if intruding:
                 intrusion_track_ids.add(trk.track_id)
                 self._track_outside_count[trk.track_id] = 0
-                last_alert = self._last_intrusion_alert_time.get((self.zone.id, trk.track_id), 0.0)
+                last_alert = self._last_intrusion_alert_time.get((zone_id, trk.track_id), 0.0)
                 # Debounce: alert once per continuous presence, or after at least 4s cooldown
                 if trk.track_id not in self.alerted_tracks and (now_ts - last_alert) >= 4.0:
                     self.alerted_tracks.add(trk.track_id)
-                    self._last_intrusion_alert_time[(self.zone.id, trk.track_id)] = now_ts
-                    dedup = f"{self.camera_id}:{self.zone.id}:{trk.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
+                    self._last_intrusion_alert_time[(zone_id, trk.track_id)] = now_ts
+                    dedup = f"{camera_id}:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}"
+                    rule_name = "tripwire_line_crossing" if is_line else "restricted_zone_intrusion"
+                    observed_desc = f"track {trk.track_id} crossed perimeter line" if is_line else f"track {trk.track_id} footpoint inside polygon"
+                    threshold_desc = "perimeter line crossed" if is_line else "inside restricted zone"
                     event = {
-                        "camera_id": self.camera_id,
-                        "stream_epoch": self.stream_epoch,
+                        "camera_id": camera_id,
+                        "stream_epoch": stream_epoch,
                         "event_type": "zone_intrusion",
-                        "zone_id": self.zone.id,
+                        "zone_id": zone_id,
                         "track_id": trk.track_id,
                         "bbox_norm": trk.bbox_norm,
                         "confidence": trk.confidence,
                         "explanation": {
-                            "rule": "restricted_zone_intrusion",
-                            "zone": self.zone.name,
-                            "observed": f"track {trk.track_id} footpoint inside polygon",
-                            "threshold": "inside restricted zone",
+                            "rule": rule_name,
+                            "zone": zone_name,
+                            "observed": observed_desc,
+                            "threshold": threshold_desc,
                         },
-                        "model_id": getattr(self, "model_id", "yolo26n"),
+                        "model_id": model_id,
                     }
                     transactional_write(event, dedup_key=dedup)
                     self.events_created += 1
@@ -295,25 +351,31 @@ class MiniPipeline:
                     self._track_outside_count[trk.track_id] = count
                     if count >= 15:
                         self.alerted_tracks.discard(trk.track_id)
-                        last_exit = self._last_exit_alert_time.get((self.zone.id, trk.track_id), 0.0)
+                        self._active_line_intruders.discard(trk.track_id)
+                        self._line_miss_count.pop(trk.track_id, None)
+                        last_exit = self._last_exit_alert_time.get((zone_id, trk.track_id), 0.0)
                         if (now_ts - last_exit) >= 3.0:
-                            self._last_exit_alert_time[(self.zone.id, trk.track_id)] = now_ts
-                            dedup = f"{self.camera_id}:{self.zone.id}:exit:{trk.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
+                            self._last_exit_alert_time[(zone_id, trk.track_id)] = now_ts
+                            dedup = f"{camera_id}:{zone_id}:exit:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}"
+                            is_line = is_line_zone
+                            rule_name = "tripwire_line_exit" if is_line else "restricted_zone_exit"
+                            observed_desc = f"track {trk.track_id} exited line perimeter" if is_line else f"track {trk.track_id} exited restricted zone"
+                            threshold_desc = "outside line perimeter" if is_line else "outside restricted zone"
                             ev_exit = {
-                                "camera_id": self.camera_id,
-                                "stream_epoch": self.stream_epoch,
+                                "camera_id": camera_id,
+                                "stream_epoch": stream_epoch,
                                 "event_type": "zone_exit",
-                                "zone_id": self.zone.id,
+                                "zone_id": zone_id,
                                 "track_id": trk.track_id,
                                 "bbox_norm": trk.bbox_norm,
                                 "confidence": trk.confidence,
                                 "explanation": {
-                                    "rule": "restricted_zone_exit",
-                                    "zone": self.zone.name,
-                                    "observed": f"track {trk.track_id} exited restricted zone",
-                                    "threshold": "outside restricted zone",
+                                    "rule": rule_name,
+                                    "zone": zone_name,
+                                    "observed": observed_desc,
+                                    "threshold": threshold_desc,
                                 },
-                                "model_id": getattr(self, "model_id", "yolo26n"),
+                                "model_id": model_id,
                             }
                             transactional_write(ev_exit, dedup_key=dedup)
                             self.events_created += 1
@@ -324,39 +386,44 @@ class MiniPipeline:
 
         # 2. Target entered FOV (only for tracks with confidence >= 0.48 not already reported as zone intrusions)
         for entry in new_entries:
-            if entry.class_name in {"person", "car", "truck", "bus", "motorcycle"} and entry.track_id not in intrusion_track_ids and entry.confidence >= 0.48:
-                dedup = f"{self.camera_id}:entered:{entry.track_id}:{self.stream_epoch}"
+            if entry.class_name in intrusion_classes and entry.track_id not in intrusion_track_ids and entry.confidence >= 0.48:
+                dedup = f"{camera_id}:entered:{entry.track_id}:{stream_epoch}"
                 ev_enter = {
-                    "camera_id": self.camera_id,
-                    "stream_epoch": self.stream_epoch,
+                    "camera_id": camera_id,
+                    "stream_epoch": stream_epoch,
                     "event_type": "target_entered",
-                    "zone_id": self.zone.id,
+                    "zone_id": zone_id,
                     "track_id": entry.track_id,
                     "bbox_norm": entry.bbox_norm,
                     "confidence": entry.confidence,
                     "explanation": {
                         "rule": "target_entered_fov",
-                        "zone": self.zone.name,
+                        "zone": zone_name,
                         "observed": f"{entry.class_name} #{entry.track_id} entered camera field of view",
                         "threshold": "fov_entry",
                     },
-                    "model_id": getattr(self, "model_id", "yolo26n"),
+                    "model_id": model_id,
                 }
                 transactional_write(ev_enter, dedup_key=dedup)
                 self.events_created += 1
         # 3. Watchlist Suspect Identified (tactical alert when track is locked to a suspect or critical target identified)
         for trk in tracks:
-            is_critical = trk.identity and trk.identity.get("threat_level") == "CRITICAL"
-            should_alert = (getattr(trk, "identity_locked", False) or is_critical) and trk.identity
+            _ident = trk.identity
+            _tier = _ident.get("tier") if _ident else None
+            is_critical = bool(_ident and _ident.get("threat_level") == "CRITICAL")
+            is_locked = bool(getattr(trk, "identity_locked", False))
+            # Critical alerts require RED tier or a confirmed lock; AMBER+CRITICAL
+            # tentative matches must not fire.
+            should_alert = (is_locked or (is_critical and _tier == "RED")) and _ident
             if should_alert and trk.track_id not in self.watchlist_alerted_tracks:
                 self.watchlist_alerted_tracks.add(trk.track_id)
                 ident = trk.identity
-                dedup = f"{self.camera_id}:watchlist:{ident['entry_id']}:{trk.track_id}:{self.stream_epoch}"
+                dedup = f"{camera_id}:watchlist:{ident['entry_id']}:{trk.track_id}:{stream_epoch}"
                 ev_watchlist = {
-                    "camera_id": self.camera_id,
-                    "stream_epoch": self.stream_epoch,
+                    "camera_id": camera_id,
+                    "stream_epoch": stream_epoch,
                     "event_type": "watchlist_suspect_identified",
-                    "zone_id": self.zone.id,
+                    "zone_id": zone_id,
                     "track_id": trk.track_id,
                     "bbox_norm": trk.bbox_norm,
                     "confidence": ident["score"],
@@ -380,29 +447,35 @@ class MiniPipeline:
             was_zone_alerted = term.track_id in self.alerted_tracks
             self.alerted_tracks.discard(term.track_id)
             self.watchlist_alerted_tracks.discard(term.track_id)
+            self._active_line_intruders.discard(term.track_id)
             self._track_outside_count.pop(term.track_id, None)
+            self._line_miss_count.pop(term.track_id, None)
 
             # If track was inside restricted zone when it terminated, emit zone_exit
             if was_zone_alerted:
-                last_exit = self._last_exit_alert_time.get((self.zone.id, term.track_id), 0.0)
+                last_exit = self._last_exit_alert_time.get((zone_id, term.track_id), 0.0)
                 if (now_ts - last_exit) >= 3.0:
-                    self._last_exit_alert_time[(self.zone.id, term.track_id)] = now_ts
-                    dedup = f"{self.camera_id}:{self.zone.id}:exit:{term.track_id}:{self.stream_epoch}:{int(now_ts // 10)}"
+                    self._last_exit_alert_time[(zone_id, term.track_id)] = now_ts
+                    dedup = f"{camera_id}:{zone_id}:exit:{term.track_id}:{stream_epoch}:{int(now_ts // 10)}"
+                    is_line = is_line_zone
+                    rule_name = "tripwire_line_exit" if is_line else "restricted_zone_exit"
+                    observed_desc = f"track {term.track_id} exited line perimeter" if is_line else f"track {term.track_id} exited restricted zone"
+                    threshold_desc = "outside line perimeter" if is_line else "outside restricted zone"
                     ev_exit = {
-                        "camera_id": self.camera_id,
-                        "stream_epoch": self.stream_epoch,
+                        "camera_id": camera_id,
+                        "stream_epoch": stream_epoch,
                         "event_type": "zone_exit",
-                        "zone_id": self.zone.id,
+                        "zone_id": zone_id,
                         "track_id": term.track_id,
                         "bbox_norm": term.bbox_norm,
                         "confidence": term.confidence,
                         "explanation": {
-                            "rule": "restricted_zone_exit",
-                            "zone": self.zone.name,
-                            "observed": f"track {term.track_id} exited restricted zone",
-                            "threshold": "outside restricted zone",
+                            "rule": rule_name,
+                            "zone": zone_name,
+                            "observed": observed_desc,
+                            "threshold": threshold_desc,
                         },
-                        "model_id": getattr(self, "model_id", "yolo26n"),
+                        "model_id": model_id,
                     }
                     transactional_write(ev_exit, dedup_key=dedup)
                     self.events_created += 1
@@ -413,22 +486,22 @@ class MiniPipeline:
             last_fov_exit = self._last_exit_alert_time.get((-1, term.track_id), 0.0)
             if term.hits >= 3 and term.confidence >= 0.45 and (now_ts - last_fov_exit) >= 3.0:
                 self._last_exit_alert_time[(-1, term.track_id)] = now_ts
-                dedup = f"{self.camera_id}:exited:{term.track_id}:{self.stream_epoch}"
+                dedup = f"{camera_id}:exited:{term.track_id}:{stream_epoch}"
                 ev_exit = {
-                    "camera_id": self.camera_id,
-                    "stream_epoch": self.stream_epoch,
+                    "camera_id": camera_id,
+                    "stream_epoch": stream_epoch,
                     "event_type": "target_exited",
-                    "zone_id": self.zone.id,
+                    "zone_id": zone_id,
                     "track_id": term.track_id,
                     "bbox_norm": term.bbox_norm,
                     "confidence": term.confidence,
                     "explanation": {
                         "rule": "target_exited_fov",
-                        "zone": self.zone.name,
+                        "zone": zone_name,
                         "observed": f"{term.class_name} #{term.track_id} exited camera field of view",
                         "threshold": "fov_exit",
                     },
-                    "model_id": getattr(self, "model_id", "yolo26n"),
+                    "model_id": model_id,
                 }
                 transactional_write(ev_exit, dedup_key=dedup)
                 self.events_created += 1

@@ -1,3 +1,5 @@
+import { memo, useId, useMemo } from "react";
+
 export type OverlayPreset = "clean" | "all" | "alerts";
 
 export interface Box {
@@ -9,6 +11,7 @@ export interface Box {
   confidence?: number;
   trackId?: string;
   isAlert?: boolean;
+  isFenceIntrusion?: boolean;
   targetName?: string;
   threatLevel?: string;
   isCritical?: boolean;
@@ -23,7 +26,16 @@ interface ColorTheme {
   border: string;
 }
 
-function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean, isPlate?: boolean): ColorTheme {
+function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean, isPlate?: boolean, isFenceIntrusion?: boolean): ColorTheme {
+  if (isFenceIntrusion) {
+    return {
+      primary: "#a855f7",
+      halo: "rgba(88, 28, 135, 0.95)",
+      bg: "rgba(88, 28, 135, 0.96)",
+      accent: "#f3e8ff",
+      border: "rgba(168, 85, 247, 0.95)",
+    };
+  }
   if (isAlert || isCritical) {
     return {
       primary: "#ef4444", // Vivid Crimson for true security alerts & critical targets
@@ -66,7 +78,7 @@ function getColorTheme(label: string, isAlert?: boolean, isCritical?: boolean, i
   };
 }
 
-export function OverlayCanvas({
+export const OverlayCanvas = memo(function OverlayCanvas({
   boxes,
   mode = "operational",
   preset,
@@ -89,20 +101,29 @@ export function OverlayCanvas({
 }) {
   const activePreset: OverlayPreset =
     preset || (mode === "minimal" ? "clean" : "all");
+  const uid = useId().replace(/:/g, "");
+  const fBracket = `geometric-bracket-shadow-${uid}`;
+  const fSelected = `selected-target-glow-${uid}`;
+  const fCritical = `critical-target-glow-${uid}`;
+  const fRoi = `roi-intruder-glow-${uid}`;
 
-  const filteredBoxes = boxes.filter((b) => {
-    const isFace = b.label.toLowerCase() === "face";
-    const isPerson =
-      b.label.toLowerCase() === "person" || b.label.toLowerCase() === "human";
+  const filteredBoxes = useMemo(
+    () =>
+      boxes.filter((b) => {
+        const isFace = b.label.toLowerCase() === "face";
+        const isPerson =
+          b.label.toLowerCase() === "person" || b.label.toLowerCase() === "human";
 
-    if (activePreset === "alerts" && !b.isAlert) {
-      return false;
-    }
-    if (isFace && !showFaces) return false;
-    if (isPerson && !showPeople && !b.isAlert) return false;
+        if (activePreset === "alerts" && !b.isAlert) {
+          return false;
+        }
+        if (isFace && !showFaces) return false;
+        if (isPerson && !showPeople && !b.isAlert) return false;
 
-    return true;
-  });
+        return true;
+      }),
+    [boxes, activePreset, showFaces, showPeople],
+  );
 
   if (!filteredBoxes.length) return null;
 
@@ -115,20 +136,24 @@ export function OverlayCanvas({
     >
       <defs>
         {/* Fine, crisp geometric drop shadow for bracket contrast */}
-        <filter id="geometric-bracket-shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <filter id={fBracket} x="-20%" y="-20%" width="140%" height="140%">
           <feDropShadow dx="0" dy="0" stdDeviation="0.8" floodColor="#000000" floodOpacity="0.85" />
         </filter>
-        <filter id="selected-target-glow" x="-25%" y="-25%" width="150%" height="150%">
+        <filter id={fSelected} x="-25%" y="-25%" width="150%" height="150%">
           <feDropShadow dx="0" dy="0" stdDeviation="1.2" floodColor="#ffffff" floodOpacity="0.9" />
         </filter>
         {/* Unmistakable tactical crimson beacon glow for critical targets & alerts */}
-        <filter id="critical-target-glow" x="-25%" y="-25%" width="150%" height="150%">
+        <filter id={fCritical} x="-25%" y="-25%" width="150%" height="150%">
           <feDropShadow dx="0" dy="0" stdDeviation="1.6" floodColor="#ef4444" floodOpacity="0.85" />
+        </filter>
+        {/* Unmistakable tactical purple beacon glow for ROI intruders */}
+        <filter id={fRoi} x="-25%" y="-25%" width="150%" height="150%">
+          <feDropShadow dx="0" dy="0" stdDeviation="1.6" floodColor="#a855f7" floodOpacity="0.85" />
         </filter>
       </defs>
 
       {filteredBoxes.map((b, idx) => {
-        const theme = getColorTheme(b.label, b.isAlert, b.isCritical, b.isPlate);
+        const theme = getColorTheme(b.label, b.isAlert, b.isCritical, b.isPlate, b.isFenceIntrusion);
         const bx = b.x * 100;
         const by = b.y * 100;
         const bw = b.w * 100;
@@ -138,11 +163,13 @@ export function OverlayCanvas({
         const hasTrack = Boolean(b.trackId);
         const isSelected = Boolean(selectedTrackId && b.trackId === selectedTrackId);
         const elementKey = b.trackId
-          ? `track-${b.trackId}`
+          ? `track-${b.label}-${b.trackId}`
           : `det-${b.label}-${idx}`;
 
         // Micro-badge sizing and text formatting: clearly display target's name
-        const formattedLabel = b.targetName
+        const formattedLabel = b.isFenceIntrusion
+          ? (b.targetName ? `ROI INTRUDER: [${b.targetName}]` : "ROI INTRUDER")
+          : b.targetName
           ? (b.isCritical ? `CRITICAL: [${b.targetName}]` : `[${b.targetName}]`)
           : b.isPlate
           ? b.label.toUpperCase()
@@ -176,10 +203,12 @@ export function OverlayCanvas({
           b.isAlert || (showLabels && activePreset !== "clean");
 
         const filterUrl = isSelected
-          ? "url(#selected-target-glow)"
+          ? `url(#${fSelected})`
+          : b.isFenceIntrusion
+          ? `url(#${fRoi})`
           : b.isAlert
-          ? "url(#critical-target-glow)"
-          : "url(#geometric-bracket-shadow)";
+          ? `url(#${fCritical})`
+          : `url(#${fBracket})`;
 
         return (
           <g
@@ -200,7 +229,7 @@ export function OverlayCanvas({
               }}
             />
 
-            {/* Unmistakable, high-visibility RED BOX for critical targets & alerts */}
+            {/* Unmistakable, high-visibility box for critical targets & alerts (purple outline for ROI intruders) */}
             {b.isAlert && (
               <>
                 <rect
@@ -208,7 +237,7 @@ export function OverlayCanvas({
                   y={by}
                   width={bw}
                   height={bh}
-                  fill="rgba(239, 68, 68, 0.14)"
+                  fill={b.isFenceIntrusion ? "rgba(168, 85, 247, 0.18)" : "rgba(239, 68, 68, 0.14)"}
                   rx={1}
                 />
                 <rect
@@ -217,11 +246,13 @@ export function OverlayCanvas({
                   width={bw}
                   height={bh}
                   fill="none"
-                  stroke="#ef4444"
+                  stroke={b.isFenceIntrusion ? "#a855f7" : "#ef4444"}
                   strokeWidth={2.0}
                   rx={1}
                   vectorEffect="non-scaling-stroke"
-                  data-testid="critical-target-box"
+                  data-testid={b.isFenceIntrusion ? "roi-intruder-box" : "critical-target-box"}
+                  data-roi-intruder={b.isFenceIntrusion ? "true" : undefined}
+                  aria-label={b.isFenceIntrusion ? "ROI intruders with a purple outline" : undefined}
                 />
               </>
             )}
@@ -276,7 +307,9 @@ export function OverlayCanvas({
             {renderLabels && (
               <g
                 className="cursor-pointer pointer-events-auto"
-                data-testid={b.isAlert ? "critical-target-badge" : undefined}
+                data-testid={b.isFenceIntrusion ? "roi-intruder-badge" : b.isAlert ? "critical-target-badge" : undefined}
+                data-roi-intruder={b.isFenceIntrusion ? "true" : undefined}
+                aria-label={b.isFenceIntrusion ? "ROI intruders with a purple outline" : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelectBox?.(b);
@@ -302,7 +335,10 @@ export function OverlayCanvas({
                   letterSpacing="0.02em"
                   fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif"
                 >
-                  <tspan fill={b.isAlert ? "#ffffff" : theme.accent} data-testid={b.isAlert ? "target-name-text" : undefined}>
+                  <tspan
+                    fill={b.isAlert ? "#ffffff" : theme.accent}
+                    data-testid={b.isFenceIntrusion ? "roi-intruder-text" : b.isAlert ? "target-name-text" : undefined}
+                  >
                     {formattedLabel}
                   </tspan>
                   {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"> #{b.trackId}</tspan>}
@@ -320,4 +356,4 @@ export function OverlayCanvas({
       })}
     </svg>
   );
-}
+});

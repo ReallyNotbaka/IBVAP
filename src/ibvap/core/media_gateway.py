@@ -20,10 +20,12 @@ class MediaGatewayClient:
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
+        # Bound pooling to cap memory/sockets under fan-out health checks.
+        self._limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(base_url=self.api_url, timeout=self.timeout)
+            self._client = httpx.AsyncClient(base_url=self.api_url, timeout=self.timeout, limits=self._limits)
         return self._client
 
     async def close(self) -> None:

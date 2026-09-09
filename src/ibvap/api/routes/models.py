@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import structlog
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,12 @@ from ibvap.core.model_manager import (
 )
 
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
+
+logger = structlog.get_logger(__name__)
+
+# Bound model uploads in memory: largest manifest weight is 156MB; cap with headroom.
+MODEL_UPLOAD_CHUNK = 1024 * 1024
+MODEL_UPLOAD_MAX_BYTES = 220 * 1024 * 1024
 
 
 class ModelItem(BaseModel):
@@ -144,28 +151,46 @@ def get_download_progress(model_name: str) -> DownloadProgressResponse:
 @router.post("/upload")
 async def upload_model_file(
     model_name: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI idiomatic dependency
 ) -> dict[str, Any]:
     meta = YOLO_MODELS_MANIFEST.get(model_name)
     if not meta:
         raise HTTPException(status_code=400, detail=f"Unknown model variant: {model_name}")
 
-    content = await file.read()
+    # Chunked bounded read instead of a single unbounded file.read().
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(MODEL_UPLOAD_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MODEL_UPLOAD_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Model file too large")
+        chunks.append(chunk)
+    content = b"".join(chunks) if len(chunks) != 1 else chunks[0]
+    # Release chunk list early so peak memory is ~1x file, not ~2x.
+    del chunks
     if len(content) < 100:
         raise HTTPException(status_code=400, detail="Uploaded file is too small or invalid")
 
     manager = get_download_manager()
-    target_path = manager.save_model_file(model_name, content)
+    # save_model_file does blocking disk IO — offload from event loop.
+    target_path = await asyncio.to_thread(manager.save_model_file, model_name, content)
+    size_bytes = len(content)
+    del content
     return {
         "status": "uploaded",
         "model_name": model_name,
-        "size_bytes": len(content),
+        "size_bytes": size_bytes,
         "target_path": str(target_path),
     }
 
 
 @router.delete("/{model_name}/weights")
 def delete_model_weights(model_name: str) -> dict[str, Any]:
+    # TODO: require authentication/authorization for mutating routes (would break tests today).
+    logger.warning("unauthenticated_delete", route="DELETE /api/v1/models/{model_name}/weights")
     if model_name == "yolo26n":
         raise HTTPException(
             status_code=400,

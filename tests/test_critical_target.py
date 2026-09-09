@@ -282,25 +282,27 @@ class TestWatchlistStoreRobustness:
         """WatchlistStore must parse lowercase or mixed case threat levels correctly."""
         p = tmp_path / "watchlist.json"
         import json
+
         p.write_text(
-            json.dumps({
-                "entries": [
-                    {
-                        "id": "crit-case-test",
-                        "name": "Case Test Target",
-                        "threat_level": "critical",
-                        "notes": "Testing case insensitivity",
-                        "gallery": [],
-                    }
-                ]
-            }),
+            json.dumps(
+                {
+                    "entries": [
+                        {
+                            "id": "crit-case-test",
+                            "name": "Case Test Target",
+                            "threat_level": "critical",
+                            "notes": "Testing case insensitivity",
+                            "gallery": [],
+                        }
+                    ]
+                }
+            ),
             encoding="utf-8",
         )
         store = WatchlistStore(storage_path=p)
         entry = store.get_entry("crit-case-test")
         assert entry is not None
         assert entry.threat_level == ThreatLevel.CRITICAL
-
 
 
 class MockPersonDetector:
@@ -555,5 +557,3 @@ class TestCriticalTargetPrecedenceInPipeline:
         assert trk.identity_locked is True
         assert trk.identity["name"] == "Critical Operative"
         assert trk.identity["threat_level"] == "CRITICAL"
-
-

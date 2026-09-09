@@ -7,14 +7,16 @@ from ibvap.core.anpr import ANPRPipeline, OCRReader, PlateCandidate, PlateDetect
 
 
 def fake_reader() -> OCRReader:
-    return OCRReader(ocr_engine=lambda crop: [
-        PlateCandidate(
-            text="MH12DE1234",
-            confidence=0.95,
-            quality=float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()),
-            bbox_norm=(0.0, 0.0, 1.0, 1.0),
-        )
-    ])
+    return OCRReader(
+        ocr_engine=lambda crop: [
+            PlateCandidate(
+                text="MH12DE1234",
+                confidence=0.95,
+                quality=float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()),
+                bbox_norm=(0.0, 0.0, 1.0, 1.0),
+            )
+        ]
+    )
 
 
 def test_normalize_plate_diverse_inputs() -> None:

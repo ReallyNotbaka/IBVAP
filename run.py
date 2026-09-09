@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import shutil
 import subprocess
 import sys
@@ -109,8 +110,9 @@ def ensure_frontend_bundle(root: Path) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=1)
 def detect_hardware() -> str:
-    """Detect available GPU or fallback compute devices."""
+    """Detect available GPU or fallback compute devices (cached: imports onnxruntime once)."""
     try:
         import onnxruntime as ort
 
@@ -122,6 +124,7 @@ def detect_hardware() -> str:
                     ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
                     stderr=subprocess.DEVNULL,
                     text=True,
+                    timeout=3,
                 ).strip()
                 if out:
                     return f"DirectML GPU ({out})"

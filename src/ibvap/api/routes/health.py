@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import ctypes
+import sys
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +19,11 @@ from ibvap.core.media_gateway import MediaGatewayClient
 router = APIRouter(tags=["system"])
 
 _START_TIME = time.time()
+
+# Cache expensive provider enumeration + reuse single Settings read.
+_GPU_CACHE: dict[str, Any] | None = None
+_GPU_CACHE_AT: float = 0.0
+_GPU_CACHE_TTL = 60.0
 
 
 class SystemTelemetry(BaseModel):
@@ -40,32 +48,30 @@ class HealthResponse(BaseModel):
     system: SystemTelemetry | None = None
 
 
+class _MEM(ctypes.Structure):
+    _fields_ = [
+        ("l", ctypes.c_ulong),
+        ("load", ctypes.c_ulong),
+        ("total", ctypes.c_ulonglong),
+        ("avail", ctypes.c_ulonglong),
+        ("tot_pf", ctypes.c_ulonglong),
+        ("avail_pf", ctypes.c_ulonglong),
+        ("tot_virt", ctypes.c_ulonglong),
+        ("avail_virt", ctypes.c_ulonglong),
+        ("avail_ext", ctypes.c_ulonglong),
+    ]
+
+
 def _get_memory_telemetry() -> dict[str, Any]:
     total_mb = 16384
     avail_mb = 8192
     percent = 50.0
-    import sys
 
     if sys.platform == "win32":
         try:
-            import ctypes
-
-            class MEM(ctypes.Structure):
-                _fields_ = [
-                    ("l", ctypes.c_ulong),
-                    ("load", ctypes.c_ulong),
-                    ("total", ctypes.c_ulonglong),
-                    ("avail", ctypes.c_ulonglong),
-                    ("tot_pf", ctypes.c_ulonglong),
-                    ("avail_pf", ctypes.c_ulonglong),
-                    ("tot_virt", ctypes.c_ulonglong),
-                    ("avail_virt", ctypes.c_ulonglong),
-                    ("avail_ext", ctypes.c_ulonglong),
-                ]
-
-            m = MEM()
-            m.l = ctypes.sizeof(MEM)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            m = _MEM()
+            m.l = ctypes.sizeof(_MEM)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))  # type: ignore[attr-defined]
             total_mb = int(m.total // (1024 * 1024))
             avail_mb = int(m.avail // (1024 * 1024))
             percent = float(m.load)
@@ -80,22 +86,29 @@ def _get_memory_telemetry() -> dict[str, Any]:
 
 
 def _get_gpu_telemetry() -> dict[str, Any]:
+    global _GPU_CACHE, _GPU_CACHE_AT
+    now = time.monotonic()
+    if _GPU_CACHE is not None and (now - _GPU_CACHE_AT) < _GPU_CACHE_TTL:
+        return _GPU_CACHE
     providers: list[str] = []
     try:
         import onnxruntime as ort
 
-        providers = ort.get_available_providers()
+        providers = list(ort.get_available_providers())
     except Exception:
-        pass
+        providers = []
     dml = "DmlExecutionProvider" in providers
     cuda = "CUDAExecutionProvider" in providers
     acc = "DirectML (Hardware Accelerated)" if dml else ("NVIDIA CUDA" if cuda else "CPU Native")
-    return {
+    result = {
         "gpu_accelerator": acc,
         "directml_available": dml,
         "cuda_available": cuda,
         "active_providers": providers,
     }
+    _GPU_CACHE = result
+    _GPU_CACHE_AT = now
+    return result
 
 
 class CapabilitiesResponse(BaseModel):
@@ -120,14 +133,20 @@ def _get_media_gateway_client(request: Request | None = None) -> MediaGatewayCli
 @router.get("/api/v1/health", response_model=HealthResponse)
 async def health(request: Request) -> HealthResponse:
     client = _get_media_gateway_client(request)
-    try:
-        gateway_online = await client.check_health()
-    finally:
-        await client.close()
 
+    async def _gateway() -> bool:
+        try:
+            return await client.check_health()
+        finally:
+            await client.close()
+
+    # Run gateway IO concurrently with blocking telemetry offloaded to threads.
+    gateway_online, mem, gpu = await asyncio.gather(
+        _gateway(),
+        asyncio.to_thread(_get_memory_telemetry),
+        asyncio.to_thread(_get_gpu_telemetry),
+    )
     media_gateway_status = "mediamtx-1.20.1-online" if gateway_online else "offline"
-    mem = _get_memory_telemetry()
-    gpu = _get_gpu_telemetry()
 
     handle = None
     with contextlib.suppress(Exception):

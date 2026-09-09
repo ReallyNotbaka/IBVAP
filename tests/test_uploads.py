@@ -3,21 +3,15 @@ from __future__ import annotations
 import cv2
 from fastapi.testclient import TestClient
 
-from ibvap.api.app import create_app
 
-
-def _client() -> TestClient:
-    return TestClient(create_app())
-
-
-def test_upload_rejects_unsupported_extension() -> None:
-    c = _client()
+def test_upload_rejects_unsupported_extension(api_client: TestClient) -> None:
+    c = api_client
     resp = c.post("/api/v1/uploads", files={"file": ("evil.html", b"<html>hello", "text/html")})
     assert resp.status_code == 400
 
 
-def test_upload_happy_path_and_promote() -> None:
-    c = _client()
+def test_upload_happy_path_and_promote(api_client: TestClient) -> None:
+    c = api_client
     # minimal mp4 header (not real video but passes extension check; html detection fails for <html)
     # Use 1KB dummy mp4 - our endpoint only checks extension and html prefix, not container yet
     content = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 1024
@@ -43,14 +37,14 @@ def test_upload_happy_path_and_promote() -> None:
     assert c.get(f"/api/v1/uploads/{upload_id}").status_code == 404
 
 
-def test_upload_rejects_html_masquerading_as_mp4() -> None:
-    c = _client()
+def test_upload_rejects_html_masquerading_as_mp4(api_client: TestClient) -> None:
+    c = api_client
     resp = c.post("/api/v1/uploads", files={"file": ("clip.mp4", b"<!DOCTYPE html><html>", "video/mp4")})
     assert resp.status_code == 400
 
 
-def test_video_footage_can_be_tested_and_saved(tmp_path) -> None:
-    c = _client()
+def test_video_footage_can_be_tested_and_saved(api_client: TestClient, tmp_path) -> None:
+    c = api_client
     video_path = tmp_path / "test-footage.mp4"
     writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
     assert writer.isOpened()

@@ -1,0 +1,44 @@
+# Keep the build context small: faster sends, better layer caching.
+.git/
+.gitignore
+.github/
+.venv/
+.uv/
+.venv*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# Runtime / generated data (bind-mounted or created at runtime, never baked in)
+data/db/
+data/frames/
+data/logs/
+data/bin/
+*.log
+server*.log
+
+# Local env & secrets (never into images)
+.env
+*.env.local
+config/local.yaml
+.config/secrets/
+
+# Heavy ML weights are pulled by the model manager at runtime
+*.pt
+*.onnx
+models/
+
+# Frontend: built in its own stage/image
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+node_modules/
+
+# Docs & misc not needed at runtime
+docs/
+*.md
+!README.md

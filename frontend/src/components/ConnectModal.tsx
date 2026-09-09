@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { testCamera, createCamera } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -10,7 +10,11 @@ import {
   AlertTriangleIcon,
 } from "./Icons";
 
-export function ConnectModal() {
+// Add-camera dialog. Handles phones (DroidCam :4747 / IP Webcam :8080) plus
+// normal RTSP cams. Builds http://ip:port/path, hits POST /cameras/test,
+// shows probe result, then POST /cameras on save. Port presets fill in
+// protocol + /video automatically so users don't have to remember it.
+export const ConnectModal = memo(function ConnectModal() {
   const nav = useNavigate();
   const loc = useLocation();
   const qc = useQueryClient();
@@ -48,18 +52,16 @@ export function ConnectModal() {
     };
   }, [open, nav]);
 
-  if (!open) return null;
-
-  const applyPreset = (presetAddr: string, presetPort: string, presetProto: string, presetPath: string) => {
+  const applyPreset = useCallback((presetAddr: string, presetPort: string, presetProto: string, presetPath: string) => {
     setAddress(presetAddr);
     setPort(presetPort);
     setProtocol(presetProto);
     setStreamPath(presetPath);
     setResult(null);
     setSaveError("");
-  };
+  }, []);
 
-  const handleAddressChange = (raw: string) => {
+  const handleAddressChange = useCallback((raw: string) => {
     const trimmed = raw.trim();
     let candidate = trimmed;
     if (!candidate.includes("://") && (candidate.includes(":") || candidate.includes("/"))) {
@@ -78,7 +80,7 @@ export function ConnectModal() {
             setProtocol("rtsp");
           }
         }
-        if (parsed.protocol && ["http:", "https:", "rtsp:", "rtsps:"].includes(parsed.protocol)) {
+        if (trimmed.includes("://") && parsed.protocol && ["http:", "https:", "rtsp:", "rtsps:"].includes(parsed.protocol)) {
           setProtocol(parsed.protocol.replace(":", ""));
         }
         const p = parsed.pathname.replace(/^\/+/, "");
@@ -89,20 +91,23 @@ export function ConnectModal() {
       // fallback to plain input
     }
     setAddress(raw);
-  };
+  }, []);
 
-  const handlePortChange = (val: string) => {
+  const handlePortChange = useCallback((val: string) => {
     const clean = val.replace(/\D/g, "");
     setPort(clean);
-    if (clean === "4747" || clean === "8080") {
-      if (!protocol) setProtocol("http");
-      if (!streamPath) setStreamPath("video");
-    } else if (clean === "554") {
-      if (!protocol) setProtocol("rtsp");
-    }
-  };
+    setProtocol((prev) => {
+      if ((clean === "4747" || clean === "8080") && !prev) return "http";
+      if (clean === "554" && !prev) return "rtsp";
+      return prev;
+    });
+    setStreamPath((prev) => {
+      if ((clean === "4747" || clean === "8080") && !prev) return "video";
+      return prev;
+    });
+  }, []);
 
-  async function doTest() {
+  const doTest = useCallback(async () => {
     const cleanAddress = address.trim();
     const cleanPort = port.trim();
     let cleanProtocol = protocol.trim();
@@ -144,15 +149,20 @@ export function ConnectModal() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [address, port, protocol, streamPath, username, password]);
 
-  async function doSave() {
+  const doSave = useCallback(async () => {
     const cleanAddress = address.trim();
     const cleanPort = port.trim();
     let cleanProtocol = protocol.trim() || ((cleanPort === "4747" || cleanPort === "8080") ? "http" : cleanPort === "554" ? "rtsp" : "http");
     let cleanPath = streamPath.trim().replace(/^\/+/, "");
     if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
       cleanPath = "video";
+    }
+
+    if (!cleanAddress || !cleanPort || !cleanProtocol) {
+      setSaveError("Enter the device IP, port, and protocol before saving.");
+      return;
     }
 
     const endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
@@ -189,19 +199,26 @@ export function ConnectModal() {
     } finally {
       setSaving(false);
     }
-  }
+  }, [address, port, protocol, streamPath, username, password, temporary, qc, nav]);
+
+  const handleClose = useCallback(() => nav("/"), [nav]);
+  const handleStopPropagation = useCallback((e: React.MouseEvent) => e.stopPropagation(), []);
+  const handleToggleAuth = useCallback(() => setShowAuth((v) => !v), []);
+  const handleBackToForm = useCallback(() => setStep(1), []);
+
+  if (!open) return null;
 
   return (
     <div
       className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md grid place-items-center p-4 sm:p-6 z-50 modal-backdrop-animate overflow-y-auto"
-      onClick={() => nav("/")}
+      onClick={handleClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-camera-title"
         className="modal-content-animate w-full max-w-xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-white/10 p-5 sm:p-6 shadow-2xl text-slate-900 dark:text-slate-100 transition-colors my-auto"
-        onClick={(e) => e.stopPropagation()}
+        onClick={handleStopPropagation}
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3.5 mb-4">
@@ -221,7 +238,7 @@ export function ConnectModal() {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => nav("/")}
+              onClick={handleClose}
               aria-label="Back to overview"
               title="Back to overview"
               className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
@@ -231,7 +248,7 @@ export function ConnectModal() {
             </button>
             <button
               ref={closeButtonRef}
-              onClick={() => nav("/")}
+              onClick={handleClose}
               aria-label="Close"
               title="Close"
               className="rounded-full p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors cursor-pointer"
@@ -331,7 +348,7 @@ export function ConnectModal() {
             <div className="mt-3 rounded-xl border border-slate-200 dark:border-slate-700">
               <button
                 type="button"
-                onClick={() => setShowAuth((v) => !v)}
+                onClick={handleToggleAuth}
                 data-testid="toggle-auth"
                 aria-expanded={showAuth}
                 className="flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium text-slate-700 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100 cursor-pointer"
@@ -425,7 +442,7 @@ export function ConnectModal() {
               </div>
             )}
             {result && result.result !== "ok" && (
-              <button onClick={() => setStep(1)} className="text-sm underline mt-3 text-neutral-900 dark:text-neutral-200 font-medium cursor-pointer">
+              <button onClick={handleBackToForm} className="text-sm underline mt-3 text-neutral-900 dark:text-neutral-200 font-medium cursor-pointer">
                 Edit connection
               </button>
             )}
@@ -452,7 +469,7 @@ export function ConnectModal() {
               <button onClick={doSave} disabled={saving} data-testid="continue" className="primary-button flex-1 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60">
                 {saving ? "Adding camera..." : "Add camera & go to overview"}
               </button>
-              <button onClick={() => setStep(1)} className="ghost-button cursor-pointer">
+              <button onClick={handleBackToForm} className="ghost-button cursor-pointer">
                 Edit
               </button>
             </div>
@@ -471,4 +488,4 @@ export function ConnectModal() {
       </div>
     </div>
   );
-}
+});

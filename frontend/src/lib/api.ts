@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "";
-const base = (p: string) => (API_BASE ? `${API_BASE}${p}` : p);
+export const base = (p: string) => (API_BASE ? `${API_BASE}${p}` : p);
 
 export type Camera = {
   id: string;
@@ -12,7 +12,7 @@ export type Camera = {
   source_type?: string;
   protocol?: string;
   temporary?: boolean;
-  fence?: { polygon: [number, number][]; enabled: boolean; name?: string };
+  fence?: { polygon: [number, number][]; fence_type?: "line" | "polygon"; enabled: boolean; name?: string } | null;
 };
 
 export type PlaybackState = {
@@ -89,9 +89,11 @@ export type CameraObservations = {
       name: string;
       score: number;
       tier: "RED" | "AMBER";
+      threat_level?: string;
       locked: boolean;
     } | null;
     identity_locked?: boolean;
+    intrusion?: boolean;
   }>;
   frame_at: number | null;
   faces?: Array<{
@@ -138,6 +140,10 @@ export function useSystemHealth() {
     queryKey: ["system-health"],
     queryFn: fetchHealth,
     refetchInterval: 2500,
+    staleTime: 2000,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    retry: 1,
   });
 }
 
@@ -152,6 +158,9 @@ export function useCapabilities() {
     queryKey: ["capabilities"],
     queryFn: fetchCapabilities,
     staleTime: 60000,
+    gcTime: 300000,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 }
 
@@ -164,6 +173,8 @@ export async function fetchCameras(): Promise<Camera[]> {
   return [];
 }
 
+// Probe a camera URL without saving it. Backend checks SSRF, resolves DNS,
+// tries to open + decode a few frames. Returns codec/res/fps for the preview step.
 export async function testCamera(payload: {
   endpoint: string;
   username?: string;
@@ -180,6 +191,8 @@ export async function testCamera(payload: {
   return j;
 }
 
+// Register a camera. Backend starts the worker thread on success.
+// source_type is smartphone_ip_webcam for phones (ports 4747/8080), else ip_camera.
 export async function createCamera(payload: {
   endpoint: string;
   site_id: string;
@@ -362,13 +375,27 @@ export async function controlPlayback(id: string, action: "pause" | "resume" | "
   return (await r.json()) as PlaybackState;
 }
 
-export async function setCameraFence(id: string, polygon: [number, number][], enabled = true): Promise<Camera> {
+export async function setCameraFence(
+  id: string,
+  polygon: [number, number][],
+  enabled = true,
+  fenceType?: "line" | "polygon"
+): Promise<Camera> {
+  const type = fenceType ?? (polygon.length === 2 ? "line" : "polygon");
   const r = await fetch(base(`/api/v1/cameras/${id}/fence`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ polygon, enabled }),
+    body: JSON.stringify({ polygon, fence_type: type, enabled }),
   });
   if (!r.ok) throw new Error(`fence ${r.status}`);
+  return (await r.json()) as Camera;
+}
+
+export async function deleteCameraFence(id: string): Promise<Camera> {
+  const r = await fetch(base(`/api/v1/cameras/${id}/fence`), {
+    method: "DELETE",
+  });
+  if (!r.ok) throw new Error(`delete fence ${r.status}`);
   return (await r.json()) as Camera;
 }
 
@@ -382,24 +409,43 @@ export async function seekPlayback(id: string, positionSeconds: number): Promise
   return (await r.json()) as PlaybackState;
 }
 
+// Poll AI results for a camera (tracks, faces, plates). Called ~12fps from CameraTile.
+// Video itself comes from <img src=/cameras/{id}/stream>, this is just the boxes.
 export async function fetchCameraObservations(id: string): Promise<CameraObservations> {
   const r = await fetch(base(`/api/v1/cameras/${id}/observations`));
   if (!r.ok) throw new Error(`camera observations ${r.status}`);
   return (await r.json()) as CameraObservations;
 }
 
-export function useCameras() {
-  return useQuery({ queryKey: ["cameras"], queryFn: fetchCameras, refetchInterval: 5000, retry: 3 });
+export function useCameras(enabled = true) {
+  return useQuery({
+    queryKey: ["cameras"],
+    queryFn: fetchCameras,
+    refetchInterval: 5000,
+    staleTime: 4000,
+    gcTime: 60000,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    retry: 3,
+    enabled,
+  });
 }
 
 export function useEvents(
   opts: { limit?: number; tab?: string; camera_id?: string } | number = 50,
+  enabled = true,
 ) {
   const key = typeof opts === "number" ? ["events", opts] : ["events", opts.limit ?? 50, opts.tab ?? "all", opts.camera_id ?? ""];
+  const limit = typeof opts === "number" ? opts : (opts.limit ?? 50);
   return useQuery({
     queryKey: key,
     queryFn: () => fetchEvents(opts),
-    refetchInterval: 2500,
+    refetchInterval: limit > 50 ? 4000 : 2500,
+    staleTime: 2000,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    retry: 1,
+    enabled,
   });
 }
 
@@ -436,11 +482,16 @@ export async function deleteSuspect(id: string): Promise<void> {
   if (!r.ok) throw new Error(`Delete failed (${r.status})`);
 }
 
-export function useWatchlist() {
+export function useWatchlist(enabled = true) {
   return useQuery({
     queryKey: ["watchlist"],
     queryFn: fetchWatchlist,
     refetchInterval: 5000,
+    staleTime: 4000,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    retry: 1,
+    enabled,
   });
 }
 
@@ -490,11 +541,16 @@ export async function uploadModel(modelName: string, file: File): Promise<void> 
   }
 }
 
-export function useModels() {
+export function useModels(enabled = true) {
   return useQuery({
     queryKey: ["models"],
     queryFn: fetchModels,
     refetchInterval: 3000,
+    staleTime: 2500,
+    refetchOnWindowFocus: false,
+    refetchIntervalInBackground: false,
+    retry: 1,
+    enabled,
   });
 }
 

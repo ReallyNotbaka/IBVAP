@@ -1,6 +1,10 @@
-"""PyAV probe - demux, decode, measure. Spec 10.
+"""Quick probe for camera URLs before we commit to streaming them.
 
-Never use float seconds as sole media time. Uses PyAV time_base + pts.
+Opens the stream with PyAV, grabs a few frames to make sure there's
+actually video there. Handles the phone apps (DroidCam / IP Webcam)
+specially since they serve endless MJPEG and normal probing hangs.
+
+Note: don't use float seconds for media timing, stick to time_base + pts.
 """
 
 from __future__ import annotations
@@ -15,7 +19,11 @@ import av
 
 
 def normalize_mjpeg_url(url: str) -> str:
-    """Normalize stream URL, ensuring DroidCam (4747) and IP Webcam (8080) endpoints target the video feed."""
+    """Fix up phone URLs. Most folks just type IP:port, we add /video.
+
+    DroidCam runs on 4747, IP Webcam on 8080. Both expect /video at the end,
+    without it you get the settings page instead of the feed.
+    """
     try:
         parsed = urlparse(url)
         path = parsed.path.lower().rstrip("/")
@@ -59,9 +67,11 @@ def probe_url(
     timeout: float = 5.0,
     max_frames: int = 5,
 ) -> tuple[ProbeResult, list[FrameProbe]]:
-    """Probe url via PyAV: open, find video stream, read up to max_frames.
+    """Try opening the URL, check for a video track, decode a couple frames.
 
-    Raises ProbeError on unsupported codec / no video track / timeout.
+    Raises ProbeError if there's no video, nothing decodes, or it times out.
+    Phone feeds need format="mpjpeg" or ffmpeg sits there guessing forever.
+    Retries 3x on those since phone wifi drops packets a lot.
     """
     url = normalize_mjpeg_url(url)
     start = time.monotonic()
@@ -162,12 +172,18 @@ def probe_url(
                 break
             for frame in packet.decode():
                 t0 = time.monotonic()
-                # compute sha for frozen detection (downsampled hash)
+                # compute sha for frozen detection (downsampled hash).
+                # Avoid arr.tobytes() full-frame copy (~6MB @1080p); hash a
+                # small strided sample via buffer view instead.
                 try:
                     arr = frame.to_ndarray(format="rgb24")
-                    h = hashlib.sha256(arr.tobytes()[:4096]).hexdigest()[:16]
+                    sample = arr[::16, ::16]
+                    h = hashlib.sha256(memoryview(sample).cast("B")[:4096]).hexdigest()[:16]
                 except Exception:
-                    h = "nohash"
+                    try:
+                        h = hashlib.sha256(arr.tobytes()[:4096]).hexdigest()[:16]
+                    except Exception:
+                        h = "nohash"
                 dt = (time.monotonic() - t0) * 1000
                 frames.append(
                     FrameProbe(

@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import base64
 import os
+import threading
 from typing import Final
+from urllib.parse import urlparse, urlunparse
 
 from cryptography.fernet import Fernet, InvalidToken
 
 _ENV_KEY: Final = "IBVAP_CREDENTIAL_KEY"
 
+_FERNET_CACHE: Fernet | None = None
+_FERNET_CACHE_KEY: str | None = None
+_FERNET_LOCK = threading.Lock()
+
 
 def _get_fernet() -> Fernet:
+    global _FERNET_CACHE, _FERNET_CACHE_KEY
     raw = os.getenv(_ENV_KEY)
     if not raw:
         raise RuntimeError(
@@ -24,6 +31,10 @@ def _get_fernet() -> Fernet:
         )
 
     candidate = raw.strip()
+    # Reuse cached instance when env key unchanged (avoids per-request Fernet setup).
+    with _FERNET_LOCK:
+        if _FERNET_CACHE is not None and candidate == _FERNET_CACHE_KEY:
+            return _FERNET_CACHE
     try:
         Fernet(candidate.encode())
         key = candidate.encode()
@@ -35,7 +46,11 @@ def _get_fernet() -> Fernet:
             key = padded
         except Exception as exc:  # pragma: no cover - defensive validation
             raise ValueError("IBVAP_CREDENTIAL_KEY must be a valid Fernet key or 32-byte secret") from exc
-    return Fernet(key)
+    fernet = Fernet(key)
+    with _FERNET_LOCK:
+        _FERNET_CACHE = fernet
+        _FERNET_CACHE_KEY = candidate
+    return fernet
 
 
 def encrypt_secret(plaintext: str) -> str:
@@ -53,8 +68,6 @@ def decrypt_secret(token: str) -> str:
 
 def redact_url(url: str) -> str:
     """Strip credentials from URL for logging / diagnostics."""
-    from urllib.parse import urlparse, urlunparse
-
     try:
         p = urlparse(url)
         if p.username or p.password:

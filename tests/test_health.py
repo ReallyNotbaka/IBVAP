@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from ibvap.api.app import create_app
 
-
-def test_health_endpoint() -> None:
-    app = create_app()
-    client = TestClient(app)
+def test_health_endpoint(api_client: TestClient) -> None:
+    client = api_client
     resp = client.get("/api/v1/health")
     assert resp.status_code == 200
     data = resp.json()
@@ -17,9 +14,8 @@ def test_health_endpoint() -> None:
     assert data["checks"]["api"] == "ok"
 
 
-def test_capabilities_endpoint() -> None:
-    app = create_app()
-    client = TestClient(app)
+def test_capabilities_endpoint(api_client: TestClient) -> None:
+    client = api_client
     resp = client.get("/api/v1/capabilities")
     assert resp.status_code == 200
     data = resp.json()
@@ -31,9 +27,8 @@ def test_capabilities_endpoint() -> None:
     assert "PyAV" in data["media"]["decoder"]
 
 
-def test_version_endpoint() -> None:
-    app = create_app()
-    client = TestClient(app)
+def test_version_endpoint(api_client: TestClient) -> None:
+    client = api_client
     resp = client.get("/api/v1/system/version")
     assert resp.status_code == 200
     assert resp.json()["version"] == "0.1.0"

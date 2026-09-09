@@ -13,6 +13,10 @@ from scripts.benchmark import (
     run_system_benchmarks,
 )
 
+# Metadata only — full suite still runs by default; enables targeted runs
+# (e.g. `pytest -m "not slow"`) without changing coverage.
+pytestmark = [pytest.mark.slow, pytest.mark.benchmark]
+
 
 def test_system_info_detection() -> None:
     info = get_system_info()

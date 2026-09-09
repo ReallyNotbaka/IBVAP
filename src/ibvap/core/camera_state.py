@@ -168,6 +168,7 @@ class CameraStateMachine:
     max_delay: float = 60.0
     stable_threshold: float = 30.0  # seconds of STREAMING to reset retry
     correlation_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    max_history: int = 200  # bound in-memory history to avoid unbounded growth
 
     def _next_stream_epoch(self) -> int:
         return self.stream_epoch + 1
@@ -207,6 +208,9 @@ class CameraStateMachine:
             correlation_id=correlation_id or self.correlation_id,
         )
         self.history.append(tr)
+        # Bound history to avoid unbounded memory growth on long-lived cameras.
+        if len(self.history) > self.max_history:
+            del self.history[: len(self.history) - self.max_history]
         # stable interval tracking for retry reset
         if target == CameraState.STREAMING:
             if self.stable_since is None:

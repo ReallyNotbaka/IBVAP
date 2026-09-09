@@ -4,9 +4,15 @@ on:
     branches: [main, master]
   pull_request:
 
+# Cancel superseded runs on the same ref — faster CI queue, less runner waste.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -40,7 +46,7 @@ jobs:
         env:
           IBVAP_DB__URL: postgresql+asyncpg://ibvap:ibvap@localhost:5432/ibvap
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
-        run: uv run pytest -q --cov=src --cov-report=term-missing
+        run: uv run pytest -q --cov=src --cov-report=term-missing --durations=20
       - name: Alembic upgrade head (empty→latest)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
@@ -54,6 +60,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend

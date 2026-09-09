@@ -1,12 +1,11 @@
-from starlette.testclient import TestClient
+from fastapi.testclient import TestClient
 
-from ibvap.api.app import create_app
 from ibvap.events.outbox import clear_all, transactional_write
 
 
-def test_events_api_tabs_and_timestamp_sorting() -> None:
+def test_events_api_tabs_and_timestamp_sorting(api_client: TestClient) -> None:
     clear_all()
-    test_client = TestClient(create_app())
+    test_client = api_client
 
     # Write events spanning categories and different timestamp formats
     transactional_write(

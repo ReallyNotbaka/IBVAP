@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 import uuid
@@ -9,6 +10,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+import structlog
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
@@ -16,6 +18,12 @@ from ibvap.core.face import FaceDetector, FaceRecognizer
 from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
+
+logger = structlog.get_logger(__name__)
+
+# Bound per-photo in-memory reads (photos are small; models/uploads handle large files).
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_DIM = 1920
 
 _detector: FaceDetector | None = None
 _recognizer: FaceRecognizer | None = None
@@ -72,7 +80,7 @@ async def enroll_suspect(
     name: str = Form(...),
     threat_level: str = Form("HIGH"),
     notes: str = Form(""),
-    photos: list[UploadFile] = File(...),
+    photos: list[UploadFile] = File(...),  # noqa: B008 - FastAPI idiomatic dependency
 ) -> dict[str, Any]:
     if not photos:
         raise HTTPException(status_code=400, detail="At least one photo is required for biometric enrollment")
@@ -86,6 +94,8 @@ async def enroll_suspect(
     try:
         level = ThreatLevel(threat_level.upper())
     except ValueError:
+        # Backward compat: invalid levels fall back to HIGH (do NOT 400 to avoid breaking clients).
+        logger.warning("invalid_threat_level_fallback", threat_level=threat_level)
         level = ThreatLevel.HIGH
 
     detector, recognizer = _get_face_models()
@@ -94,9 +104,28 @@ async def enroll_suspect(
     rejection_reasons: list[str] = []
 
     for idx, photo in enumerate(photos):
-        content = await photo.read()
-        arr = np.frombuffer(content, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        # Bounded read: fail fast on oversize instead of unbounded buffering.
+        content = await photo.read(MAX_PHOTO_BYTES + 1)
+        if len(content) > MAX_PHOTO_BYTES:
+            rejection_reasons.append(f"Photo {idx + 1}: file too large (max 10MB)")
+            continue
+        if not content:
+            rejection_reasons.append(f"Photo {idx + 1}: unreadable image file")
+            continue
+
+        def _decode_and_detect(payload: bytes) -> tuple[Any, list[Any]]:
+            arr = np.frombuffer(payload, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None or img.size == 0:
+                return None, []
+            # Downscale oversized enrollment photos to bound CPU/memory.
+            h0, w0 = img.shape[:2]
+            scale = min(1.0, MAX_PHOTO_DIM / max(h0, w0))
+            if scale < 1.0:
+                img = cv2.resize(img, (int(w0 * scale), int(h0 * scale)), interpolation=cv2.INTER_LINEAR)
+            return img, detector.detect(img)
+
+        img, faces = await asyncio.to_thread(_decode_and_detect, bytes(content))
         if img is None or img.size == 0:
             rejection_reasons.append(f"Photo {idx + 1}: unreadable image file")
             continue
@@ -126,9 +155,13 @@ async def enroll_suspect(
             rejection_reasons.append(f"Photo {idx + 1}: image too blurry (blur {best_face.quality.blur:.1f} < 15.0)")
             continue
 
-        # Extract 128-d embedding
-        aligned = recognizer.align_crop(img, best_face)
-        feat = recognizer.extract_feature(aligned).flatten()
+        # Extract 128-d embedding (blocking CPU — offload from event loop).
+        def _embed(image: Any, face: Any) -> Any:
+            aligned = recognizer.align_crop(image, face)
+            feat = recognizer.extract_feature(aligned).flatten()
+            return aligned, feat
+
+        aligned, feat = await asyncio.to_thread(_embed, img, best_face)
         feat_norm = np.linalg.norm(feat)
         if feat_norm > 0:
             feat = feat / feat_norm
@@ -172,6 +205,8 @@ async def enroll_suspect(
 
 @router.delete("/{entry_id}")
 def delete_suspect(entry_id: str) -> dict[str, Any]:
+    # TODO: require authentication/authorization for mutating routes (would break tests today).
+    logger.warning("unauthenticated_delete", route="DELETE /api/v1/watchlist/{entry_id}")
     store = get_watchlist_store()
     removed = store.remove_entry(entry_id)
     if not removed:

@@ -8,6 +8,7 @@ import numpy as np
 
 from ibvap.core.detector import MockPersonDetector
 from ibvap.core.pipeline import MiniPipeline
+from ibvap.core.zone_engine import Zone
 from ibvap.events.outbox import clear_all, list_events
 
 
@@ -96,3 +97,64 @@ def test_pipeline_zone_intrusion_and_exit_events() -> None:
     assert intrusion_count == 1, f"Expected 1 debounced intrusion, got {intrusion_count}"
     assert exit_count == 1, f"Expected 1 debounced exit, got {exit_count}"
 
+
+def test_pipeline_line_tripwire_crossing() -> None:
+    """Verify that a 2-point line tripwire flags crossing targets as zone intrusions."""
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-line-test", stream_epoch=1, detector=MockPersonDetector())
+    # Configure a vertical tripwire line at x = 0.25 (x pixel ~ 160)
+    pipe.zone = Zone(
+        id="zone-tripwire-1",
+        name="Perimeter Tripwire",
+        polygon=[[0.25, 0.0], [0.25, 1.0]],
+        fence_type="line",
+    )
+
+    # Feed frames 5..20 where target crosses from x ~ 100 to x ~ 300
+    for i in range(25):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        if 5 <= i <= 20:
+            x = int(100 + i * 10)
+            cv2.rectangle(frame, (x, 100), (x + 60, 250), (255, 255, 255), -1)
+        pipe.process_frame(frame)
+
+    events = list_events()
+    event_types = [e["event_type"] for e in events]
+    assert "zone_intrusion" in event_types, f"Expected zone_intrusion for tripwire crossing in {event_types}"
+    intrusions = [e for e in events if e["event_type"] == "zone_intrusion"]
+    assert len(intrusions) >= 1
+    assert intrusions[0]["explanation"]["rule"] == "tripwire_line_crossing"
+
+
+def test_pipeline_line_tripwire_exit_and_intruder_cleanup() -> None:
+    """Verify that when a line intruder terminates, zone_exit is emitted with rule tripwire_line_exit and tracked set is cleaned up."""
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-cleanup-test", stream_epoch=1, detector=MockPersonDetector())
+    pipe.zone = Zone(
+        id="zone-tripwire-clean",
+        name="Perimeter Tripwire",
+        polygon=[[0.25, 0.0], [0.25, 1.0]],
+        fence_type="line",
+    )
+
+    # Frame 1..15: target enters and crosses line
+    for i in range(15):
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        x = int(120 + i * 10)
+        cv2.rectangle(frame, (x, 100), (x + 60, 250), (255, 255, 255), -1)
+        pipe.process_frame(frame)
+
+    assert len(pipe._active_line_intruders) >= 1
+
+    # Feed 35 empty frames so track ages out and terminates (max_age=30)
+    for _ in range(35):
+        empty = np.zeros((480, 640, 3), dtype=np.uint8)
+        pipe.process_frame(empty)
+
+    # _active_line_intruders MUST be empty after track termination (no leak)
+    assert len(pipe._active_line_intruders) == 0, f"Expected active line intruders to be empty, got {pipe._active_line_intruders}"
+
+    events = list_events()
+    exits = [e for e in events if e["event_type"] == "zone_exit"]
+    assert len(exits) >= 1
+    assert exits[0]["explanation"]["rule"] == "tripwire_line_exit"

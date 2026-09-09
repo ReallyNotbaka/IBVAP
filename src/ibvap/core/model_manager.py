@@ -151,12 +151,13 @@ class ModelRegistry:
         results: list[ModelInfo] = []
         for name, meta in YOLO_MODELS_MANIFEST.items():
             path = self.models_dir / meta["filename"]
-            is_installed = path.exists() and path.stat().st_size > 0
-            size_mb = (
-                round(path.stat().st_size / (1024 * 1024), 1)
-                if is_installed
-                else round(meta["size_bytes"] / (1024 * 1024), 1)
-            )
+            # Single stat() call instead of exists() + two stat()s.
+            try:
+                file_size = path.stat().st_size
+            except OSError:
+                file_size = 0
+            is_installed = file_size > 0
+            size_mb = round((file_size if is_installed else meta["size_bytes"]) / (1024 * 1024), 1)
             results.append(
                 ModelInfo(
                     name=name,
@@ -230,6 +231,7 @@ class ModelDownloadManager:
                 return True
             except OSError:
                 import gc
+
                 gc.collect()
                 time.sleep(0.05)
                 target.unlink(missing_ok=True)
