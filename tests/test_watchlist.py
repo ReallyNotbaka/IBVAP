@@ -182,6 +182,32 @@ class TestHungarianSpatialAssociation:
         assignments = associate_faces_to_tracks([trk], [face])
         assert 1 not in assignments
 
+    def test_head_and_shoulders_face_is_associated(self) -> None:
+        """Near-camera head-and-shoulders framing must still link face to person.
+
+        Real geometry from YuNet + YOLO on a head-and-shoulders portrait
+        (person standing in front of the camera): the person box runs almost
+        full-frame height while the face center sits mid-box (~51% down),
+        below the old top-42% head gate. The face clearly belongs to the
+        track, so it must associate (else close-standing persons never get
+        an identity).
+        """
+        trk = Track(
+            track_id=1,
+            class_name="person",
+            class_id=0,
+            bbox_norm=(0.114, 0.099, 0.819, 0.998),
+            confidence=0.65,
+        )
+        face = {
+            "bbox_norm": (0.406, 0.357, 0.691, 0.761),
+            "confidence": 0.91,
+            "quality_passed": True,
+        }
+
+        assignments = associate_faces_to_tracks([trk], [face])
+        assert assignments[1] == face
+
     def test_non_person_tracks_not_associated(self) -> None:
         car_trk = Track(
             track_id=10,

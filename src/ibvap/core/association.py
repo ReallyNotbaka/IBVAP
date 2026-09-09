@@ -120,7 +120,10 @@ def associate_faces_to_tracks(
     min_x = tx1 + 0.12 * tw
     max_x = tx2 - 0.12 * tw
     min_y = ty1 + 0.02 * th
-    max_y = ty1 + 0.42 * th
+    # Upper 60% (not 42%): near-camera head-and-shoulders framing puts the
+    # face center mid-box (~50% down) while the scale gate (fh/h in
+    # 0.08..0.58) + Hungarian max_cost still reject background faces.
+    max_y = ty1 + 0.60 * th
 
     fx1, fy1, fx2, fy2 = f_boxes[:, 0], f_boxes[:, 1], f_boxes[:, 2], f_boxes[:, 3]
     fh = np.maximum(1e-5, fy2 - fy1)
