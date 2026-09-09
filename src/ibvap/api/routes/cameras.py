@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import ipaddress
 import os
 import sys
@@ -194,6 +195,63 @@ _PLAYBACK: dict[str, dict[str, Any]] = {}
 _PLAYBACK_LOCK = threading.Lock()
 
 
+def _boxes_intersect(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _match_vehicle_track(
+    det_bbox: tuple[float, float, float, float],
+    tracks: list[Any],
+) -> int:
+    """Max-IoU vehicle track match. Returns track_id, or 0 when nothing overlaps.
+
+    Raw overlap area cannot tell nesting (a corner-touching bus ties the true
+    owner and order decides); IoU normalizes by union so the owning track wins.
+    """
+    best_id = 0
+    best_iou = 0.0
+    x1, y1, x2, y2 = det_bbox
+    det_area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    for track in tracks:
+        tx1, ty1, tx2, ty2 = track.bbox_norm
+        ox = min(x2, tx2) - max(x1, tx1)
+        oy = min(y2, ty2) - max(y1, ty1)
+        if ox <= 0.0 or oy <= 0.0:
+            continue
+        inter = ox * oy
+        union = det_area + max(0.0, tx2 - tx1) * max(0.0, ty2 - ty1) - inter
+        iou = inter / union if union > 0.0 else 0.0
+        if iou > best_iou:
+            best_iou = iou
+            best_id = track.track_id
+    return best_id
+
+
+def _select_plate_detections(
+    fresh: list[dict[str, Any]],
+    cached: list[dict[str, Any]],
+    cached_at_mono: float,
+    now_mono: float,
+    vehicle_boxes: list[tuple[float, float, float, float]],
+    max_age_s: float = 1.0,
+) -> list[dict[str, Any]]:
+    """Publish cached OCR boxes only while fresh AND a vehicle is still there.
+
+    OCR completes hundreds of ms after its frame; blindly republishing the
+    last batch ghosts departed vehicles (and a low-conf batch wipes a live
+    plate). Reuse requires age <= max_age_s plus overlap between a cached
+    box and a current-frame vehicle box.
+    """
+    if cached and (now_mono - cached_at_mono) <= max_age_s:
+        cached_boxes = [d["bbox_norm"] for d in cached if "bbox_norm" in d]
+        if any(_boxes_intersect(cb, vb) for cb in cached_boxes for vb in vehicle_boxes):
+            return cached
+    return fresh
+
+
 def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     cam = _CAMERAS[camera_id]
     endpoint = str(cam["endpoint"])
@@ -249,7 +307,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     anpr_frame_number = 0
     last_plate_detections: list[dict[str, Any]] = []
     last_plates: list[dict[str, Any]] = []
-    ocr_last_submitted: dict[int, float] = {}
+    last_plate_at_mono = 0.0
+    ocr_last_submitted: dict[int | tuple[int, float, float], float] = {}
     ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"anpr-{camera_id[:8]}")
     pending_ocr: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
 
@@ -264,7 +323,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         vehicle_class: str,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         try:
-            plate = anpr.process_vehicle_crop(crop, vehicle_id=vehicle_id)
+            plate = anpr.process_vehicle_crop(crop, vehicle_id=vehicle_id, stream_epoch=cam["stream_epoch"])
         except Exception:
             return vehicle_plate_detections, None
         if not plate or not plate.consensus:
@@ -298,7 +357,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     def analyze() -> None:
         nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc
         nonlocal last_inference_ms, last_night_result, last_night_time, anpr_frame_number
-        nonlocal last_plate_detections, last_plates
+        nonlocal last_plate_detections, last_plates, last_plate_at_mono
         while not stop.is_set():
             if not analysis_ready.wait(timeout=0.5):
                 continue
@@ -324,6 +383,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         if plate is not None:
                             unique_plates[plate["text"]] = plate
                     last_plates = list(unique_plates.values())
+                    last_plate_at_mono = time.monotonic()
 
                 t_infer_start = time.perf_counter()
                 pipeline.process_frame(current)
@@ -356,16 +416,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 35:
                             continue
                         vehicle_plate_detections: list[dict[str, Any]] = []
-                        vehicle_id = 0
-                        best_overlap = 0.0
-                        for track in pipeline.last_tracks:
-                            tx1, ty1, tx2, ty2 = track.bbox_norm
-                            overlap_x = max(0.0, min(x2, tx2) - max(x1, tx1))
-                            overlap_y = max(0.0, min(y2, ty2) - max(y1, ty1))
-                            overlap = overlap_x * overlap_y
-                            if overlap > best_overlap:
-                                best_overlap = overlap
-                                vehicle_id = track.track_id
+                        vehicle_id = _match_vehicle_track((x1, y1, x2, y2), pipeline.last_tracks)
                         if run_ocr and id(detection) in ocr_detection_ids:
                             for bx1, by1, bx2, by2 in anpr.detector.detect(crop):
                                 vehicle_plate_detections.append(
@@ -381,15 +432,23 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                         "track_id": vehicle_id,
                                     }
                                 )
-                        ocr_due = time.monotonic() - ocr_last_submitted.get(vehicle_id, 0.0) >= 0.6
+                        if vehicle_id != 0:
+                            throttle_key: int | tuple[int, float, float] = vehicle_id
+                        else:
+                            # Untracked detections share id 0: throttle per quantized
+                            # position so distant vehicles don't starve each other.
+                            throttle_key = (0, round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2))
+                        ocr_due = time.monotonic() - ocr_last_submitted.get(throttle_key, 0.0) >= 0.6
                         track_ready = any(track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks)
                         if run_ocr and track_ready and ocr_due and id(detection) in ocr_detection_ids and len(pending_ocr) < 3:
-                            ocr_last_submitted[vehicle_id] = time.monotonic()
+                            ocr_last_submitted[throttle_key] = time.monotonic()
                             pending_ocr.append(
                                 ocr_executor.submit(
                                     recognize_vehicle,
                                     crop.copy(),
-                                    vehicle_plate_detections,
+                                    # Decoupled copy: the worker thread appends/fills this
+                                    # list while analyze keeps extending the original.
+                                    copy.deepcopy(vehicle_plate_detections),
                                     vehicle_id,
                                     x1,
                                     y1,
@@ -400,8 +459,15 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             )
                         plate_detections.extend(vehicle_plate_detections)
 
-                if last_plate_detections:
-                    plate_detections = last_plate_detections
+                # Reuse the last completed OCR batch only while it is fresh
+                # and a vehicle is still under it - otherwise ghosts linger
+                # after the vehicle leaves (and stale plates wipe live ones).
+                vehicle_boxes = [d["bbox_norm"] for d in pipeline.last_detections if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}]
+                cache_reused = _select_plate_detections(
+                    plate_detections, last_plate_detections, last_plate_at_mono, time.monotonic(), vehicle_boxes
+                )
+                plates_for_obs = last_plates if cache_reused is last_plate_detections else []
+                plate_detections = cache_reused
 
                 now_ts = time.time()
                 if last_night_result is None or (now_ts - last_night_time) >= 0.5:
@@ -446,7 +512,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         }
                         for f in pipeline.last_faces
                     ],
-                    "plates": last_plates,
+                    "plates": plates_for_obs,
                     "plate_detections": plate_detections,
                     "night": {
                         "is_night": night.is_night,

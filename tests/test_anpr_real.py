@@ -116,13 +116,42 @@ def test_anpr_pipeline_end_to_end() -> None:
     cv2.rectangle(vehicle_crop, (75, 130), (225, 170), (20, 20, 20), 2)
     cv2.putText(vehicle_crop, "MH01AB1234", (80, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (10, 10, 10), 2)
 
+    first = pipeline.process_vehicle_crop(vehicle_crop, vehicle_id=42)
+    assert first is not None
+    # Single vote must not report a consensus yet (A5: no single-sample lock).
+    assert first.consensus is None
+
     result = pipeline.process_vehicle_crop(vehicle_crop, vehicle_id=42)
     assert result is not None
     assert isinstance(result, PlateResult)
     assert len(result.plate_text) >= 4
-    assert result.consensus is not None
+    assert result.consensus == "MH12DE1234"
     assert len(result.candidates) >= 1
     assert result.quality >= 10.0
+
+
+def test_history_scoped_per_epoch() -> None:
+    """Votes from a previous stream epoch must not outvote a new vehicle reusing the id."""
+    pipeline = ANPRPipeline(ocr=fake_reader())
+    for _ in range(10):
+        pipeline.consensus_for(7, "OLDPLATE1", stream_epoch=1)
+    # New epoch: the 10 old votes must neither decide nor linger.
+    assert pipeline.consensus_for(7, "NEWPLATE2", stream_epoch=2) == "NEWPLATE2"
+    assert all(k[0] == 2 for k in pipeline._history)
+    assert pipeline.consensus_for(7, "NEWPLATE2", stream_epoch=2) == "NEWPLATE2"
+
+
+class _NoBoxDetector:
+    def detect(self, crop: np.ndarray) -> list:
+        return []
+
+
+def test_no_detector_box_no_fallback() -> None:
+    """Zero plate boxes means no result - never OCR a blind center crop."""
+    pipeline = ANPRPipeline(detector=_NoBoxDetector(), ocr=fake_reader())  # type: ignore[arg-type]
+    rng = np.random.default_rng(5)
+    textured = rng.integers(0, 255, (200, 300, 3), dtype=np.uint8)
+    assert pipeline.process_vehicle_crop(textured, vehicle_id=9) is None
 
 
 def test_anpr_pipeline_empty_and_blank() -> None:

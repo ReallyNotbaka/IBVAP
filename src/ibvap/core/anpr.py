@@ -5,8 +5,10 @@ Skips tiny/low-res crops - OCR just hallucinates on those.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -14,6 +16,8 @@ from typing import Any
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -136,9 +140,12 @@ class OCRReader:
         device: str | None = None,
     ) -> None:
         self.ocr_engine = ocr_engine
-        self.device = device or os.getenv("IBVAP_ANPR_DEVICE", "gpu:0")
+        self.device = device or os.getenv("IBVAP_ANPR_DEVICE", "cpu")
         self._paddle_ocr: Any = None
-        self._paddle_unavailable = False
+        # Transient Paddle failures gate re-init for 30s, then retry. A
+        # permanent latch would silently kill ANPR after one bad frame.
+        self._paddle_last_error_at: float | None = None
+        self._paddle_retry_after_s = 30.0
 
     def check_quality(self, crop: np.ndarray) -> float:
         """Compute Laplacian blur variance as a sharpness/quality score."""
@@ -164,7 +171,7 @@ class OCRReader:
         if self.ocr_engine is not None:
             return self.ocr_engine(plate_crop)
 
-        if self._paddle_unavailable:
+        if self._paddle_last_error_at is not None and (time.monotonic() - self._paddle_last_error_at) < self._paddle_retry_after_s:
             return []
 
         try:
@@ -180,8 +187,10 @@ class OCRReader:
                 )
 
             results = self._paddle_ocr.predict(input=plate_crop)
-        except Exception:
-            self._paddle_unavailable = True
+        except Exception as e:
+            logger.warning("paddle_ocr_failed", extra={"error": str(e)[:200]})
+            self._paddle_ocr = None
+            self._paddle_last_error_at = time.monotonic()
             return []
         candidates: list[PlateCandidate] = []
         for result in results:
@@ -233,7 +242,10 @@ class ANPRPipeline:
     ) -> None:
         self.detector = detector or PlateDetector()
         self.ocr = ocr or OCRReader()
-        self._history: dict[int, list[str]] = {}
+        # Votes keyed by (stream_epoch, vehicle_id): tracker IDs restart at 1
+        # on every epoch, so unscoped history would let a dead vehicle's votes
+        # decide a new vehicle's plate.
+        self._history: dict[tuple[int, int], list[str]] = {}
 
     @staticmethod
     def _remap_box(
@@ -255,11 +267,13 @@ class ANPRPipeline:
             max(0.0, min(1.0, (oy1 + inner[3] * oh) / h)),
         )
 
-    def consensus_for(self, vehicle_id: int, text: str) -> str:
+    def consensus_for(self, vehicle_id: int, text: str, stream_epoch: int = 0) -> str:
         """Maintain sliding window of last 10 reads and return majority vote consensus."""
+        for key in [k for k in self._history if k[0] != stream_epoch]:
+            del self._history[key]
         norm = normalize_plate(text)
         val = norm if norm else text
-        hist = self._history.setdefault(vehicle_id, [])
+        hist = self._history.setdefault((stream_epoch, vehicle_id), [])
         hist.append(val)
         if len(hist) > 10:
             hist.pop(0)
@@ -267,7 +281,11 @@ class ANPRPipeline:
             return val
         return Counter(hist).most_common(1)[0][0] if hist else val
 
-    def process_vehicle_crop(self, vehicle_crop: np.ndarray, vehicle_id: int) -> PlateResult | None:
+    def votes_for(self, vehicle_id: int, text: str, stream_epoch: int = 0) -> int:
+        """Agreeing votes for text in the current epoch window."""
+        return self._history.get((stream_epoch, vehicle_id), []).count(text)
+
+    def process_vehicle_crop(self, vehicle_crop: np.ndarray, vehicle_id: int, stream_epoch: int = 0) -> PlateResult | None:
         """Localize plate, extract candidates, score quality, and calculate consensus."""
         if vehicle_crop.size == 0 or len(vehicle_crop.shape) < 2:
             return None
@@ -299,24 +317,8 @@ class ANPRPipeline:
                             bbox_norm=cand_box,
                         )
                     )
-        else:
-            # Center-lower heuristic crop fallback
-            if h >= 20 and w >= 60:
-                y1, y2 = int(h * 0.6), int(h * 0.9)
-                x1, x2 = int(w * 0.3), int(w * 0.7)
-                plate_crop = vehicle_crop[y1:y2, x1:x2]
-                if plate_crop.size > 0:
-                    cands = self.ocr.recognize(plate_crop)
-                    for cand in cands:
-                        cand_box = self._remap_box(cand.bbox_norm, x1, y1, x2, y2, w, h)
-                        candidates.append(
-                            PlateCandidate(
-                                text=cand.text,
-                                confidence=cand.confidence,
-                                quality=cand.quality,
-                                bbox_norm=cand_box,
-                            )
-                        )
+        # No detector boxes -> no result. The old blind center-crop fallback
+        # OCR'd bumper/grille texture into hallucinated plates.
 
         valid_cands: list[tuple[PlateCandidate, str]] = []
         for c in candidates:
@@ -328,11 +330,13 @@ class ANPRPipeline:
             return None
 
         best_cand, best_text = max(valid_cands, key=lambda pair: (pair[0].confidence, pair[0].quality))
-        consensus_text = self.consensus_for(vehicle_id, best_text)
+        consensus_text = self.consensus_for(vehicle_id, best_text, stream_epoch=stream_epoch)
+        # No single-sample lock: report only with >= 2 agreeing votes.
+        consensus = consensus_text if self.votes_for(vehicle_id, consensus_text, stream_epoch) >= 2 else None
 
         return PlateResult(
             plate_text=best_text,
             candidates=candidates,
-            consensus=consensus_text,
+            consensus=consensus,
             quality=best_cand.quality,
         )
