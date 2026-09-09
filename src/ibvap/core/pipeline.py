@@ -26,7 +26,7 @@ from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker
 from ibvap.core.watchlist import get_watchlist_store
-from ibvap.core.zone_engine import DEFAULT_ZONE, is_intrusion
+from ibvap.core.zone_engine import DEFAULT_ZONE, Zone, is_intrusion
 from ibvap.events.outbox import transactional_write
 
 # Lazy import type for face to avoid circular heavy init at import time
@@ -76,6 +76,8 @@ class MiniPipeline:
         self.watchlist_alerted_tracks: set[int] = set()
         self._active_line_intruders: set[int] = set()
         self._track_outside_count: dict[int, int] = {}
+        # Consecutive frames an alerted track went unseen (T3 visibility gate).
+        self._unseen_streak: dict[int, int] = {}
         self._line_miss_count: dict[int, int] = {}
         self._last_intrusion_alert_time: dict[tuple[str, int], float] = {}
         self._last_exit_alert_time: dict[int, float] = {}
@@ -119,6 +121,7 @@ class MiniPipeline:
         """Reset stream epoch and clear all per-track alert/latch state."""
         self.stream_epoch = new_epoch
         self.tracker.reset_epoch(new_epoch)
+        self.rule_engine.reset()
         self.alerted_tracks.clear()
         self.watchlist_alerted_tracks.clear()
         self._active_line_intruders.clear()
@@ -126,6 +129,64 @@ class MiniPipeline:
         self._line_miss_count.clear()
         self._last_intrusion_alert_time.clear()
         self._last_exit_alert_time.clear()
+        self._unseen_streak.clear()
+
+    def _end_presence_event(
+        self,
+        *,
+        track_id: int,
+        bbox_norm: tuple[float, float, float, float],
+        confidence: float,
+        camera_id: str,
+        stream_epoch: int,
+        zone: Zone,
+        zone_id: str,
+        zone_name: str,
+        is_line_zone: bool,
+        model_id: str,
+        now_ts: float,
+    ) -> dict | None:
+        """Build the presence-end event for a track gone dark (or purged).
+
+        Last-known position decides, without trajectory memory: foot outside
+        -> zone_exit, foot inside -> target_lost (standing down an active
+        intruder as "exited" would be wrong). None when debounced. Callers
+        persist the returned dict and count it.
+        """
+        foot = ((bbox_norm[0] + bbox_norm[2]) / 2.0, bbox_norm[3])
+        last_outside = not is_intrusion(foot, zone)
+        last_exit = self._last_exit_alert_time.get((zone_id, track_id), 0.0)
+        if (now_ts - last_exit) < 3.0:
+            return None
+        self._last_exit_alert_time[(zone_id, track_id)] = now_ts
+        base = {
+            "camera_id": camera_id,
+            "stream_epoch": stream_epoch,
+            "zone_id": zone_id,
+            "track_id": track_id,
+            "bbox_norm": bbox_norm,
+            "confidence": confidence,
+            "model_id": model_id,
+        }
+        if last_outside:
+            rule_name = "tripwire_line_exit" if is_line_zone else "restricted_zone_exit"
+            observed = f"track {track_id} exited line perimeter" if is_line_zone else f"track {track_id} exited restricted zone"
+            threshold = "outside line perimeter" if is_line_zone else "outside restricted zone"
+            return {
+                **base,
+                "event_type": "zone_exit",
+                "explanation": {"rule": rule_name, "zone": zone_name, "observed": observed, "threshold": threshold},
+            }
+        return {
+            **base,
+            "event_type": "target_lost",
+            "explanation": {
+                "rule": "target_lost_in_zone",
+                "zone": zone_name,
+                "observed": f"track {track_id} lost inside restricted zone",
+                "threshold": "last seen inside restricted zone",
+            },
+        }
 
     def process_frame(self, frame: np.ndarray) -> dict | None:
         """Run one frame through detect/track/face/zone. Returns event if something fired.
@@ -424,6 +485,46 @@ class MiniPipeline:
                 else:
                     self._track_outside_count[trk.track_id] = 0
 
+        # Presence continuity requires visibility: an alerted track unseen for
+        # more than 3 sampled frames (the tracker's visible-hide threshold)
+        # ends its presence HERE with its last-known position - a returnee
+        # re-alerts instead of staying muted on a stale presence.
+        visible_ids = {t.track_id for t in tracks}
+        for tid in list(self.alerted_tracks):
+            if tid in visible_ids:
+                self._unseen_streak.pop(tid, None)
+                continue
+            if self._unseen_streak.get(tid, 0) < 3:
+                self._unseen_streak[tid] = self._unseen_streak.get(tid, 0) + 1
+                continue
+            self.alerted_tracks.discard(tid)
+            self._track_outside_count.pop(tid, None)
+            self._active_line_intruders.discard(tid)
+            self._line_miss_count.pop(tid, None)
+            self._unseen_streak.pop(tid, None)
+            internal = self.tracker.tracks.get(tid)
+            if internal is None:
+                continue
+            ev_end = self._end_presence_event(
+                track_id=tid,
+                bbox_norm=internal.bbox_norm,
+                confidence=internal.confidence,
+                camera_id=camera_id,
+                stream_epoch=stream_epoch,
+                zone=zone,
+                zone_id=zone_id,
+                zone_name=zone_name,
+                is_line_zone=is_line_zone,
+                model_id=model_id,
+                now_ts=now_ts,
+            )
+            if ev_end is None:
+                continue
+            transactional_write(ev_end, dedup_key=f"{camera_id}:{zone_id}:exit:{tid}:{stream_epoch}:{int(now_ts // 10)}")
+            self.events_created += 1
+            if primary_event is None:
+                primary_event = ev_end
+
         # 2. Target entered FOV (only for tracks with confidence >= 0.48 not already reported as zone intrusions)
         for entry in new_entries:
             if entry.class_name in intrusion_classes and entry.track_id not in intrusion_track_ids and entry.confidence >= 0.48:
@@ -489,38 +590,30 @@ class MiniPipeline:
             self.watchlist_alerted_tracks.discard(term.track_id)
             self._active_line_intruders.discard(term.track_id)
             self._track_outside_count.pop(term.track_id, None)
+            self._unseen_streak.pop(term.track_id, None)
             self._line_miss_count.pop(term.track_id, None)
 
-            # If track was inside restricted zone when it terminated, emit zone_exit
+            # Safety net (visibility expiry above normally reports first):
+            # last-known position decides exit vs lost.
             if was_zone_alerted:
-                last_exit = self._last_exit_alert_time.get((zone_id, term.track_id), 0.0)
-                if (now_ts - last_exit) >= 3.0:
-                    self._last_exit_alert_time[(zone_id, term.track_id)] = now_ts
-                    dedup = f"{camera_id}:{zone_id}:exit:{term.track_id}:{stream_epoch}:{int(now_ts // 10)}"
-                    is_line = is_line_zone
-                    rule_name = "tripwire_line_exit" if is_line else "restricted_zone_exit"
-                    observed_desc = f"track {term.track_id} exited line perimeter" if is_line else f"track {term.track_id} exited restricted zone"
-                    threshold_desc = "outside line perimeter" if is_line else "outside restricted zone"
-                    ev_exit = {
-                        "camera_id": camera_id,
-                        "stream_epoch": stream_epoch,
-                        "event_type": "zone_exit",
-                        "zone_id": zone_id,
-                        "track_id": term.track_id,
-                        "bbox_norm": term.bbox_norm,
-                        "confidence": term.confidence,
-                        "explanation": {
-                            "rule": rule_name,
-                            "zone": zone_name,
-                            "observed": observed_desc,
-                            "threshold": threshold_desc,
-                        },
-                        "model_id": model_id,
-                    }
-                    transactional_write(ev_exit, dedup_key=dedup)
+                ev_end = self._end_presence_event(
+                    track_id=term.track_id,
+                    bbox_norm=term.bbox_norm,
+                    confidence=term.confidence,
+                    camera_id=camera_id,
+                    stream_epoch=stream_epoch,
+                    zone=zone,
+                    zone_id=zone_id,
+                    zone_name=zone_name,
+                    is_line_zone=is_line_zone,
+                    model_id=model_id,
+                    now_ts=now_ts,
+                )
+                if ev_end is not None:
+                    transactional_write(ev_end, dedup_key=f"{camera_id}:{zone_id}:exit:{term.track_id}:{stream_epoch}:{int(now_ts // 10)}")
                     self.events_created += 1
                     if primary_event is None:
-                        primary_event = ev_exit
+                        primary_event = ev_end
 
             # FOV exit for confirmed tracks
             last_fov_exit = self._last_exit_alert_time.get((-1, term.track_id), 0.0)

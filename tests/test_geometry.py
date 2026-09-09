@@ -137,3 +137,36 @@ def test_line_fence_is_intrusion() -> None:
     assert trk.prev_footpoint == (0.5, 0.3)
     assert trk.footpoint == (0.5, 0.8)
     assert is_intrusion(trk.footpoint, zone, track=trk) is True
+
+
+def test_stationary_straddle_is_not_intrusion() -> None:
+    """A body straddling the line with feet far away must not latch an intruder."""
+    from ibvap.core.tracker import Track
+
+    zone = Zone(id="t", name="t", polygon=[[0.1, 0.5], [0.9, 0.5]], fence_type="line")
+    trk = Track(
+        track_id=1,
+        class_name="person",
+        class_id=0,
+        bbox_norm=(0.4, 0.25, 0.6, 0.60),
+        confidence=0.9,
+        trajectory=[(0.5, 0.425), (0.5, 0.425)],
+    )
+    assert trk.footpoint == (0.5, 0.60)
+    assert is_intrusion(trk.footpoint, zone, track=trk) is False
+
+
+def test_moving_crossing_with_near_foot_is_intrusion() -> None:
+    """A genuine crossing (centers cross, foot near the line) still fires."""
+    from ibvap.core.tracker import Track
+
+    zone = Zone(id="t", name="t", polygon=[[0.1, 0.5], [0.9, 0.5]], fence_type="line")
+    trk = Track(
+        track_id=2,
+        class_name="person",
+        class_id=0,
+        bbox_norm=(0.4, 0.30, 0.6, 0.62),
+        confidence=0.9,
+        trajectory=[(0.5, 0.42), (0.5, 0.52)],
+    )
+    assert is_intrusion(trk.footpoint, zone, track=trk) is True

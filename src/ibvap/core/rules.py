@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from ibvap.core.geometry import point_in_polygon
+from ibvap.core.geometry import intersect, point_in_polygon
 
 TripDirection = Literal["outside_to_inside", "inside_to_outside", "both"]
 
@@ -29,12 +29,14 @@ class TripwireState:
     last_side: float | None = None
     armed: bool = True
     last_cross: float = 0.0
+    last_pos: tuple[float, float] | None = None
 
 
 @dataclass
 class LoiterState:
     enter_ts: float | None = None
     dwell_triggered: bool = False
+    outside_streak: int = 0
 
 
 class RuleEngine:
@@ -53,6 +55,15 @@ class RuleEngine:
         self._loiter_state: dict[int, dict[str, LoiterState]] = {}
         self._last_event_at: dict[str, float] = {}
 
+    def reset(self) -> None:
+        """Clear per-track dwell/side state. Call on stream epoch bumps:
+        tracker IDs restart at 1, so a new track 1 must never inherit the
+        previous track 1's dwell time or tripwire side.
+        """
+        self._trip_state.clear()
+        self._loiter_state.clear()
+        self._last_event_at.clear()
+
     def check_tripwire(self, track_id: int, footpoint: tuple[float, float], timestamp: float) -> list[dict]:
         events: list[dict] = []
         for tw_id, tw in self.tripwires.items():
@@ -64,16 +75,23 @@ class RuleEngine:
             st = per_track.get(tw_id)
             if st is None:
                 st = per_track[tw_id] = TripwireState()
-            side = _side(footpoint, tw.p1, tw.p2)
+            # Canonical orientation: endpoint order is a drawing detail and
+            # must not flip sides (and hence directional filtering).
+            a, b = (tw.p1, tw.p2) if tw.p1 <= tw.p2 else (tw.p2, tw.p1)
+            side = _side(footpoint, a, b)
             if not st.armed:
                 if st.last_side is not None and abs(side - st.last_side) > tw.hysteresis:
                     st.armed = True
                 else:
                     continue
-            if st.last_side is None:
+            if st.last_side is None or st.last_pos is None:
                 st.last_side = side
+                st.last_pos = footpoint
                 continue
-            crossed = (st.last_side * side) < 0
+            # A side flip alone is not a crossing (walking around the
+            # segment's end flips the infinite-line side): the movement
+            # segment must actually intersect the tripwire segment.
+            crossed = (st.last_side * side) < 0 and intersect(st.last_pos, footpoint, a, b)
             if crossed:
                 direction_ok = (
                     tw.direction == "both"
@@ -91,8 +109,10 @@ class RuleEngine:
                         st.armed = False
                         st.last_cross = timestamp
                 st.last_side = side
+                st.last_pos = footpoint
             else:
                 st.last_side = side
+                st.last_pos = footpoint
         return events
 
     def check_zones(self, track_id: int, footpoint: tuple[float, float], timestamp: float) -> list[dict]:
@@ -109,6 +129,7 @@ class RuleEngine:
             if ls is None:
                 ls = per_track_loiter[zid] = LoiterState()
             if inside:
+                ls.outside_streak = 0
                 if ls.enter_ts is None:
                     ls.enter_ts = timestamp
                 dwell = timestamp - ls.enter_ts
@@ -122,8 +143,13 @@ class RuleEngine:
                         events.append({"type": "loitering", "zone_id": zid, "dwell": dwell})
                         ls.dwell_triggered = True
             else:
-                ls.enter_ts = None
-                ls.dwell_triggered = False
+                # Hysteresis: one stray outside frame (edge jitter, YOLO wobble)
+                # must not zero seconds of dwell. Reset only after 3
+                # consecutive outside frames (~0.3s at 10fps).
+                ls.outside_streak += 1
+                if ls.outside_streak >= 3:
+                    ls.enter_ts = None
+                    ls.dwell_triggered = False
         return events
 
     def _should_emit(self, dedup: str, now: float) -> bool:

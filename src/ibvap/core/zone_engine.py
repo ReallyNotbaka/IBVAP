@@ -53,16 +53,22 @@ def is_intrusion(
         effective_prev_foot = prev_foot if prev_foot is not None else getattr(track, "prev_footpoint", None) if track is not None else None
         if effective_prev_foot is not None and intersect(effective_prev_foot, track_foot, p1, p2):
             return True
-        # 3. Trajectory movement intersects line segment
+        # 3. Trajectory movement intersects line segment. Trajectory stores
+        # box CENTERS while track_foot is ground-level: the two differ by half
+        # the box height, so a tall body straddling the line reads as a cross.
+        # Only trust the center path when a foot is actually near the line,
+        # and never mix a center point with the footpoint in one segment.
         if track is not None:
             traj = getattr(track, "trajectory", [])
-            if len(traj) >= 2:
+            try:
+                box_h = abs(float(track.bbox_norm[3]) - float(track.bbox_norm[1]))
+            except Exception:
+                box_h = 0.0
+            if len(traj) >= 2 and dist <= 0.045 + 0.5 * box_h:
                 start_k = max(0, len(traj) - 6)
                 for k in range(start_k, len(traj) - 1):
                     if intersect(traj[k], traj[k + 1], p1, p2):
                         return True
-                if intersect(traj[-1], track_foot, p1, p2):
-                    return True
         return False
     return point_in_polygon(track_foot[0], track_foot[1], zone.polygon)
 

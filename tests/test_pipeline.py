@@ -69,33 +69,32 @@ def test_pipeline_from_real_video_file() -> None:
 
 
 def test_pipeline_zone_intrusion_and_exit_events() -> None:
-    """Verify zone intrusion followed by zone exit produces debounced events without spam."""
+    """Verify zone intrusion followed by a genuine zone exit (walked out, not vanished)."""
     clear_all()
-    pipe = MiniPipeline(camera_id="cam-zone-test", stream_epoch=1, detector=MockPersonDetector())
-
-    # Feed frames 5..20 where mock detector produces box entering central zone
-    for i in range(25):
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        if 5 <= i <= 20:
-            x = int(100 + i * 10)
-            cv2.rectangle(frame, (x, 100), (x + 60, 250), (255, 255, 255), -1)
-        pipe.process_frame(frame)
+    inside = (0.3, 0.4, 0.5, 0.8)
+    # Constant-size box translating upward slowly enough for the tracker's
+    # smoothing to hold one ID (fast jumps split IDs - correct behavior).
+    # Foot exits the zone (y<0.20) partway through.
+    walk = [(0.3, 0.4 - 0.65 * (k + 1) / 12, 0.5, 0.8 - 0.65 * (k + 1) / 12) for k in range(12)]
+    outside = (0.3, -0.25, 0.5, 0.15)
+    seq = [inside] * 8 + walk + [outside] * 20 + [None] * 40
+    pipe = MiniPipeline(
+        camera_id="cam-zone-test",
+        stream_epoch=1,
+        detector=_ScriptedDetector(seq),
+        face_detector=None,
+        enable_face=False,
+    )
+    for _ in range(len(seq)):
+        pipe.process_frame(_blank())
 
     events = list_events()
     event_types = [e["event_type"] for e in events]
     assert "zone_intrusion" in event_types, f"Expected zone_intrusion in {event_types}"
-
-    # Now feed blank frames so the target moves out or terminates
-    for _ in range(35):
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        pipe.process_frame(frame)
-
-    events_after = list_events()
-    event_types_after = [e["event_type"] for e in events_after]
-    assert "zone_exit" in event_types_after, f"Expected zone_exit in {event_types_after}"
+    assert "zone_exit" in event_types, f"Expected genuine zone_exit in {event_types}"
     # Ensure neither zone_intrusion nor zone_exit flooded hundreds of events
-    intrusion_count = sum(1 for e in events_after if e["event_type"] == "zone_intrusion")
-    exit_count = sum(1 for e in events_after if e["event_type"] == "zone_exit")
+    intrusion_count = sum(1 for e in events if e["event_type"] == "zone_intrusion")
+    exit_count = sum(1 for e in events if e["event_type"] == "zone_exit")
     assert intrusion_count == 1, f"Expected 1 debounced intrusion, got {intrusion_count}"
     assert exit_count == 1, f"Expected 1 debounced exit, got {exit_count}"
 
@@ -424,3 +423,85 @@ def test_extreme_closeup_face_gets_identity() -> None:
         assert trk.identity.get("entry_id") == "closeup-crit-01"
     finally:
         store.remove_entry("closeup-crit-01")
+
+
+class _ScriptedDetector:
+    """YOLO stub replaying a per-frame script (None = missed frame)."""
+
+    model_id = "stub"
+    runtime = "cpu"
+
+    def __init__(self, script: list) -> None:
+        self.script = script
+        self.i = 0
+
+    def detect(self, frame: np.ndarray, frame_id: int) -> list:
+        from ibvap.core.detector import Detection
+
+        box = self.script[min(self.i, len(self.script) - 1)]
+        self.i += 1
+        if box is None:
+            return []
+        return [Detection(class_id=0, class_name="person", bbox_norm=box, confidence=0.9, model_id="s", runtime="c")]
+
+
+def _blank() -> np.ndarray:
+    return np.zeros((480, 640, 3), dtype=np.uint8)
+
+
+def test_occlusion_inside_does_not_emit_zone_exit() -> None:
+    """A track dying while its last box is inside the zone is lost, not exited."""
+    from ibvap.core.zone_engine import point_in_polygon
+
+    clear_all()
+    pipe = MiniPipeline(
+        camera_id="cam-occl-test",
+        stream_epoch=1,
+        detector=_ScriptedDetector([(0.3, 0.4, 0.5, 0.8)] * 6 + [None] * 40),
+        face_detector=None,
+        enable_face=False,
+    )
+    for _ in range(46):
+        pipe.process_frame(_blank())
+    events = list_events()
+    assert [e for e in events if e["event_type"] == "zone_exit"] == []
+    lost = [e for e in events if e["event_type"] == "target_lost"]
+    assert len(lost) == 1
+    b = lost[0]["bbox_norm"]
+    assert point_in_polygon((b[0] + b[2]) / 2, b[3], pipe.zone.polygon)
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def time(self) -> float:
+        return self.now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def perf_counter(self) -> float:
+        return self.now
+
+    def sleep(self, s: float) -> None:
+        self.now += s
+
+
+def test_return_after_gap_realerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Presence must be continuous to stay muted: invisible gaps expire the alert."""
+    import ibvap.core.pipeline as pipe_module
+
+    clear_all()
+    clock = _FakeClock()
+    monkeypatch.setattr(pipe_module.time, "time", clock.time)
+    monkeypatch.setattr(pipe_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(pipe_module.time, "perf_counter", clock.perf_counter)
+    seq = [(0.3, 0.4, 0.5, 0.8)] * 6 + [None] * 4 + [(0.3, 0.05, 0.5, 0.15)] * 2 + [None] * 4 + [(0.3, 0.4, 0.5, 0.8)] * 8
+    pipe = MiniPipeline(camera_id="cam-regap-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False)
+    for n in range(len(seq)):
+        if n == 6:
+            clock.now += 10.0  # real gaps take seconds; debounce must be satisfied
+        pipe.process_frame(_blank())
+    intrusions = [e for e in list_events() if e["event_type"] == "zone_intrusion"]
+    assert len(intrusions) == 2
