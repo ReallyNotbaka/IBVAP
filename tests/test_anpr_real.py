@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from ibvap.core.anpr import ANPRPipeline, OCRReader, PlateCandidate, PlateDetector, PlateResult, normalize_plate
 
@@ -152,6 +153,74 @@ def test_no_detector_box_no_fallback() -> None:
     rng = np.random.default_rng(5)
     textured = rng.integers(0, 255, (200, 300, 3), dtype=np.uint8)
     assert pipeline.process_vehicle_crop(textured, vehicle_id=9) is None
+
+
+def test_anpr_warmup_runs_detector() -> None:
+    """warmup() exercises the plate detector without needing vehicles."""
+    pipeline = ANPRPipeline(detector=_NoBoxDetector(), ocr=fake_reader())  # type: ignore[arg-type]
+    assert pipeline.warmup() is None
+    blank = np.zeros((120, 160, 3), dtype=np.uint8)
+    assert pipeline.detector.detect(blank) == []
+
+
+def test_anpr_warmup_swallows_detector_failure() -> None:
+    """A broken detector must not kill worker start."""
+
+    class ExplodingDetector:
+        def detect(self, crop: np.ndarray) -> list:
+            raise RuntimeError("detector exploded")
+
+    pipeline = ANPRPipeline(detector=ExplodingDetector(), ocr=fake_reader())  # type: ignore[arg-type]
+    assert pipeline.warmup() is None
+
+
+def test_anpr_warmup_never_touches_paddle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """warmup() must not construct PaddleOCR (slow, crash-prone) - engine stays lazy."""
+    import sys
+    import types
+
+    class Exploding:
+        def __init__(self, **kw) -> None:
+            raise OSError("no CUDA")
+
+    fake_mod = types.ModuleType("paddleocr")
+    fake_mod.PaddleOCR = Exploding  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_mod)
+    pipeline = ANPRPipeline(ocr=OCRReader(ocr_engine=None, device="cpu"))
+    assert pipeline.warmup() is None
+
+
+def test_paddle_construction_serialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent first-use PaddleOCR construction must not overlap."""
+    import sys
+    import threading
+    import time
+    import types
+
+    state = {"inside": 0, "max_inside": 0}
+
+    class SlowCtor:
+        def __init__(self, **kw) -> None:
+            state["inside"] += 1
+            state["max_inside"] = max(state["max_inside"], state["inside"])
+            time.sleep(0.05)
+            state["inside"] -= 1
+
+        def predict(self, input: object) -> list:
+            return []
+
+    fake_mod = types.ModuleType("paddleocr")
+    fake_mod.PaddleOCR = SlowCtor  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_mod)
+    readers = [OCRReader(ocr_engine=None, device="cpu") for _ in range(3)]
+    rng = np.random.default_rng(9)
+    crop = rng.integers(0, 255, (40, 160, 3), dtype=np.uint8)
+    threads = [threading.Thread(target=r.recognize, args=(crop,)) for r in readers]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+    assert state["max_inside"] == 1
 
 
 def test_anpr_pipeline_empty_and_blank() -> None:

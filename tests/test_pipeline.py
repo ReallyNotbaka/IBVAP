@@ -552,3 +552,33 @@ def test_pipeline_with_handle_skips_private_detector() -> None:
     clear_all()
     pipe = MiniPipeline(camera_id="cam-shared-handle", stream_epoch=1, detector_handle=get_shared_detector_handle())
     assert pipe.detector is None
+
+
+def test_pipeline_warmup_wakes_face_models_without_polluting_state() -> None:
+    """warmup() constructs YuNet/SFace and runs dummy inference, touching no counters."""
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-warmup", stream_epoch=1, detector=_EmptyDetector())
+    assert pipe.face_detector is None
+    pipe.warmup()
+    assert pipe.face_detector is not None
+    assert pipe.face_recognizer is not None
+    assert pipe.last_faces == []
+    assert pipe.faces_analyzed == 0
+
+
+def test_pipeline_warmup_never_raises() -> None:
+    """A broken model must not kill worker start; warmup degrades silently."""
+
+    class ExplodingDetector:
+        def detect(self, frame: np.ndarray) -> list:
+            raise RuntimeError("YuNet exploded")
+
+    from ibvap.core.face import FaceDetector
+
+    stub = ExplodingDetector()
+    face_detector = FaceDetector.__new__(FaceDetector)
+    face_detector.model_path = "stub"
+    face_detector.conf_threshold = 0.45
+    face_detector._detector = stub  # type: ignore[assignment]
+    pipe = MiniPipeline(camera_id="cam-warmup-broken", stream_epoch=1, detector=_EmptyDetector(), face_detector=face_detector)
+    pipe.warmup()  # must not raise

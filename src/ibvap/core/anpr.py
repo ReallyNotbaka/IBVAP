@@ -5,9 +5,11 @@ Skips tiny/low-res crops - OCR just hallucinates on those.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -18,6 +20,10 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Serializes PaddleOCR construction across worker threads: concurrent native
+# engine loads hard-crash some installs (observed 0xc0000139 under pytest).
+_PADDLE_INIT_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -175,16 +181,17 @@ class OCRReader:
             return []
 
         try:
-            if self._paddle_ocr is None:
-                from paddleocr import PaddleOCR
+            with _PADDLE_INIT_LOCK:
+                if self._paddle_ocr is None:
+                    from paddleocr import PaddleOCR
 
-                self._paddle_ocr = PaddleOCR(
-                    lang="en",
-                    device=self.device,
-                    use_doc_orientation_classify=False,
-                    use_doc_unwarping=False,
-                    use_textline_orientation=False,
-                )
+                    self._paddle_ocr = PaddleOCR(
+                        lang="en",
+                        device=self.device,
+                        use_doc_orientation_classify=False,
+                        use_doc_unwarping=False,
+                        use_textline_orientation=False,
+                    )
 
             results = self._paddle_ocr.predict(input=plate_crop)
         except Exception as e:
@@ -246,6 +253,19 @@ class ANPRPipeline:
         # on every epoch, so unscoped history would let a dead vehicle's votes
         # decide a new vehicle's plate.
         self._history: dict[tuple[int, int], list[str]] = {}
+
+    def warmup(self) -> None:
+        """Wake plate detection before the feed starts passing frames.
+
+        Runs the morphological detector once (milliseconds, pure OpenCV).
+        The OCR engine is deliberately NOT warmed here: PaddleOCR
+        construction is seconds-heavy, per-worker, and can hard-crash the
+        process on broken CUDA installs (observed 0xc0000139 under pytest
+        when warmed from worker threads). It stays lazy behind the retry
+        gate; concurrent first-use construction is serialized below.
+        """
+        with contextlib.suppress(Exception):
+            self.detector.detect(np.zeros((120, 160, 3), dtype=np.uint8))
 
     @staticmethod
     def _remap_box(

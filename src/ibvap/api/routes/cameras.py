@@ -554,6 +554,15 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 # Protect analysis thread from termination so HUD and observations stay active
                 pass
 
+    # Wake every detection model BEFORE the feed starts passing frames: a
+    # cold model is blind on early frames. Each warmup is internally
+    # failure-proof (Paddle warms on a daemon thread); nothing here may
+    # raise past this point into worker setup.
+    with contextlib.suppress(Exception):
+        pipeline.warmup()
+    with contextlib.suppress(Exception):
+        anpr.warmup()
+
     analysis_thread = threading.Thread(target=analyze, daemon=True, name=f"analysis-{camera_id[:8]}")
     analysis_thread.start()
 

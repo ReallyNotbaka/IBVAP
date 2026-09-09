@@ -9,6 +9,7 @@ skips YuNet even more - keeps it realtime on weak edge boxes.
 
 from __future__ import annotations
 
+import contextlib
 import time
 from pathlib import Path
 
@@ -118,6 +119,30 @@ class MiniPipeline:
                 self.face_recognizer = FaceRecognizer()
             except Exception:
                 self.face_recognizer = None
+
+    def warmup(self) -> None:
+        """Wake every detection model before the feed starts passing frames.
+
+        Runs one dummy inference through YOLO (shared handle or own
+        detector), YuNet, and SFace so sessions and kernels are hot on
+        frame one. Every step is failure-proof: a broken model degrades,
+        never kills worker start. Touches no counters or last_* state.
+        """
+        with contextlib.suppress(Exception):
+            self._ensure_face_models()
+        with contextlib.suppress(Exception):
+            dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+            if self.detector_handle is not None and hasattr(self.detector_handle, "acquire"):
+                with self.detector_handle.acquire() as det:
+                    det.detect(dummy, 0)
+            elif self.detector is not None:
+                self.detector.detect(dummy, 0)
+        with contextlib.suppress(Exception):
+            if self.face_detector is not None:
+                self.face_detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))  # type: ignore[union-attr]
+        with contextlib.suppress(Exception):
+            if self.face_recognizer is not None:
+                self.face_recognizer.extract_feature(np.ones((112, 112, 3), dtype=np.uint8))  # type: ignore[union-attr]
 
     def reset_epoch(self, new_epoch: int) -> None:
         """Reset stream epoch and clear all per-track alert/latch state."""
