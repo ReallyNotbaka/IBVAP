@@ -505,3 +505,30 @@ def test_return_after_gap_realerts(monkeypatch: pytest.MonkeyPatch) -> None:
         pipe.process_frame(_blank())
     intrusions = [e for e in list_events() if e["event_type"] == "zone_intrusion"]
     assert len(intrusions) == 2
+
+
+def test_loiter_realerts_new_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A new loiter episode (new epoch, reused track id) must persist, not dedup."""
+    import ibvap.core.pipeline as pipe_module
+
+    clear_all()
+    clock = _FakeClock()
+    monkeypatch.setattr(pipe_module.time, "time", clock.time)
+    monkeypatch.setattr(pipe_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(pipe_module.time, "perf_counter", clock.perf_counter)
+    seq = [(0.3, 0.4, 0.5, 0.8)] * 26
+    pipe = MiniPipeline(
+        camera_id="cam-loiter-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False
+    )
+    # Custom zone id: the rule-engine mirror only runs for non-default zones.
+    pipe.zone = Zone(id="zone-loiter-1", name="Loiter Zone", polygon=[[0.05, 0.2], [0.95, 0.2], [0.95, 1.0], [0.05, 1.0]])
+    for _ in range(12):
+        pipe.process_frame(_blank())
+        clock.now += 1.0
+    pipe.reset_epoch(2)
+    clock.now += 100.0
+    for _ in range(12):
+        pipe.process_frame(_blank())
+        clock.now += 1.0
+    loiters = [e for e in list_events() if e["event_type"] == "suspicious_loitering"]
+    assert len(loiters) == 2

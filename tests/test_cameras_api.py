@@ -311,3 +311,55 @@ def test_normalize_mjpeg_url() -> None:
     assert probe_module.normalize_mjpeg_url("http://10.80.5.52:4747/video") == "http://10.80.5.52:4747/video"
     assert probe_module.normalize_mjpeg_url("http://192.168.1.50:8080") == "http://192.168.1.50:8080/video"
     assert probe_module.normalize_mjpeg_url("rtsp://192.168.1.50:554/stream1") == "rtsp://192.168.1.50:554/stream1"
+
+
+def test_redact_strips_query_token() -> None:
+    from ibvap.core.credentials import redact_url
+
+    redacted = redact_url("http://192.168.1.10:8080/video?token=secret123")
+    assert "secret123" not in redacted
+    assert redacted.startswith("http://192.168.1.10:8080/video")
+    # userinfo stripping still works
+    assert "pass" not in redact_url("http://admin:pass@192.168.1.10:8080/video")
+
+
+def test_probe_uses_supplied_credentials(monkeypatch: Any) -> None:
+    import ipaddress
+
+    from ibvap.core.ssrf import SSRFPolicy
+
+    calls = []
+
+    def fake_open(url: Any, **kwargs: Any):
+        calls.append(url)
+        raise RuntimeError("stop after inspecting url")
+
+    monkeypatch.setattr(probe_module.av, "open", fake_open)
+    policy = SSRFPolicy(
+        allowed_schemes=frozenset({"http", "https", "rtsp", "rtsps"}),
+        allowed_hosts=None,
+        allowed_ports=None,
+        site_cidr_allowlist=(ipaddress.ip_network("192.168.0.0/16"),),
+    )
+    try:
+        probe_module.probe_url("http://192.168.1.20:8080/video", timeout=3, policy=policy, auth=("admin", "s3cret"))
+    except probe_module.ProbeError as error:
+        assert error.code == "open_failed"
+    assert calls == ["http://admin:s3cret@192.168.1.20:8080/video"]
+
+
+def test_create_with_credentials_but_no_key_rejected(api_client: TestClient, monkeypatch: Any) -> None:
+    monkeypatch.delenv("IBVAP_CREDENTIAL_KEY", raising=False)
+    resp = api_client.post(
+        "/api/v1/cameras",
+        json={
+            "name": "authed",
+            "site_id": "00000000-0000-0000-0000-000000000006",
+            "endpoint": "synthetic://authed",
+            "protocol": "http",
+            "username": "admin",
+            "password": "s3cret",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "credential_storage_unavailable"

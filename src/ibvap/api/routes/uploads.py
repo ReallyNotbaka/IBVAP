@@ -9,11 +9,20 @@ import time
 import uuid
 from pathlib import Path
 
+import av
 import structlog
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ibvap.core.upload import ALLOWED_EXTS, MAX_SIZE_BYTES, promoted_path, quarantine_path, streaming_hash, validate_filename
+from ibvap.core.upload import (
+    ALLOWED_EXTS,
+    MAX_DURATION_SECS,
+    MAX_SIZE_BYTES,
+    promoted_path,
+    quarantine_path,
+    streaming_hash,
+    validate_filename,
+)
 
 router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
@@ -113,6 +122,15 @@ async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  
         except Exception:
             pass
         raise
+    except BaseException:
+        # Disconnects, cancellations, and disk errors must not orphan bytes.
+        # Bare raise preserves CancelledError/KeyboardInterrupt semantics.
+        try:
+            if qpath.exists():
+                qpath.unlink()
+        except Exception:
+            pass
+        raise
 
     sha = sha256.hexdigest()
     # quarantine metadata
@@ -155,6 +173,45 @@ async def get_upload(upload_id: str) -> dict[str, object]:
     return _public_upload_payload(data)
 
 
+def probe_quarantined_video(path: Path) -> None:
+    """Raise HTTPException(422) unless path is decodable video within bounds.
+
+    Blocking PyAV IO: call from a worker thread. Rejects empty files,
+    missing video streams, undecodable containers, zero decoded frames,
+    and clips longer than MAX_DURATION_SECS.
+    """
+    container = None
+    try:
+        if path.stat().st_size == 0:
+            raise HTTPException(status_code=422, detail="Empty file")
+    except HTTPException:
+        raise
+    except OSError as e:
+        raise HTTPException(status_code=422, detail="Unreadable file") from e
+    try:
+        container = av.open(str(path))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail="Undecodable media container") from e
+    try:
+        stream = next((s for s in container.streams if s.type == "video"), None)
+        if stream is None:
+            raise HTTPException(status_code=422, detail="No video stream")
+        if container.duration is not None and stream.time_base:
+            duration_s = float(container.duration * stream.time_base)
+            if duration_s > MAX_DURATION_SECS:
+                raise HTTPException(status_code=422, detail="Clip exceeds maximum duration")
+        if next(container.decode(stream), None) is None:
+            raise HTTPException(status_code=422, detail="No decodable frames")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail="Undecodable media container") from e
+    finally:
+        if container is not None:
+            with contextlib.suppress(Exception):
+                container.close()
+
+
 @router.post("/{upload_id}/finalize", response_model=dict[str, object])
 async def finalize_upload(upload_id: str) -> dict[str, object]:
     data = _UPLOADS.get(upload_id)
@@ -169,6 +226,8 @@ async def finalize_upload(upload_id: str) -> dict[str, object]:
     sha = await asyncio.to_thread(streaming_hash, qpath)
     if sha != data["sha256"]:
         raise HTTPException(status_code=400, detail="Hash mismatch")
+    # Decode-validate: only real video becomes trusted footage.
+    await asyncio.to_thread(probe_quarantined_video, qpath)
     # promote
     ppath = promoted_path(upload_id, str(data["filename"]))
     ppath.parent.mkdir(parents=True, exist_ok=True)

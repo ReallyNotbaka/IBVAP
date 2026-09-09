@@ -17,6 +17,7 @@ from urllib.parse import urlparse, urlunparse
 
 import av
 
+from ibvap.core.credentials import build_authenticated_url
 from ibvap.core.ssrf import DEFAULT_POLICY, SSRFPolicy, preflight_stream_url
 
 
@@ -69,12 +70,14 @@ def probe_url(
     timeout: float = 5.0,
     max_frames: int = 5,
     policy: SSRFPolicy | None = None,
+    auth: tuple[str | None, str | None] | None = None,
 ) -> tuple[ProbeResult, list[FrameProbe]]:
     """Try opening the URL, check for a video track, decode a couple frames.
 
     Raises ProbeError if there's no video, nothing decodes, or it times out.
-    When policy is given, the URL is preflighted first (DNS + redirect
-    inspection) and SSRFError propagates on denial.
+    Preflights the clean URL first (DNS + redirect inspection); SSRFError
+    propagates on denial. When auth is given, credentials are injected only
+    into the URL handed to av.open - validation always sees the clean URL.
     Phone feeds need format="mpjpeg" or ffmpeg sits there guessing forever.
     Retries 3x on those since phone wifi drops packets a lot.
     """
@@ -82,6 +85,9 @@ def probe_url(
     if policy is None:
         policy = DEFAULT_POLICY
     preflight_stream_url(url, policy, timeout=min(timeout, 3.0))
+    open_url = url
+    if auth is not None:
+        open_url = build_authenticated_url(url, auth[0], auth[1])
     start = time.monotonic()
     # FFmpeg-level network timeout in microseconds.
     # Do NOT pass timeout= kwarg to av.open() — PyAV's I/O callback
@@ -110,9 +116,9 @@ def probe_url(
             # IP Webcam / DroidCam serves an endless multipart/x-mixed-replace response.
             # Explicit mpjpeg demuxer avoids format probing delays and network timeouts.
             container = (
-                av.open(url, format="mpjpeg", options=opts)
+                av.open(open_url, format="mpjpeg", options=opts)
                 if is_ip_webcam_mjpeg
-                else av.open(url, options=opts)
+                else av.open(open_url, options=opts)
             )
             break
         except Exception as e:

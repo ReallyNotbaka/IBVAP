@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from ibvap.config import Settings
 from ibvap.core.anpr import ANPRPipeline
 from ibvap.core.camera_state import CameraState, CameraStateMachine
-from ibvap.core.credentials import encrypt_secret, redact_url
+from ibvap.core.credentials import build_authenticated_url, decrypt_secret, encrypt_secret, redact_url
 from ibvap.core.geometry import validate_fence
 from ibvap.core.model_manager import get_shared_detector_handle
 from ibvap.core.night import NightDetector
@@ -250,6 +250,26 @@ def _select_plate_detections(
         if any(_boxes_intersect(cb, vb) for cb in cached_boxes for vb in vehicle_boxes):
             return cached
     return fresh
+
+
+def _connect_endpoint(cam: dict[str, Any]) -> str:
+    """Worker connect URL: stored endpoint with saved credentials injected.
+
+    The stored endpoint is always clean (see create_camera); this builds the
+    authed variant per worker start. Never persist or log the result. Falls
+    back to anonymous when decryption fails (e.g. key rotated).
+    """
+    endpoint = str(cam["endpoint"])
+    enc = cam.get("_enc") or {}
+    if not enc.get("username") and not enc.get("password"):
+        return endpoint
+    try:
+        user = decrypt_secret(enc["username"]) if enc.get("username") else None
+        pw = decrypt_secret(enc.get("password")) if enc.get("password") else None
+    except Exception as e:
+        logger.warning("camera_credential_unavailable", camera_id=cam.get("id"), error=str(e)[:120])
+        return endpoint
+    return build_authenticated_url(endpoint, user, pw)
 
 
 def _camera_worker(camera_id: str, stop: threading.Event) -> None:
@@ -588,7 +608,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         while not stop.is_set():
                             with _PLAYBACK_LOCK:
                                 playback_state = playback["state"]
-                                seek_to = playback.pop("seek_to", None)
+                                # Peek while paused/stopped: popping here would
+                                # discard the seek on the continue paths below.
+                                seek_to = playback.pop("seek_to", None) if playback_state == "playing" else playback.get("seek_to")
                             if playback_state == "stopped":
                                 break
                             if playback_state == "paused":
@@ -599,6 +621,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                 with contextlib.suppress(Exception):
                                     container.seek(int(float(seek_to) * av.time_base), stream=stream, backward=True)
                                 frame_iter = container.decode(stream)
+                                next_frame_time = time.perf_counter()
                                 continue
                             cam["observed_state"] = "STREAMING"
 
@@ -710,6 +733,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     # 2) decoded ndarray to the analysis thread for YOLO/face/plate
     # Wifi from phones is flaky so we auto-reconnect with backoff here.
     endpoint = normalize_mjpeg_url(str(cam["endpoint"]))
+    # Preflight always sees the clean URL; av.open gets credentials injected.
+    open_endpoint = _connect_endpoint({**cam, "endpoint": endpoint})
     parsed_endpoint = urlparse(endpoint)
     path_lower = parsed_endpoint.path.lower().rstrip("/")
     is_mjpeg_stream = (
@@ -752,7 +777,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             # between reconnects. SSRFError flows into the reconnect/backoff
             # handler below like any other connect failure.
             preflight_stream_url(endpoint, stream_policy, timeout=3.0)
-            container = av.open(endpoint, **open_kwargs)
+            container = av.open(open_endpoint, **open_kwargs)
             stream = next((s for s in container.streams if s.type == "video"), None)
             if stream is None:
                 raise RuntimeError("No video stream")
@@ -1089,7 +1114,7 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
     # Stage 6: Inspecting stream
     stage("Inspecting stream", "running")
     try:
-        probe, frames = probe_url(req.endpoint, timeout=3.0, max_frames=2, policy=policy)
+        probe, frames = probe_url(req.endpoint, timeout=3.0, max_frames=2, policy=policy, auth=(req.username, req.password))
         stage("Inspecting stream", "ok")
         stage("Decoding first frame", "ok")
         stage("Measuring stability", "ok")
@@ -1177,8 +1202,11 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
     cam_id = str(uuid.uuid4())
     # never persist credentials in URL
     endpoint_redacted = redact_url(req.endpoint)
-    enc_user = encrypt_secret(req.username) if req.username else None
-    enc_pass = encrypt_secret(req.password) if req.password else None
+    try:
+        enc_user = encrypt_secret(req.username) if req.username else None
+        enc_pass = encrypt_secret(req.password) if req.password else None
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail={"code": "credential_storage_unavailable", "message": str(e)}) from e
 
     # duplicate endpoint check (warn if same endpoint exists)
     for existing in _CAMERAS.values():
@@ -1388,6 +1416,21 @@ async def playback_state(camera_id: str) -> dict[str, Any]:
         return dict(_PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}))
 
 
+@router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
+async def playback_seek(camera_id: str, req: PlaybackSeekRequest) -> dict[str, Any]:
+    if camera_id not in _CAMERAS:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not _is_file_camera(camera_id):
+        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+    with _PLAYBACK_LOCK:
+        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
+        duration = playback.get("duration_seconds")
+        position = min(req.position_seconds, duration) if duration else req.position_seconds
+        playback["position_seconds"] = position
+        playback["seek_to"] = position
+        return dict(playback)
+
+
 @router.post("/{camera_id}/playback/{action}", response_model=dict[str, Any])
 async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"]) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
@@ -1425,21 +1468,6 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
     if action in {"pause", "resume", "restart"}:
         _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"
     return state
-
-
-@router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
-async def playback_seek(camera_id: str, req: PlaybackSeekRequest) -> dict[str, Any]:
-    if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
-    if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
-    with _PLAYBACK_LOCK:
-        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
-        duration = playback.get("duration_seconds")
-        position = min(req.position_seconds, duration) if duration else req.position_seconds
-        playback["position_seconds"] = position
-        playback["seek_to"] = position
-        return dict(playback)
 
 
 @router.post("/{camera_id}/test", response_model=CameraTestResponse)

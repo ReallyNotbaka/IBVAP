@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 from ibvap.api.routes.cameras import (
     _CAMERAS,
@@ -266,3 +267,33 @@ def test_analysis_worker_resilient_to_inference_exceptions(monkeypatch: pytest.M
 
     assert call_count > 2, f"Expected >2 calls through analyze worker, got {call_count}"
     assert recovered, "Analysis worker crashed instead of recovering from simulated exception"
+
+
+def test_seek_while_paused_is_preserved(api_client: TestClient) -> None:
+    """A seek issued while paused must survive until resume (not be discarded)."""
+    from ibvap.api.routes import cameras as C
+
+    c: TestClient = api_client
+    resp = c.post(
+        "/api/v1/cameras",
+        json={
+            "name": "Seek camera",
+            "site_id": "00000000-0000-0000-0000-000000000009",
+            "source_type": "video_footage",
+            "endpoint": "tests/fixtures/test_upload_face.mp4",
+            "protocol": "file",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    cam_id = resp.json()["id"]
+    try:
+        assert wait_until(lambda: C._PLAYBACK.get(cam_id, {}).get("position_seconds", 0) > 0.5, timeout_s=5.0)
+        assert c.post(f"/api/v1/cameras/{cam_id}/playback/pause").status_code == 200
+        target = 1.5
+        assert c.post(f"/api/v1/cameras/{cam_id}/playback/seek", json={"position_seconds": target}).status_code == 200
+        time.sleep(0.2)  # let the paused loop iterate (it pops seek_to when buggy)
+        assert C._PLAYBACK[cam_id].get("seek_to") == pytest.approx(target)
+        assert c.post(f"/api/v1/cameras/{cam_id}/playback/resume").status_code == 200
+        assert wait_until(lambda: "seek_to" not in C._PLAYBACK.get(cam_id, {}), timeout_s=3.0)
+    finally:
+        c.delete(f"/api/v1/cameras/{cam_id}")

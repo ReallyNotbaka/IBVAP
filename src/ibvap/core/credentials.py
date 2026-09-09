@@ -10,7 +10,7 @@ import base64
 import os
 import threading
 from typing import Final
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -67,15 +67,45 @@ def decrypt_secret(token: str) -> str:
 
 
 def redact_url(url: str) -> str:
-    """Strip credentials from URL for logging / diagnostics."""
+    """Strip credentials and query/fragment secrets from URL for logging / diagnostics."""
     try:
         p = urlparse(url)
+        changed = False
         if p.username or p.password:
             netloc = p.hostname or ""
             if p.port:
                 netloc = f"{netloc}:{p.port}"
             p = p._replace(netloc=netloc)
+            changed = True
+        # Tokens live in ?query= and #fragments - never echo those either.
+        if p.query or p.fragment:
+            p = p._replace(query="", fragment="")
+            changed = True
+        if changed:
             return urlunparse(p)
     except Exception:
         pass
     return url
+
+
+def build_authenticated_url(endpoint: str, username: str | None, password: str | None) -> str:
+    """Inject userinfo into a validated endpoint for connect-time use.
+
+    The result carries secrets: open streams with it, never persist or log it.
+    Returns the endpoint unchanged when there are no credentials or no host.
+    """
+    if not username and not password:
+        return endpoint
+    try:
+        p = urlparse(endpoint)
+        if not p.hostname:
+            return endpoint
+        userinfo = quote(username or "", safe="")
+        if password:
+            userinfo += ":" + quote(password, safe="")
+        netloc = f"{userinfo}@{p.hostname}"
+        if p.port:
+            netloc += f":{p.port}"
+        return urlunparse(p._replace(netloc=netloc))
+    except Exception:
+        return endpoint

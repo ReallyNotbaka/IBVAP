@@ -386,7 +386,7 @@ class MiniPipeline:
                         "explanation": self.rule_engine.explain(rule_event),
                         "model_id": model_id,
                     }
-                    transactional_write(event, dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}")
+                    transactional_write(event, dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}")
                     self.events_created += 1
                     if primary_event is None:
                         primary_event = event

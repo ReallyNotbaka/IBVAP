@@ -81,7 +81,7 @@ class PacketRingBuffer:
             Path(snap_path).parent.mkdir(parents=True, exist_ok=True)
             Path(snap_path).write_bytes(snap)
         if clip and clip_path:
-            Path(clip_path).write_bytes(clip[:1024])  # truncated for test
+            Path(clip_path).write_bytes(clip)
         return EvidenceManifest(
             event_id=event_id,
             snapshot_path=snap_path,
