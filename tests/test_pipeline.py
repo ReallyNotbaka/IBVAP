@@ -5,7 +5,9 @@ import tempfile
 
 import cv2
 import numpy as np
+import pytest
 
+from ibvap.core.association import link_synthetic_tracks, project_person_box_from_face
 from ibvap.core.detector import MockPersonDetector
 from ibvap.core.pipeline import MiniPipeline
 from ibvap.core.zone_engine import Zone
@@ -158,3 +160,267 @@ def test_pipeline_line_tripwire_exit_and_intruder_cleanup() -> None:
     exits = [e for e in events if e["event_type"] == "zone_exit"]
     assert len(exits) >= 1
     assert exits[0]["explanation"]["rule"] == "tripwire_line_exit"
+
+
+class _EmptyDetector:
+    """YOLO stub that sees nobody - reproduces face-only close-up frames."""
+
+    model_id = "yolo26n-stub"
+    runtime = "cpu"
+
+    def detect(self, frame: np.ndarray, frame_id: int) -> list:
+        return []
+
+
+class _OverlappingPersonDetector:
+    """YOLO stub returning a real person box overlapping the test face."""
+
+    model_id = "yolo26n-stub"
+    runtime = "cpu"
+
+    def detect(self, frame: np.ndarray, frame_id: int) -> list:
+        from ibvap.core.detector import Detection
+
+        return [
+            Detection(
+                class_id=0,
+                class_name="person",
+                bbox_norm=(0.30, 0.30, 0.70, 0.85),
+                confidence=0.88,
+                model_id="yolo26n-stub",
+                runtime="cpu",
+            )
+        ]
+
+
+class _FaceRowDetector:
+    """YuNet stub returning one fixed face row (Lena-like head-and-shoulders face)."""
+
+    # Face pixels on a 640x480 frame -> norm (0.406, 0.356, 0.690, 0.760)
+    _ROW = np.array(
+        [
+            [
+                260.0,
+                171.0,
+                182.0,
+                194.0,
+                300.0,
+                220.0,
+                360.0,
+                220.0,
+                330.0,
+                260.0,
+                310.0,
+                290.0,
+                350.0,
+                290.0,
+                0.91,
+            ]
+        ],
+        dtype=np.float32,
+    )
+
+    def setInputSize(self, size: tuple[int, int]) -> None:
+        pass
+
+    def detect(self, img: np.ndarray) -> tuple[int, np.ndarray]:
+        return 1, self._ROW
+
+
+def _face_only_pipeline(detector: object) -> MiniPipeline:
+    from ibvap.core.face import FaceDetector
+
+    stub = _FaceRowDetector()
+    face_detector = FaceDetector.__new__(FaceDetector)
+    face_detector.model_path = "stub"
+    face_detector.conf_threshold = 0.45
+    face_detector._detector = stub  # type: ignore[assignment]
+    return MiniPipeline(
+        camera_id="cam-face-only",
+        stream_epoch=1,
+        detector=detector,  # type: ignore[arg-type]
+        face_detector=face_detector,
+        face_recognizer=None,
+        enable_face=True,
+        face_stride=1,
+        sample_stride=1,
+    )
+
+
+def _textured_frame(seed: int = 7) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    return rng.integers(0, 255, (480, 640, 3), dtype=np.uint8)
+
+
+def test_project_person_box_from_face_geometry() -> None:
+    """Projection must contain the face, stay in [0, 1], and match anthropometrics."""
+    face = (0.406, 0.357, 0.691, 0.761)
+    body = project_person_box_from_face(face)
+    assert body is not None
+    x1, y1, x2, y2 = body
+    assert 0.0 <= x1 < x2 <= 1.0
+    assert 0.0 <= y1 < y2 <= 1.0
+    # Face center horizontally inside the projected body, face top below body top
+    assert x1 < 0.5485 < x2
+    assert y1 < 0.357
+    assert body == pytest.approx((0.235, 0.0, 0.862, 1.0))
+
+
+def test_orphan_face_creates_person_track() -> None:
+    """A quality-passed face with no person detection must yield a person track."""
+    clear_all()
+    pipe = _face_only_pipeline(_EmptyDetector())
+    for _ in range(3):
+        pipe.process_frame(_textured_frame())
+    assert len(pipe.last_faces) == 1
+    assert pipe.last_faces[0]["quality_passed"] is True
+    assert len(pipe.last_tracks) == 1, f"Expected 1 face-anchored track, got {pipe.last_tracks}"
+    trk = pipe.last_tracks[0]
+    assert trk.class_name == "person"
+    from ibvap.core.association import associate_faces_to_tracks
+
+    assert associate_faces_to_tracks(pipe.last_tracks, pipe.last_faces).get(trk.track_id) is not None
+
+
+def test_face_overlapping_person_detection_suppresses_synthesis() -> None:
+    """A real person box overlapping the face wins - no duplicate virtual track."""
+    clear_all()
+    pipe = _face_only_pipeline(_OverlappingPersonDetector())
+    for _ in range(3):
+        pipe.process_frame(_textured_frame())
+    assert len(pipe.last_tracks) == 1
+    assert pipe.last_tracks[0].bbox_norm == (0.30, 0.30, 0.70, 0.85)
+
+
+def test_low_quality_face_creates_no_track() -> None:
+    """A face failing the quality gate (blank crop) must not anchor a track."""
+    clear_all()
+    pipe = _face_only_pipeline(_EmptyDetector())
+    for _ in range(3):
+        pipe.process_frame(np.zeros((480, 640, 3), dtype=np.uint8))
+    assert pipe.last_faces and pipe.last_faces[0]["quality_passed"] is False
+    assert pipe.last_tracks == []
+
+
+class _HugeFaceRowDetector:
+    """YuNet stub returning an extreme close-up face (fills the frame)."""
+
+    _ROW = np.array(
+        [
+            [
+                30.0,
+                5.0,
+                580.0,
+                445.0,
+                250.0,
+                150.0,
+                430.0,
+                150.0,
+                340.0,
+                280.0,
+                280.0,
+                360.0,
+                400.0,
+                360.0,
+                0.90,
+            ]
+        ],
+        dtype=np.float32,
+    )
+
+    def setInputSize(self, size: tuple[int, int]) -> None:
+        pass
+
+    def detect(self, img: np.ndarray) -> tuple[int, np.ndarray]:
+        return 1, self._ROW
+
+
+class _FixedRecognizer:
+    """SFace stub returning one fixed embedding for any crop."""
+
+    def __init__(self, feat: np.ndarray) -> None:
+        self._feat = np.asarray(feat, dtype=np.float32).reshape(1, 128)
+
+    def align_crop(self, frame: np.ndarray, face_row: object) -> np.ndarray:
+        return np.ones((112, 112, 3), dtype=np.uint8)
+
+    def extract_feature(self, aligned: np.ndarray) -> np.ndarray:
+        return self._feat
+
+
+def test_link_synthetic_tracks_uses_overlap_not_gates() -> None:
+    """Provenance link: a synthetic track links its overlapping face even past gate scale."""
+    from ibvap.core.tracker import Track
+
+    syn_trk = Track(
+        track_id=1,
+        class_name="person",
+        class_id=0,
+        bbox_norm=(0.0, 0.0, 0.994, 1.0),
+        confidence=0.9,
+        synthetic=True,
+    )
+    huge_face = {
+        "bbox_norm": (0.047, 0.010, 0.953, 0.938),
+        "confidence": 0.9,
+        "quality_passed": True,
+    }
+    assert link_synthetic_tracks([syn_trk], [huge_face]) == {1: huge_face}
+
+    # Guard: a face overlapping a REAL person track belongs to that track -
+    # never link it to the synthetic one (no CRITICAL misattribution).
+    real_trk = Track(
+        track_id=2,
+        class_name="person",
+        class_id=0,
+        bbox_norm=(0.1, 0.1, 0.3, 0.8),
+        confidence=0.9,
+    )
+    assert link_synthetic_tracks([syn_trk, real_trk], [huge_face]) == {}
+
+
+def test_extreme_closeup_face_gets_identity() -> None:
+    """End-to-end residue proof: face-only extreme close-up yields a track WITH identity."""
+    from ibvap.core.face import FaceDetector
+    from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+
+    clear_all()
+    rng = np.random.default_rng(11)
+    v = rng.standard_normal(128).astype(np.float32)
+    feat = v / float(np.linalg.norm(v))
+    store = get_watchlist_store()
+    store.add_entry(
+        WatchlistEntry(
+            id="closeup-crit-01",
+            name="Close Suspect",
+            threat_level=ThreatLevel.CRITICAL,
+            notes="Extreme close-up identity test",
+            gallery=[feat],
+            created_at=1.0,
+        )
+    )
+    try:
+        stub = _HugeFaceRowDetector()
+        face_detector = FaceDetector.__new__(FaceDetector)
+        face_detector.model_path = "stub"
+        face_detector.conf_threshold = 0.45
+        face_detector._detector = stub  # type: ignore[assignment]
+        pipe = MiniPipeline(
+            camera_id="cam-closeup-id",
+            stream_epoch=1,
+            detector=_EmptyDetector(),  # type: ignore[arg-type]
+            face_detector=face_detector,
+            face_recognizer=_FixedRecognizer(feat),
+            enable_face=True,
+            face_stride=1,
+            sample_stride=1,
+        )
+        for _ in range(2):
+            pipe.process_frame(_textured_frame())
+        assert len(pipe.last_tracks) == 1
+        trk = pipe.last_tracks[0]
+        assert trk.class_name == "person"
+        assert trk.identity is not None, "Face-only close-up track must carry an identity"
+        assert trk.identity.get("entry_id") == "closeup-crit-01"
+    finally:
+        store.remove_entry("closeup-crit-01")

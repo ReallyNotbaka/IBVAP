@@ -1,6 +1,7 @@
 """Per-camera analytics pipeline. One of these runs for each connected camera.
 
-Frame in -> YOLO detect -> track -> face/plate -> zone check -> event out.
+Frame in -> YOLO detect + face -> track (face-only detections anchor virtual
+person boxes) -> zone check -> event out.
 Queues are bounded (size 2) so if inference lags we drop old frames instead
 of building up delay. sample_stride skips detector on some frames, face_stride
 skips YuNet even more - keeps it realtime on weak edge boxes.
@@ -14,7 +15,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ibvap.core.association import associate_faces_to_tracks
+from ibvap.core.association import (
+    _box_iou,
+    associate_faces_to_tracks,
+    link_synthetic_tracks,
+    project_person_box_from_face,
+)
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
@@ -167,13 +173,10 @@ class MiniPipeline:
             for d in detections
         ]
         self.last_detections = det_dicts
-        # Single clock read per frame shared by tracker + all debounce logic.
-        now_ts = time.time()
-        tracks, new_entries, terminated = self.tracker.update(det_dicts, timestamp=now_ts)
-        self.last_tracks = tracks
-        model_id = getattr(self, "model_id", "yolo26n")
 
         # ---- face detection (optimized, sampled) ----
+        # Runs BEFORE tracking: orphan (face-only) detections are projected
+        # to virtual person boxes below so the tracker holds them normally.
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
         new_faces_detected = False
         if self.enable_face and self.face_detector is not None:
@@ -209,10 +212,47 @@ class MiniPipeline:
                 except Exception:
                     pass
 
+        # ---- face-anchored fallback: virtual person box for orphan faces ----
+        # Someone standing right in front of the camera shows a face but no
+        # YOLO body box. Project an approximate body box so tracking, identity
+        # latching, and zones keep working. Real detections always win: any
+        # overlap with a person box suppresses synthesis for that face.
+        if new_faces_detected:
+            person_boxes = [d["bbox_norm"] for d in det_dicts if d.get("class_name") == "person"]
+            for face_info in self.last_faces:
+                if not face_info.get("quality_passed"):
+                    continue
+                fb = face_info["bbox_norm"]
+                if any(_box_iou(fb, pb) > 0.0 for pb in person_boxes):
+                    continue
+                body = project_person_box_from_face(fb)
+                if body is None:
+                    continue
+                det_dicts.append(
+                    {
+                        "bbox_norm": body,
+                        "class_name": "person",
+                        "class_id": 0,
+                        "confidence": float(face_info.get("confidence", 0.5)),
+                        "synthetic": True,
+                    }
+                )
+
+        # Single clock read per frame shared by tracker + all debounce logic.
+        now_ts = time.time()
+        tracks, new_entries, terminated = self.tracker.update(det_dicts, timestamp=now_ts)
+        self.last_tracks = tracks
+        model_id = getattr(self, "model_id", "yolo26n")
+
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
         if new_faces_detected and self.last_faces and self.face_recognizer is not None:
             try:
                 assignments = associate_faces_to_tracks(tracks, self.last_faces)
+                # Provenance links for face-anchored tracks the gates cannot
+                # see (extreme close-ups): fill only unassigned slots so the
+                # Hungarian optimum for real tracks is never disturbed.
+                for trk_id, face_info in link_synthetic_tracks(tracks, self.last_faces).items():
+                    assignments.setdefault(trk_id, face_info)
                 wl_store = get_watchlist_store()
                 crop_frame = getattr(self, "_last_face_frame", infer_frame)
                 track_by_id = {t.track_id: t for t in tracks}

@@ -30,6 +30,7 @@ class Track:
     match_history: list[dict[str, Any]] = field(default_factory=list)
     last_bio_frame: int = -999
     prev_bbox_norm: tuple[float, float, float, float] | None = None
+    synthetic: bool = False  # True when the box was projected from a face (no YOLO body evidence)
 
     @property
     def center(self) -> tuple[float, float]:
@@ -223,7 +224,7 @@ class CentroidTracker:
     def update(self, detections: list[dict[str, Any]], timestamp: float) -> tuple[list[Track], list[Track], list[Track]]:
         """Update with detections. Returns (all_tracks, new_entries, terminated).
 
-        detections: list of {bbox_norm, class_name, class_id, confidence}
+        detections: list of {bbox_norm, class_name, class_id, confidence, synthetic?}
         """
         # age existing
         for t in self.tracks.values():
@@ -292,6 +293,9 @@ class CentroidTracker:
                     inv_smooth * previous[3] + smooth * bbox[3],
                 )
                 trk.confidence = float(det["confidence"])
+                # Provenance follows the evidence: a real detection clears the
+                # face-anchored flag, a virtual re-hit keeps it.
+                trk.synthetic = bool(det.get("synthetic", False))
                 trk.age = 0
                 trk.hits += 1
                 trk.last_seen = timestamp
@@ -364,6 +368,7 @@ class CentroidTracker:
                 first_seen=timestamp,
                 last_seen=timestamp,
                 trajectory=[((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)],
+                synthetic=bool(det.get("synthetic", False)),
             )
             self.tracks[tid] = trk
             new_entries.append(trk)

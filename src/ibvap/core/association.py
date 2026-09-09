@@ -93,6 +93,85 @@ def linear_sum_assignment_numpy(cost_matrix: np.ndarray) -> tuple[np.ndarray, np
         return r[order], c[order]
 
 
+def _box_iou(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> float:
+    """Intersection-over-union for normalized x1,y1,x2,y2 boxes."""
+    ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+    ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+    iw, ih = ix2 - ix1, iy2 - iy1
+    if iw <= 0.0 or ih <= 0.0:
+        return 0.0
+    inter = iw * ih
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0.0 else 0.0
+
+
+def project_person_box_from_face(
+    face_bbox_norm: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    """Project an approximate person box from a face-only (orphan) detection.
+
+    When someone stands so close that YOLO sees no body, the quality-passed
+    face is the only evidence. Expand it anthropometrically (~2.2x face
+    width, body extending ~6x face height downward from just above the
+    face top) so the tracker can hold an ID and zones have a footpoint.
+    The 6x window is fitted into the frame (extending upward when the
+    bottom clamps) so the face-to-body scale stays plausible for the
+    association gate even on extreme close-ups.
+    Returns None for degenerate face boxes. Coordinates clamped to [0, 1].
+    """
+    fx1, fy1, fx2, fy2 = (float(v) for v in face_bbox_norm)
+    fw, fh = fx2 - fx1, fy2 - fy1
+    if fw <= 0.0 or fh <= 0.0:
+        return None
+    fcx = (fx1 + fx2) / 2.0
+    body_w = 2.2 * fw
+    body_h = 6.0 * fh
+    x1 = max(0.0, fcx - body_w / 2.0)
+    x2 = min(1.0, fcx + body_w / 2.0)
+    bottom = min(1.0, fy1 - 0.1 * fh + body_h)
+    top = bottom - body_h
+    if top < 0.0:
+        top = 0.0
+        bottom = min(1.0, top + body_h)
+    y1, y2 = top, bottom
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return (x1, y1, x2, y2)
+
+
+def link_synthetic_tracks(
+    tracks: list[Track],
+    faces: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Link face-anchored (synthetic) tracks directly to their spawning faces.
+
+    Provenance, not geometry: a synthetic box was derived from a face, so the
+    scale gate (built for real body boxes) must not veto the link. Only fills
+    tracks the Hungarian pass left unassigned - callers merge with setdefault.
+    A face overlapping any real person track is never linked (it belongs to
+    that track; misattributing a CRITICAL identity is worse than missing one).
+    """
+    real_boxes = [t.bbox_norm for t in tracks if t.class_name == "person" and not getattr(t, "synthetic", False)]
+    links: dict[int, dict[str, Any]] = {}
+    for track in tracks:
+        if not getattr(track, "synthetic", False):
+            continue
+        for face in faces:
+            if not face.get("quality_passed", False):
+                continue
+            fb = face["bbox_norm"]
+            if _box_iou(fb, track.bbox_norm) <= 0.0:
+                continue
+            if any(_box_iou(fb, rb) > 0.0 for rb in real_boxes):
+                continue
+            links[track.track_id] = face
+            break
+    return links
+
+
 def associate_faces_to_tracks(
     tracks: list[Track],
     faces: list[dict[str, Any]],
