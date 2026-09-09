@@ -17,8 +17,19 @@ def test_ip_webcam_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(probe_module.av, "open", fake_open)
 
+    # Probing a private IP requires an explicit operator-style policy now.
+    import ipaddress
+
+    from ibvap.core.ssrf import SSRFPolicy
+
+    policy = SSRFPolicy(
+        allowed_schemes=frozenset({"http", "https", "rtsp", "rtsps"}),
+        allowed_hosts=None,
+        allowed_ports=None,
+        site_cidr_allowlist=(ipaddress.ip_network("192.168.0.0/16"),),
+    )
     try:
-        probe_module.probe_url("http://192.168.1.20:8080/video", timeout=3)
+        probe_module.probe_url("http://192.168.1.20:8080/video", timeout=3, policy=policy)
     except probe_module.ProbeError as error:
         assert error.code == "open_failed"
     assert calls == [
@@ -70,6 +81,31 @@ def test_unsaved_test_private_with_allowlist_synthetic_ok(api_client: TestClient
     assert data["result"] == "ok"
     assert data["probe"] is not None
     assert data["probe"]["codec"] == "h264"
+
+
+def test_private_endpoint_blocked_despite_request_allowlist(api_client: TestClient) -> None:
+    """Caller-supplied CIDRs must never authorize private IPs (server config owns policy)."""
+    resp = api_client.post(
+        "/api/v1/cameras/test",
+        json={
+            "endpoint": "http://192.168.1.10:8080/video",
+            "protocol": "http",
+            "site_cidr_allowlist": ["192.168.1.0/24"],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] == "blocked"
+
+
+def test_operator_allowlist_permits_configured_private(api_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operator-owned server setting (not the request) authorizes private ranges."""
+    monkeypatch.setenv("IBVAP_MEDIA__SITE_CIDR_ALLOWLIST", '["192.168.1.0/24"]')
+    resp = api_client.post(
+        "/api/v1/cameras/test",
+        json={"endpoint": "http://192.168.1.10:8080/video", "protocol": "http"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result"] != "blocked"
 
 
 def test_create_and_list_cameras(api_client: TestClient) -> None:
@@ -250,8 +286,18 @@ def test_droidcam_port_4747_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(probe_module.av, "open", fake_open)
 
+    import ipaddress
+
+    from ibvap.core.ssrf import SSRFPolicy
+
+    policy = SSRFPolicy(
+        allowed_schemes=frozenset({"http", "https", "rtsp", "rtsps"}),
+        allowed_hosts=None,
+        allowed_ports=None,
+        site_cidr_allowlist=(ipaddress.ip_network("10.0.0.0/8"),),
+    )
     try:
-        probe_module.probe_url("http://10.80.5.52:4747", timeout=3)
+        probe_module.probe_url("http://10.80.5.52:4747", timeout=3, policy=policy)
     except probe_module.ProbeError as error:
         assert error.code == "open_failed"
     assert len(calls) == 1

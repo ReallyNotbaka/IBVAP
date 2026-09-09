@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ibvap.config import Settings
 from ibvap.core.anpr import ANPRPipeline
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
@@ -43,6 +44,7 @@ from ibvap.core.ssrf import (
     _DEFAULT_ALLOWED_PORTS,
     SSRFError,
     SSRFPolicy,
+    preflight_stream_url,
     resolve_and_validate,
     validate_endpoint,
 )  # noqa: F401 - re-export
@@ -146,14 +148,8 @@ def _resolve_jailed_file(raw_path: str) -> Path:
                 return resolved
         except Exception:
             continue
-    # Outside jail: in dev/test allow existing video files (keeps tmp_path tests passing),
-    # otherwise reject without disclosing the absolute path.
-    if _is_dev_or_test_env():
-        try:
-            if resolved.exists() and resolved.is_file() and resolved.suffix.lower() in {".mp4", ".avi", ".mkv", ".mov", ".webm"}:
-                return resolved
-        except Exception:
-            pass
+    # Outside the jail: always reject, in every env. No dev/test fallback -
+    # secure by default. Tests use in-jail fixtures (tests/fixtures).
     raise HTTPException(
         status_code=400,
         detail={"code": "invalid_file_path", "message": "Invalid footage path"},
@@ -673,6 +669,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     if is_mjpeg_stream:
         open_kwargs["format"] = "mpjpeg"
 
+    # Server policy for connect-time checks (DNS resolved fresh below).
+    stream_policy = _policy_from_request(None)
+
     reconnect_delay = 1.0
     decode_errors = 0
     reconnect_count = 0
@@ -683,6 +682,10 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     while not stop.is_set():
         container = None
         try:
+            # Re-validate + re-resolve on EVERY attempt: DNS can rebind
+            # between reconnects. SSRFError flows into the reconnect/backoff
+            # handler below like any other connect failure.
+            preflight_stream_url(endpoint, stream_policy, timeout=3.0)
             container = av.open(endpoint, **open_kwargs)
             stream = next((s for s in container.streams if s.type == "video"), None)
             if stream is None:
@@ -828,8 +831,16 @@ class CameraTestResponse(BaseModel):
 
 
 def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
+    # SECURITY: caller-supplied CIDRs are never trusted for authorization.
+    # Only the operator-owned server setting (IBVAP_MEDIA__SITE_CIDR_ALLOWLIST)
+    # can permit private ranges. The request field is accepted for API compat
+    # but ignored here.
+    del allowlist
     nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for cidr in allowlist or []:
+    # Settings() failure must be loud (fail closed below on empty nets would
+    # silently change policy either way) - no broad except here.
+    configured = Settings().media.site_cidr_allowlist
+    for cidr in configured or []:
         try:
             nets.append(ipaddress.ip_network(cidr, strict=False))  # type: ignore[arg-type]
         except ValueError:
@@ -1012,7 +1023,7 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
     # Stage 6: Inspecting stream
     stage("Inspecting stream", "running")
     try:
-        probe, frames = probe_url(req.endpoint, timeout=3.0, max_frames=2)
+        probe, frames = probe_url(req.endpoint, timeout=3.0, max_frames=2, policy=policy)
         stage("Inspecting stream", "ok")
         stage("Decoding first frame", "ok")
         stage("Measuring stability", "ok")
@@ -1041,6 +1052,16 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
         code_map = {"no_video": "unsupported_media", "no_frames": "unreachable", "open_failed": "unreachable"}
         result = code_map.get(e.code, "error")  # type: ignore[arg-type]
         return CameraTestResponse(result=result, reason_code=e.code, safe_message=str(e), stages=stages, probe=None)  # type: ignore[arg-type]
+    except SSRFError as e:
+        # Redirect target (or rebound DNS) failed validation inside the probe.
+        stage("Inspecting stream", "failed")
+        return CameraTestResponse(
+            result="blocked" if e.code.startswith("blocked") else "error",
+            reason_code=e.code,
+            safe_message=e.safe_message,
+            stages=stages,
+            probe=None,
+        )
     except Exception as e:
         stage("Inspecting stream", "failed")
         return CameraTestResponse(result="error", reason_code="probe_failed", safe_message=str(e), stages=stages)

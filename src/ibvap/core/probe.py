@@ -17,6 +17,8 @@ from urllib.parse import urlparse, urlunparse
 
 import av
 
+from ibvap.core.ssrf import DEFAULT_POLICY, SSRFPolicy, preflight_stream_url
+
 
 def normalize_mjpeg_url(url: str) -> str:
     """Fix up phone URLs. Most folks just type IP:port, we add /video.
@@ -66,14 +68,20 @@ def probe_url(
     url: str,
     timeout: float = 5.0,
     max_frames: int = 5,
+    policy: SSRFPolicy | None = None,
 ) -> tuple[ProbeResult, list[FrameProbe]]:
     """Try opening the URL, check for a video track, decode a couple frames.
 
     Raises ProbeError if there's no video, nothing decodes, or it times out.
+    When policy is given, the URL is preflighted first (DNS + redirect
+    inspection) and SSRFError propagates on denial.
     Phone feeds need format="mpjpeg" or ffmpeg sits there guessing forever.
     Retries 3x on those since phone wifi drops packets a lot.
     """
     url = normalize_mjpeg_url(url)
+    if policy is None:
+        policy = DEFAULT_POLICY
+    preflight_stream_url(url, policy, timeout=min(timeout, 3.0))
     start = time.monotonic()
     # FFmpeg-level network timeout in microseconds.
     # Do NOT pass timeout= kwarg to av.open() — PyAV's I/O callback

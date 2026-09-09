@@ -13,7 +13,9 @@ import ipaddress
 import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 
 # Blocked networks per spec 21.1 - always deny
@@ -184,36 +186,113 @@ def validate_resolved_ips(ips: list[str], policy: SSRFPolicy = DEFAULT_POLICY) -
             )
 
 
-def resolve_and_validate(host: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0) -> list[str]:
+def resolve_and_validate(host: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0, bypass_cache: bool = False) -> list[str]:
     """Resolve host and validate all returned IPs. Returns list of IP strings.
 
     Avoid mutating the process-wide socket timeout. DNS resolution itself has no per-call timeout
     in the stdlib, while the actual stream connection should enforce timeouts at the I/O layer.
     Successful lookups are cached briefly (TTL) to avoid redundant socket/DNS IO on
     repeated probes; cached IPs are still re-validated against the current policy.
+    Pass bypass_cache=True on reconnect paths: a cached answer would hide DNS
+    rebinding for the whole TTL window.
     """
     _ = timeout
     now = time.monotonic()
-    with _DNS_CACHE_LOCK:
-        cached = _DNS_CACHE.get(host)
-        if cached is not None and (now - cached[1]) < _DNS_CACHE_TTL:
-            ips = list(cached[0])
-            # Re-validate against current policy (policy may differ per site).
-            try:
-                validate_resolved_ips(ips, policy)
-            except SSRFError:
-                # Stale/blocked under new policy — drop cache entry and re-resolve.
-                _DNS_CACHE.pop(host, None)
-                raise
-            return ips
+    if not bypass_cache:
+        with _DNS_CACHE_LOCK:
+            cached = _DNS_CACHE.get(host)
+            if cached is not None and (now - cached[1]) < _DNS_CACHE_TTL:
+                ips = list(cached[0])
+                # Re-validate against current policy (policy may differ per site).
+                try:
+                    validate_resolved_ips(ips, policy)
+                except SSRFError:
+                    # Stale/blocked under new policy — drop cache entry and re-resolve.
+                    _DNS_CACHE.pop(host, None)
+                    raise
+                return ips
     try:
         infos = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
         raise SSRFError("dns_failed", f"DNS resolution failed for {host}: {e}") from e
     ips: list[str] = list(dict.fromkeys(str(info[4][0]) for info in infos))
     validate_resolved_ips(ips, policy)
-    with _DNS_CACHE_LOCK:
-        _DNS_CACHE[host] = (list(ips), now)
+    if not bypass_cache:
+        with _DNS_CACHE_LOCK:
+            _DNS_CACHE[host] = (list(ips), now)
+    return ips
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
+        raise _RedirectFound(newurl)
+
+
+class _RedirectFound(Exception):
+    def __init__(self, location: str) -> None:
+        super().__init__(location)
+        self.location = location
+
+
+def check_http_redirect(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0, _depth: int = 0) -> None:
+    """Inspect HTTP redirect targets without following them into ffmpeg.
+
+    FFmpeg follows 301/302 internally, so a validated public URL can land on
+    an internal host. Headers are fetched manually (redirects refused here);
+    up to 3 chained Location targets are validated against the policy, else
+    SSRFError("blocked_redirect", ...) is raised. Non-HTTP schemes, missing
+    Location, and unreachable origins return silently: DNS validation in
+    preflight_stream_url is the hard gate, this is best-effort depth.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        return
+    if _depth >= 3:
+        return
+    location: str | None = None
+    opener = urllib.request.build_opener(_NoRedirect)
+    for method in ("HEAD", "GET"):
+        headers = {"Range": "bytes=0-0"} if method == "GET" else {}
+        req = urllib.request.Request(url, method=method, headers=headers)
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                location = resp.headers.get("Location")
+                break
+        except _RedirectFound as found:
+            location = found.location
+            break
+        except urllib.error.HTTPError as e:
+            # Server alive but HEAD unsupported -> bounded Range-GET retry.
+            # Any other HTTP status is definitive (no redirect info to find).
+            if e.code in (405, 501):
+                continue
+            return
+        except Exception:
+            # Unreachable origin: nothing to inspect; DNS validation above
+            # is the hard gate. Do not burn a second timeout on GET.
+            return
+    if not location:
+        return
+    target = urllib.parse.urljoin(url, location)
+    try:
+        validate_endpoint(target, policy)
+        target_host = urllib.parse.urlparse(target).hostname or ""
+        if target_host:
+            resolve_and_validate(target_host, policy, timeout=timeout)
+    except SSRFError as e:
+        raise SSRFError("blocked_redirect", f"Redirect target blocked ({e.code})") from e
+    check_http_redirect(target, policy, timeout=timeout, _depth=_depth + 1)
+
+
+def preflight_stream_url(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0) -> list[str]:
+    """Validate + resolve + redirect-inspect a stream URL before av.open.
+
+    Call on EVERY connect/reconnect: DNS can rebind between attempts.
+    Returns resolved IPs. Raises SSRFError on any denial.
+    """
+    parsed = validate_endpoint(url, policy)
+    ips = resolve_and_validate(parsed.hostname or "", policy, timeout=timeout, bypass_cache=True)
+    check_http_redirect(url, policy, timeout=timeout)
     return ips
 
 
