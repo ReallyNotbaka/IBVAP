@@ -330,3 +330,20 @@ def get_shared_detector_handle() -> ThreadSafeDetectorHandle:
         initial = ONNXDetectorProvider(str(p)) if p.exists() else MockPersonDetector(model_id="yolo26n")
         _GLOBAL_DETECTOR_HANDLE = ThreadSafeDetectorHandle(initial, active_model_name="yolo26n")
     return _GLOBAL_DETECTOR_HANDLE
+
+
+def warmup_shared_detector() -> ThreadSafeDetectorHandle:
+    """Load the shared YOLO session and run one dummy inference.
+
+    Call once at app boot (see lifespan): pays the ~1.2s model load plus
+    first-inference GPU warmup up front so the first camera connects fast
+    instead of stalling its worker. Idempotent via the shared handle.
+    """
+    handle = get_shared_detector_handle()
+    try:
+        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        with handle.acquire() as det:
+            det.detect(dummy, 0)
+    except Exception as ex:
+        logger.warning("shared_detector_warmup_failed: %s", str(ex)[:200])
+    return handle

@@ -66,6 +66,7 @@ _ALLOWED: dict[CameraState, set[CameraState]] = {
     },
     CameraState.CONNECTING: {
         CameraState.AUTHENTICATING,
+        CameraState.STREAMING,  # reconnect fast-path: already-provisioned stream resumes
         CameraState.UNREACHABLE,
         CameraState.FAILED,
         CameraState.DISABLED,

@@ -49,6 +49,29 @@ def test_reconnect_bumps_epoch() -> None:
     assert sm.history[-1].stream_epoch == sm.stream_epoch
 
 
+def test_reconnect_path_reaches_streaming() -> None:
+    """The reconnect endpoint's sequence must be legal: already-provisioned
+    streams resume without redoing the auth/probe chain."""
+    sm = CameraStateMachine(camera_id="cam-6")
+    for s in [
+        CameraState.VALIDATING,
+        CameraState.RESOLVING,
+        CameraState.CONNECTING,
+        CameraState.AUTHENTICATING,
+        CameraState.PROBING,
+        CameraState.DECODING,
+        CameraState.PREVIEW_READY,
+        CameraState.SAVING,
+        CameraState.STARTING,
+        CameraState.STREAMING,
+    ]:
+        sm.transition(s, reason="r", safe_message="ok")
+    sm.transition(CameraState.RECONNECTING, reason="reconnect", safe_message="reconnect")
+    sm.transition(CameraState.CONNECTING, reason="connect", safe_message="connect")
+    sm.transition(CameraState.STREAMING, reason="streaming", safe_message="streaming")
+    assert sm.state == CameraState.STREAMING
+
+
 def test_disable_never_auto_restarts() -> None:
     sm = CameraStateMachine(camera_id="cam-4")
     sm.transition(CameraState.VALIDATING, reason="r", safe_message="ok")

@@ -103,3 +103,18 @@ class TestModelDownloadManager:
         mgr.save_model_file("yolo26s", content)
         assert target_file.exists() or (tmp_path / "yolo26s.onnx").exists()
         assert mgr.get_or_create_progress("yolo26s").status == "ready"
+
+
+def test_warmup_shared_detector_initializes_handle() -> None:
+    """App boot warmup must leave the shared YOLO handle ready (no per-camera load)."""
+    import ibvap.core.model_manager as mm
+
+    mm._GLOBAL_DETECTOR_HANDLE = None
+    try:
+        handle = mm.warmup_shared_detector()
+        assert handle is not None
+        with handle.acquire() as det:
+            dets = det.detect(np.zeros((64, 64, 3), dtype=np.uint8), 0)
+            assert isinstance(dets, list)
+    finally:
+        mm._GLOBAL_DETECTOR_HANDLE = None

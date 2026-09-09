@@ -88,7 +88,7 @@ def _redirect_server(target: str) -> tuple[object, int]:
         def do_HEAD(self) -> None:
             self.do_GET()
 
-        def log_message(self, *a: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     srv = HTTPServer(("127.0.0.1", 0), H)

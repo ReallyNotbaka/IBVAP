@@ -85,8 +85,11 @@ class NightDetector:
             cv2.accumulateWeighted(gray_f, self._bg, 0.02)
 
         diff = cv2.absdiff(gray_f, self._bg)  # type: ignore[arg-type]
-        # In night mode, adapt threshold to prevent sensor grain noise
-        threshold_val = 30 if self._mode == "night" else 25
+        # Night threshold 12 (day stays 25): calibrated from the response
+        # curve - dark-clothed movers (contrast ~14-16) vanish above ~20,
+        # while static sensor grain and global illumination steps still read
+        # zero through the open+area+persistence gates. See test_night_*.
+        threshold_val = 12 if self._mode == "night" else 25
         _, thresh = cv2.threshold(diff, threshold_val, 255, cv2.THRESH_BINARY)
         cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, self._open_kernel)
         motion_pixels = int(np.count_nonzero(cleaned))

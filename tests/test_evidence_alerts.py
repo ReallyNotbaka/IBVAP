@@ -5,6 +5,8 @@ from ibvap.core.evidence import PacketRingBuffer
 
 
 def test_ring_buffer_manifest() -> None:
+    from pathlib import Path
+
     rb = PacketRingBuffer(max_seconds=5.0, max_bytes=1024 * 1024)
     rb.push(b"keyframe-data", is_keyframe=True)
     rb.push(b"p1", is_keyframe=False)
@@ -13,6 +15,10 @@ def test_ring_buffer_manifest() -> None:
     manifest = rb.manifest_for("ev-1", snap, clip)
     assert manifest.event_id == "ev-1"
     assert manifest.snapshot_sha256 is not None
+    for attr in ("clip_path", "snapshot_path"):
+        p = getattr(manifest, attr, None)
+        if p:
+            Path(p).unlink(missing_ok=True)
 
 
 def test_alert_workflow() -> None:

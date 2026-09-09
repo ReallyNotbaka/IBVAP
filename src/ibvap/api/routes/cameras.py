@@ -725,7 +725,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
         analysis_ready.set()
         ocr_executor.shutdown(wait=False, cancel_futures=True)
-        _ACTIVE_PIPELINES.pop(camera_id, None)
+        _release_pipeline(camera_id, pipeline)
         return
 
     # Live path (phones, RTSP cams). Two outputs from one demux:
@@ -870,7 +870,32 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                     container.close()
     analysis_ready.set()
     ocr_executor.shutdown(wait=False, cancel_futures=True)
-    _ACTIVE_PIPELINES.pop(camera_id, None)
+    _release_pipeline(camera_id, pipeline)
+
+
+def _release_pipeline(camera_id: str, pipeline: object) -> None:
+    """Remove a camera pipeline only if it is still ours.
+
+    A replaced (reconnected) worker owns the current entry; a dying old
+    worker must not pull it out from underneath the replacement.
+    """
+    if _ACTIVE_PIPELINES.get(camera_id) is pipeline:
+        _ACTIVE_PIPELINES.pop(camera_id, None)
+
+
+def _stop_worker(camera_id: str, timeout: float = 2.0) -> bool:
+    """Signal a camera worker to stop and wait for exit (bounded).
+
+    Returns True when no worker thread remains. A thread stuck in av.open
+    past the timeout keeps running briefly (duplicate decode window), but
+    the common fast-exit case is fully serialized before the caller proceeds.
+    """
+    old = _WORKERS.pop(camera_id, None)
+    if old is None:
+        return True
+    old[0].set()
+    old[1].join(timeout=timeout)
+    return not old[1].is_alive()
 
 
 def _start_camera_worker(camera_id: str) -> None:
@@ -1451,9 +1476,6 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
             playback["state"] = "stopped"
             _CAMERAS[camera_id]["observed_state"] = "DISABLED"
             _CAMERAS[camera_id]["desired_state"] = "DISABLED"
-            worker = _WORKERS.get(camera_id)
-            if worker:
-                worker[0].set()
             camera = _CAMERAS.pop(camera_id)
             _STATE_MACHINES.pop(camera_id, None)
             _HEALTH.pop(camera_id, None)
@@ -1465,6 +1487,13 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
                 # Never unlink outside the upload jail.
                 _safe_unlink_inside_jail(str(camera["endpoint"]))
         state = dict(playback)
+    if action == "stop":
+        # Outside the playback lock: join may wait on the worker loop, which
+        # takes the same lock per iteration. Clears the leaked worker entry,
+        # pipeline, and frame condition the old path left behind.
+        _stop_worker(camera_id)
+        _ACTIVE_PIPELINES.pop(camera_id, None)
+        _FRAME_CONDITIONS.pop(camera_id, None)
     if action in {"pause", "resume", "restart"}:
         _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"
     return state
@@ -1530,10 +1559,10 @@ async def reconnect_camera(camera_id: str) -> dict[str, Any]:
             cam["observed_state"] = sm.state.value
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-    # Stop old worker and restart so stream actually resumes
-    old = _WORKERS.pop(camera_id, None)
-    if old:
-        old[0].set()  # signal stop
+    # Stop old worker and restart so stream actually resumes.
+    # Bounded join serializes the common fast-exit case; a thread stuck in
+    # av.open may still overlap briefly (its exit pop is identity-guarded).
+    _stop_worker(camera_id)
     _start_camera_worker(camera_id)
     return {k: v for k, v in cam.items() if not k.startswith("_")}
 
@@ -1546,9 +1575,7 @@ async def delete_camera(camera_id: str) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="Camera not found")
     # impact preview would be here - for Phase 2 we just delete
     del _CAMERAS[camera_id]
-    worker = _WORKERS.pop(camera_id, None)
-    if worker:
-        worker[0].set()
+    _stop_worker(camera_id)
     _STATE_MACHINES.pop(camera_id, None)
     _HEALTH.pop(camera_id, None)
     _FRAMES.pop(camera_id, None)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -51,6 +52,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = Settings()
     setup_logging(settings.app.log_level, settings.app.log_dir)
     app.state.settings = settings
+    # Warm the shared YOLO session now (~1s model load + first GPU
+    # inference): the first camera then connects fast instead of stalling
+    # its worker. Blocking IO stays off the event loop.
+    from ibvap.core.model_manager import warmup_shared_detector
+
+    await asyncio.to_thread(warmup_shared_detector)
     yield
 
 

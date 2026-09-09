@@ -58,7 +58,11 @@ class MiniPipeline:
         self.stream_epoch = stream_epoch
         self.detector_handle = detector_handle
         if detector is not None:
-            self.detector = detector
+            self.detector: DetectorProvider | None = detector
+        elif detector_handle is not None:
+            # Shared handle serves inference: skip the ~0.8s private ONNX
+            # session (and its GPU memory) per camera.
+            self.detector = None
         elif Path("models/yolo26n.onnx").exists():
             self.detector = ONNXDetectorProvider("models/yolo26n.onnx")
         else:
@@ -88,34 +92,32 @@ class MiniPipeline:
         self.face_stride = max(1, face_stride)
         self.max_face_size = max_face_size
         self.enable_face = enable_face
-        # Lazy face detector init - reuse model's Zoo weights, do not re-download
-        if face_detector is not None:
-            self.face_detector = face_detector  # injected (or mock)
-        elif enable_face and _FaceDetectorType is not None and Path("models/face_detection_yunet_2023mar.onnx").exists():
-            try:
-                self.face_detector = _FaceDetectorType()  # type: ignore[operator]
-            except Exception:
-                self.face_detector = None
-        else:
-            self.face_detector = None
-
-        if face_recognizer is not None:
-            self.face_recognizer = face_recognizer
-        elif enable_face and Path("models/face_recognition_sface_2021dec.onnx").exists():
-            try:
-                from ibvap.core.face import FaceRecognizer
-
-                self.face_recognizer = FaceRecognizer()
-            except Exception:
-                self.face_recognizer = None
-        else:
-            self.face_recognizer = None
+        # Face models are heavy (~1s YuNet+SFace): construct lazily on the
+        # first face-stride frame (see _ensure_face_models), not at camera
+        # start, so decoding begins immediately. Injected instances pass through.
+        self.face_detector = face_detector
+        self.face_recognizer = face_recognizer
 
         self.last_faces: list[dict] = []
         self.faces_analyzed = 0
         self.frames_skipped = 0
         # Cache key for the rule-engine zone mirror (rebuilt only on change).
         self._rule_zone_id: str | None = None
+
+    def _ensure_face_models(self) -> None:
+        """Construct YuNet/SFace on first use. Reuses Zoo weights, no downloads."""
+        if self.face_detector is None and _FaceDetectorType is not None and Path("models/face_detection_yunet_2023mar.onnx").exists():
+            try:
+                self.face_detector = _FaceDetectorType()  # type: ignore[operator]
+            except Exception:
+                self.face_detector = None
+        if self.face_recognizer is None and Path("models/face_recognition_sface_2021dec.onnx").exists():
+            try:
+                from ibvap.core.face import FaceRecognizer
+
+                self.face_recognizer = FaceRecognizer()
+            except Exception:
+                self.face_recognizer = None
 
     def reset_epoch(self, new_epoch: int) -> None:
         """Reset stream epoch and clear all per-track alert/latch state."""
@@ -220,9 +222,11 @@ class MiniPipeline:
                 self.model_id = getattr(det, "model_id", "yolo26n")
                 self.runtime = getattr(det, "runtime", "directml")
         else:
-            detections = self.detector.detect(infer_frame, self.frame_idx)
-            self.model_id = getattr(self.detector, "model_id", "yolo26n")
-            self.runtime = getattr(self.detector, "runtime", "cpu")
+            detector = self.detector
+            assert detector is not None  # handle branch above always sets one
+            detections = detector.detect(infer_frame, self.frame_idx)
+            self.model_id = getattr(detector, "model_id", "yolo26n")
+            self.runtime = getattr(detector, "runtime", "cpu")
 
         det_dicts = [
             {
@@ -240,6 +244,8 @@ class MiniPipeline:
         # to virtual person boxes below so the tracker holds them normally.
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
         new_faces_detected = False
+        if self.enable_face and (self.face_detector is None or self.face_recognizer is None):
+            self._ensure_face_models()
         if self.enable_face and self.face_detector is not None:
             # Run YuNet only every face_stride sampled frames to save ~8ms per frame
             sampled_idx = self.frame_idx // self.sample_stride if self.sample_stride > 1 else self.frame_idx

@@ -363,3 +363,99 @@ def test_create_with_credentials_but_no_key_rejected(api_client: TestClient, mon
     )
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "credential_storage_unavailable"
+
+
+def _create_file_camera(c: TestClient, name: str) -> str:
+    resp = c.post(
+        "/api/v1/cameras",
+        json={
+            "name": name,
+            "site_id": "00000000-0000-0000-0000-000000000007",
+            "source_type": "video_footage",
+            "endpoint": "tests/fixtures/test_upload_face.mp4",
+            "protocol": "file",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["id"]
+
+
+def test_playback_stop_cleans_worker_state(api_client: TestClient) -> None:
+    """Playback stop must not leak the worker entry, pipeline, or camera."""
+    from ibvap.api.routes import cameras as C
+    from tests.conftest import wait_until
+
+    c = api_client
+    cam_id = _create_file_camera(c, "Stop camera")
+    try:
+        assert wait_until(lambda: C._FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=8.0)
+        assert c.post(f"/api/v1/cameras/{cam_id}/playback/stop").status_code == 200
+        assert cam_id not in C._WORKERS
+        assert cam_id not in C._ACTIVE_PIPELINES
+        assert cam_id not in C._CAMERAS
+    finally:
+        if cam_id in C._CAMERAS:
+            c.delete(f"/api/v1/cameras/{cam_id}")
+
+
+def test_reconnect_replaces_dead_worker(api_client: TestClient) -> None:
+    """Reconnect joins the old worker: no duplicate decoders afterwards."""
+    from ibvap.api.routes import cameras as C
+    from tests.conftest import wait_until
+
+    c = api_client
+    cam_id = _create_file_camera(c, "Reconnect camera")
+    try:
+        assert wait_until(lambda: C._FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=8.0)
+        old_thread = C._WORKERS[cam_id][1]
+        assert c.post(f"/api/v1/cameras/{cam_id}/reconnect").status_code == 200
+        assert not old_thread.is_alive()
+        assert C._WORKERS[cam_id][1] is not old_thread
+        assert wait_until(lambda: C._FRAME_VERSIONS.get(cam_id, 0) >= 1, timeout_s=8.0)
+    finally:
+        if cam_id in C._CAMERAS:
+            c.delete(f"/api/v1/cameras/{cam_id}")
+
+
+def test_release_pipeline_only_pops_own() -> None:
+    """A dying worker must never pull the pipeline out from under its replacement."""
+    from ibvap.api.routes import cameras as C
+
+    sentinel = object()
+    C._ACTIVE_PIPELINES["cid-x"] = sentinel
+    try:
+        C._release_pipeline("cid-x", object())
+        assert C._ACTIVE_PIPELINES["cid-x"] is sentinel
+        C._release_pipeline("cid-x", sentinel)
+        assert "cid-x" not in C._ACTIVE_PIPELINES
+    finally:
+        C._ACTIVE_PIPELINES.pop("cid-x", None)
+
+
+def test_stop_worker_joins_thread() -> None:
+    """_stop_worker pops, signals, waits bounded, and reports exit status."""
+    import threading
+
+    from ibvap.api.routes import cameras as C
+
+    never = threading.Event()
+    stuck = threading.Thread(target=never.wait, daemon=True)
+    stuck.start()
+    C._WORKERS["cid-stuck"] = (threading.Event(), stuck)
+    try:
+        assert C._stop_worker("cid-stuck", timeout=0.2) is False
+        assert "cid-stuck" not in C._WORKERS
+    finally:
+        C._WORKERS.pop("cid-stuck", None)
+        never.set()
+
+    done = threading.Event()
+    done.set()
+    quick = threading.Thread(target=lambda: done.wait(0.01), daemon=True)
+    quick.start()
+    quick.join(timeout=2.0)
+    C._WORKERS["cid-quick"] = (threading.Event(), quick)
+    try:
+        assert C._stop_worker("cid-quick", timeout=2.0) is True
+    finally:
+        C._WORKERS.pop("cid-quick", None)

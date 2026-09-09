@@ -532,3 +532,23 @@ def test_loiter_realerts_new_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
         clock.now += 1.0
     loiters = [e for e in list_events() if e["event_type"] == "suspicious_loitering"]
     assert len(loiters) == 2
+
+
+def test_face_models_initialize_lazily() -> None:
+    """Camera start must not pay YuNet/SFace construction; first face frame does."""
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-lazy-face", stream_epoch=1, detector=_EmptyDetector())
+    assert pipe.face_detector is None
+    assert pipe.face_recognizer is None
+    pipe.process_frame(_blank())
+    assert pipe.face_detector is not None
+    assert pipe.face_recognizer is not None
+
+
+def test_pipeline_with_handle_skips_private_detector() -> None:
+    """Shared handle serves inference: no ~0.8s private ONNX session per camera."""
+    from ibvap.core.model_manager import get_shared_detector_handle
+
+    clear_all()
+    pipe = MiniPipeline(camera_id="cam-shared-handle", stream_epoch=1, detector_handle=get_shared_detector_handle())
+    assert pipe.detector is None
