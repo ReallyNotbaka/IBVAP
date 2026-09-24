@@ -100,14 +100,13 @@ class ThreadSafeDetectorHandle:
 
     @contextmanager
     def acquire(self) -> Generator[DetectorProvider, None, None]:
-        """Acquire detector access with one inference at a time for DirectML safety."""
+        """Acquire detector access. Readers can preprocess concurrently; session.run is serialized per-detector."""
         with self._cond:
             while self._is_writing:
                 self._cond.wait()
             self._active_readers += 1
         try:
-            with self._inference_lock:
-                yield self._detector
+            yield self._detector
         finally:
             with self._cond:
                 self._active_readers -= 1

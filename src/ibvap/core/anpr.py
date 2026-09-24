@@ -246,13 +246,18 @@ class ANPRPipeline:
         self,
         detector: PlateDetector | None = None,
         ocr: OCRReader | None = None,
+        max_history_tracks: int = 512,
     ) -> None:
         self.detector = detector or PlateDetector()
         self.ocr = ocr or OCRReader()
+        self.max_history_tracks = max_history_tracks
+        self._lock = threading.Lock()
         # Votes keyed by (stream_epoch, vehicle_id): tracker IDs restart at 1
         # on every epoch, so unscoped history would let a dead vehicle's votes
         # decide a new vehicle's plate.
         self._history: dict[tuple[int, int], list[str]] = {}
+        # Tracks last active monotonic timestamp for LRU and staleness eviction
+        self._last_active: dict[tuple[int, int], float] = {}
 
     def warmup(self) -> None:
         """Wake plate detection before the feed starts passing frames.
@@ -289,29 +294,78 @@ class ANPRPipeline:
 
     def consensus_for(self, vehicle_id: int, text: str, stream_epoch: int = 0) -> str:
         """Maintain sliding window of last 10 reads and return majority vote consensus."""
-        for key in [k for k in self._history if k[0] != stream_epoch]:
-            del self._history[key]
-        norm = normalize_plate(text)
-        val = norm if norm else text
-        hist = self._history.setdefault((stream_epoch, vehicle_id), [])
-        hist.append(val)
-        if len(hist) > 10:
-            hist.pop(0)
-        if len(hist) == 1:
-            return val
-        return Counter(hist).most_common(1)[0][0] if hist else val
+        with self._lock:
+            for k in list(self._history):
+                if k[0] != stream_epoch:
+                    self._history.pop(k, None)
+                    self._last_active.pop(k, None)
+            val = normalize_plate(text) or text
+            key = (stream_epoch, vehicle_id)
+            hist = self._history.setdefault(key, [])
+            hist.append(val)
+            if len(hist) > 10:
+                hist.pop(0)
+            self._last_active[key] = time.monotonic()
+
+            # Enforce bounded history capacity (O(1) oldest eviction)
+            if len(self._history) > self.max_history_tracks:
+                oldest_key = next(iter(self._history))
+                if oldest_key != key:
+                    self._history.pop(oldest_key, None)
+                    self._last_active.pop(oldest_key, None)
+
+            if len(hist) == 1:
+                return val
+            return Counter(hist).most_common(1)[0][0] if hist else val
+
+    def evict_dead_tracks(
+        self,
+        active_track_ids: set[int] | list[int] | None = None,
+        stream_epoch: int = 0,
+        grace_period_s: float = 2.0,
+    ) -> int:
+        """Evict vote history for tracks that are no longer active in the tracker.
+
+        A small grace period (e.g. 2s) allows in-flight asynchronous OCR futures
+        to complete and vote before the track history is removed.
+        Returns number of evicted tracks.
+        """
+        now = time.monotonic()
+        active_set = set(active_track_ids) if active_track_ids is not None else None
+        evicted = 0
+        with self._lock:
+            for key in list(self._history.keys()):
+                ep, tid = key
+                if ep != stream_epoch:
+                    self._history.pop(key, None)
+                    self._last_active.pop(key, None)
+                    evicted += 1
+                elif active_set is not None and tid not in active_set:
+                    last_ts = self._last_active.get(key, 0.0)
+                    if (now - last_ts) >= grace_period_s:
+                        self._history.pop(key, None)
+                        self._last_active.pop(key, None)
+                        evicted += 1
+        return evicted
 
     def votes_for(self, vehicle_id: int, text: str, stream_epoch: int = 0) -> int:
         """Agreeing votes for text in the current epoch window."""
-        return self._history.get((stream_epoch, vehicle_id), []).count(text)
+        with self._lock:
+            return self._history.get((stream_epoch, vehicle_id), []).count(text)
 
-    def process_vehicle_crop(self, vehicle_crop: np.ndarray, vehicle_id: int, stream_epoch: int = 0) -> PlateResult | None:
+    def process_vehicle_crop(
+        self,
+        vehicle_crop: np.ndarray,
+        vehicle_id: int,
+        stream_epoch: int = 0,
+        plate_boxes: list[tuple[float, float, float, float]] | None = None,
+    ) -> PlateResult | None:
         """Localize plate, extract candidates, score quality, and calculate consensus."""
         if vehicle_crop.size == 0 or len(vehicle_crop.shape) < 2:
             return None
 
         h, w = vehicle_crop.shape[:2]
-        boxes = self.detector.detect(vehicle_crop)
+        boxes = plate_boxes if plate_boxes is not None else self.detector.detect(vehicle_crop)
         candidates: list[PlateCandidate] = []
 
         if boxes:

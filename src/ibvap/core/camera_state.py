@@ -188,8 +188,8 @@ class CameraStateMachine:
         if not self.can_transition(target):
             raise ValueError(f"Illegal transition {self.state} -> {target}")
         prev = self.state
-        # stream epoch bumps on RECONNECTING entry and on STREAMING re-entry
-        if target == CameraState.RECONNECTING or (prev == CameraState.RECONNECTING and target == CameraState.CONNECTING):
+        # stream epoch bumps monotonically on RECONNECTING entry
+        if target == CameraState.RECONNECTING:
             self.stream_epoch = self._next_stream_epoch()
         self.state = target
         ts = datetime.now(UTC)

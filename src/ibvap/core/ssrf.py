@@ -38,7 +38,9 @@ _CONTROL_PLANE_NETS = [
 ]
 
 # Camera-relevant ports allowed by default; override via SSRFPolicy.allowed_ports.
-_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({80, 443, 554, 8554, 4747, 8080, 8000})
+_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({
+    80, 443, 554, 8554, 4747, 8080, 8000, 8081, 8082, 8008, 8888, 5544, 7070, 7447, 9997, 1935
+})
 
 
 @dataclass(frozen=True)
@@ -77,11 +79,12 @@ class SSRFError(ValueError):
 
 def _parse_strict(raw: str) -> urllib.parse.ParseResult:
     # Strict parser - reject credentials embedded in URL
-    if "@" in raw.split("?")[0].split("#")[0]:
+    clean = raw.strip().strip('"').strip("'")
+    if "@" in clean.split("?")[0].split("#")[0]:
         # url contains userinfo before host - spec says separate credential fields
         raise SSRFError("credential_in_url", "Credentials must be provided separately, not in URL")
     try:
-        parsed = urllib.parse.urlparse(raw)
+        parsed = urllib.parse.urlparse(clean)
     except Exception:
         raise SSRFError("invalid_url", "Invalid endpoint URL") from None
     if not parsed.scheme or not parsed.hostname:
@@ -234,26 +237,49 @@ class _RedirectFound(Exception):
         self.location = location
 
 
-def check_http_redirect(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0, _depth: int = 0) -> None:
+def check_http_redirect(
+    url: str,
+    policy: SSRFPolicy = DEFAULT_POLICY,
+    timeout: float = 3.0,
+    _depth: int = 0,
+    pinned_ip: str | None = None,
+) -> str | None:
     """Inspect HTTP redirect targets without following them into ffmpeg.
 
-    FFmpeg follows 301/302 internally, so a validated public URL can land on
-    an internal host. Headers are fetched manually (redirects refused here);
-    up to 3 chained Location targets are validated against the policy, else
-    SSRFError("blocked_redirect", ...) is raised. Non-HTTP schemes, missing
-    Location, and unreachable origins return silently: DNS validation in
-    preflight_stream_url is the hard gate, this is best-effort depth.
+    Security invariant: When pinned_ip is provided (via pin_stream_url),
+    HTTP requests connect directly to the authorized IP literal, preventing
+    DNS rebinding / TOCTOU during redirect inspection.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
-        return
+        return url
     if _depth >= 3:
-        return
+        return url
+
+    target_host = parsed.hostname
+    if pinned_ip:
+        ip_formatted = f"[{pinned_ip}]" if ":" in pinned_ip and not pinned_ip.startswith("[") else pinned_ip
+        port_suffix = f":{parsed.port}" if parsed.port is not None else ""
+        userinfo = ""
+        if parsed.username:
+            userinfo = urllib.parse.quote(parsed.username, safe="")
+            if parsed.password:
+                userinfo += ":" + urllib.parse.quote(parsed.password, safe="")
+            userinfo += "@"
+        connect_netloc = f"{userinfo}{ip_formatted}{port_suffix}"
+        connect_url = urllib.parse.urlunparse(parsed._replace(netloc=connect_netloc))
+        base_headers = {"Host": target_host, "User-Agent": "IBVAP-Probe/1.0"}
+    else:
+        connect_url = url
+        base_headers = {"User-Agent": "IBVAP-Probe/1.0"}
+
     location: str | None = None
     opener = urllib.request.build_opener(_NoRedirect)
     for method in ("HEAD", "GET"):
-        headers = {"Range": "bytes=0-0"} if method == "GET" else {}
-        req = urllib.request.Request(url, method=method, headers=headers)
+        headers = dict(base_headers)
+        if method == "GET":
+            headers["Range"] = "bytes=0-0"
+        req = urllib.request.Request(connect_url, method=method, headers=headers)
         try:
             with opener.open(req, timeout=timeout) as resp:
                 location = resp.headers.get("Location")
@@ -266,22 +292,70 @@ def check_http_redirect(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: 
             # Any other HTTP status is definitive (no redirect info to find).
             if e.code in (405, 501):
                 continue
-            return
+            return connect_url
         except Exception:
             # Unreachable origin: nothing to inspect; DNS validation above
             # is the hard gate. Do not burn a second timeout on GET.
-            return
+            return connect_url
     if not location:
-        return
+        return connect_url
+
     target = urllib.parse.urljoin(url, location)
     try:
         validate_endpoint(target, policy)
-        target_host = urllib.parse.urlparse(target).hostname or ""
-        if target_host:
-            resolve_and_validate(target_host, policy, timeout=timeout)
+        next_host = urllib.parse.urlparse(target).hostname or ""
+        next_ips = resolve_and_validate(next_host, policy, timeout=timeout, bypass_cache=True) if next_host else []
     except SSRFError as e:
         raise SSRFError("blocked_redirect", f"Redirect target blocked ({e.code})") from e
-    check_http_redirect(target, policy, timeout=timeout, _depth=_depth + 1)
+
+    # If redirects are not allowed by policy, reject even if target was otherwise valid
+    if not policy.allow_redirects:
+        raise SSRFError("blocked_redirect", "Redirects are not allowed by policy")
+
+    next_ip = next_ips[0] if next_ips else None
+    return check_http_redirect(target, policy, timeout=timeout, _depth=_depth + 1, pinned_ip=next_ip) or target
+
+
+def pin_stream_url(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0) -> tuple[str, list[str]]:
+    """Validate, resolve DNS, inspect redirects, and return (pinned_url, ips).
+
+    The hostname in url is replaced by the authorized resolved IP address.
+    This guarantees that subsequent network connections (e.g. av.open) cannot
+    be redirected or rebound to a different IP address (eliminates TOCTOU / DNS rebinding).
+    """
+    parsed = validate_endpoint(url, policy)
+    target_host = parsed.hostname or ""
+    # Security invariant: resolve and validate DNS BEFORE any HTTP connections or redirect checks
+    ips = resolve_and_validate(target_host, policy, timeout=timeout, bypass_cache=True)
+    if not ips:
+        raise SSRFError("unreachable", "Hostname did not resolve to an authorized IP")
+
+    pinned_ip = ips[0]
+    final_url = url
+    if parsed.scheme.lower() in ("http", "https"):
+        redirect_url = check_http_redirect(url, policy, timeout=timeout, pinned_ip=pinned_ip)
+        if redirect_url and redirect_url != url:
+            final_url = redirect_url
+            parsed_redirect = urllib.parse.urlparse(final_url)
+            if parsed_redirect.hostname and parsed_redirect.hostname != pinned_ip:
+                ips = resolve_and_validate(parsed_redirect.hostname, policy, timeout=timeout, bypass_cache=True)
+                if not ips:
+                    raise SSRFError("unreachable", "Redirect target did not resolve to an authorized IP")
+                pinned_ip = ips[0]
+                parsed = parsed_redirect
+
+    ip_formatted = f"[{pinned_ip}]" if ":" in pinned_ip and not pinned_ip.startswith("[") else pinned_ip
+    port_suffix = f":{parsed.port}" if parsed.port is not None else ""
+    userinfo = ""
+    if parsed.username:
+        userinfo = urllib.parse.quote(parsed.username, safe="")
+        if parsed.password:
+            userinfo += ":" + urllib.parse.quote(parsed.password, safe="")
+        userinfo += "@"
+
+    netloc = f"{userinfo}{ip_formatted}{port_suffix}"
+    pinned_url = urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    return pinned_url, ips
 
 
 def preflight_stream_url(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0) -> list[str]:
@@ -290,9 +364,7 @@ def preflight_stream_url(url: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout:
     Call on EVERY connect/reconnect: DNS can rebind between attempts.
     Returns resolved IPs. Raises SSRFError on any denial.
     """
-    parsed = validate_endpoint(url, policy)
-    ips = resolve_and_validate(parsed.hostname or "", policy, timeout=timeout, bypass_cache=True)
-    check_http_redirect(url, policy, timeout=timeout)
+    _, ips = pin_stream_url(url, policy, timeout=timeout)
     return ips
 
 

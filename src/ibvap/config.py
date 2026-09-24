@@ -24,6 +24,9 @@ class AppConfig(BaseModel):
     # CORS allowlist - comma-separated origins, validated at startup
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173", "http://localhost:8000"])
     enable_face_identity: bool = False
+    # WebSocket event transport: disabled by default (Phase 3 development preview).
+    # Production event transport uses REST polling on /api/v1/events (ADR-0005).
+    enable_ws: bool = False
 
 
 class DBConfig(BaseModel):

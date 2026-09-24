@@ -72,7 +72,10 @@ def redact_url(url: str) -> str:
         p = urlparse(url)
         changed = False
         if p.username or p.password:
-            netloc = p.hostname or ""
+            host = p.hostname or ""
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            netloc = host
             if p.port:
                 netloc = f"{netloc}:{p.port}"
             p = p._replace(netloc=netloc)
@@ -103,7 +106,10 @@ def build_authenticated_url(endpoint: str, username: str | None, password: str |
         userinfo = quote(username or "", safe="")
         if password:
             userinfo += ":" + quote(password, safe="")
-        netloc = f"{userinfo}@{p.hostname}"
+        host = p.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = f"{userinfo}@{host}"
         if p.port:
             netloc += f":{p.port}"
         return urlunparse(p._replace(netloc=netloc))

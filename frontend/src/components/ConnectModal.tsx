@@ -10,6 +10,17 @@ import {
   AlertTriangleIcon,
 } from "./Icons";
 
+function isFootagePath(value: string, protocol?: string): boolean {
+  const clean = value.trim().replace(/^["']|["']$/g, "").trim();
+  if (/^(https?|rtsps?|mjpeg|hls|whip|synthetic):\/\//i.test(clean)) return false;
+  return (
+    protocol === "file" ||
+    clean.startsWith("file://") ||
+    /^[a-zA-Z]:[/\\]/.test(clean) ||
+    (!clean.includes("://") && !/^(?:\d{1,3}\.){3}\d{1,3}/.test(clean) && /\.(mp4|mov|avi|mkv|webm)$/i.test(clean))
+  );
+}
+
 // Add-camera dialog. Handles phones (DroidCam :4747 / IP Webcam :8080) plus
 // normal RTSP cams. Builds http://ip:port/path, hits POST /cameras/test,
 // shows probe result, then POST /cameras on save. Port presets fill in
@@ -62,13 +73,29 @@ export const ConnectModal = memo(function ConnectModal() {
   }, []);
 
   const handleAddressChange = useCallback((raw: string) => {
-    const trimmed = raw.trim();
+    const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
+    if (isFootagePath(trimmed, protocol)) {
+      setAddress(trimmed);
+      setProtocol("file");
+      setPort("");
+      setStreamPath("");
+      return;
+    }
+
     let candidate = trimmed;
     if (!candidate.includes("://") && (candidate.includes(":") || candidate.includes("/"))) {
       candidate = "http://" + candidate;
     }
     try {
       const parsed = new URL(candidate);
+      if (parsed.username) {
+        setUsername(decodeURIComponent(parsed.username));
+        setShowAuth(true);
+      }
+      if (parsed.password) {
+        setPassword(decodeURIComponent(parsed.password));
+        setShowAuth(true);
+      }
       if (parsed.hostname) {
         setAddress(parsed.hostname);
         if (parsed.port) {
@@ -90,7 +117,7 @@ export const ConnectModal = memo(function ConnectModal() {
     } catch {
       // fallback to plain input
     }
-    setAddress(raw);
+    setAddress(trimmed);
   }, []);
 
   const handlePortChange = useCallback((val: string) => {
@@ -108,36 +135,44 @@ export const ConnectModal = memo(function ConnectModal() {
   }, []);
 
   const doTest = useCallback(async () => {
-    const cleanAddress = address.trim();
-    const cleanPort = port.trim();
-    let cleanProtocol = protocol.trim();
-    let cleanPath = streamPath.trim().replace(/^\/+/, "");
+    const cleanAddress = address.trim().replace(/^["']|["']$/g, "").trim();
+    const isFile = isFootagePath(cleanAddress, protocol);
 
-    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanProtocol) {
-      cleanProtocol = "http";
-      setProtocol("http");
-    } else if (cleanPort === "554" && !cleanProtocol) {
-      cleanProtocol = "rtsp";
-      setProtocol("rtsp");
-    }
-    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
-      cleanPath = "video";
-      setStreamPath("video");
-    }
+    let endpoint = "";
+    if (isFile) {
+      endpoint = cleanAddress;
+    } else {
+      const cleanPort = port.trim();
+      let cleanProtocol = protocol.trim();
+      let cleanPath = streamPath.trim().replace(/^\/+/, "");
 
-    if (!cleanAddress || !cleanPort || !cleanProtocol) {
-      setResult({ result: "error", safe_message: "Enter the device IP, port, and protocol before testing.", stages: [] });
-      setStep(1);
-      return;
-    }
+      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanProtocol) {
+        cleanProtocol = "http";
+        setProtocol("http");
+      } else if (cleanPort === "554" && !cleanProtocol) {
+        cleanProtocol = "rtsp";
+        setProtocol("rtsp");
+      }
+      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
+        cleanPath = "video";
+        setStreamPath("video");
+      }
 
-    const endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
+      if (!cleanAddress || !cleanPort || !cleanProtocol) {
+        setResult({ result: "error", safe_message: "Enter the device IP, port, and protocol before testing.", stages: [] });
+        setStep(1);
+        return;
+      }
+
+      endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
+    }
 
     setLoading(true);
     setStep(3);
     try {
       const data = await testCamera({
         endpoint,
+        protocol: isFile ? "file" : undefined,
         username: username || undefined,
         password: password || undefined,
         site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
@@ -152,24 +187,40 @@ export const ConnectModal = memo(function ConnectModal() {
   }, [address, port, protocol, streamPath, username, password]);
 
   const doSave = useCallback(async () => {
-    const cleanAddress = address.trim();
-    const cleanPort = port.trim();
-    let cleanProtocol = protocol.trim() || ((cleanPort === "4747" || cleanPort === "8080") ? "http" : cleanPort === "554" ? "rtsp" : "http");
-    let cleanPath = streamPath.trim().replace(/^\/+/, "");
-    if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
-      cleanPath = "video";
-    }
+    const cleanAddress = address.trim().replace(/^["']|["']$/g, "").trim();
+    const isFile = isFootagePath(cleanAddress, protocol);
 
-    if (!cleanAddress || !cleanPort || !cleanProtocol) {
-      setSaveError("Enter the device IP, port, and protocol before saving.");
-      return;
-    }
+    let endpoint = "";
+    let cameraName = "";
+    let cleanProtocol = protocol.trim();
+    let sourceType: "smartphone_ip_webcam" | "ip_camera" | "video_footage" = "ip_camera";
 
-    const endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
-    const isPhone = cleanPort === "4747" || cleanPort === "8080" || cleanPath.toLowerCase().includes("video");
-    const cameraName = cleanPort === "4747"
-      ? `Phone Camera (${cleanAddress})`
-      : `Camera ${cleanAddress || (Date.now() % 1000)}`;
+    if (isFile) {
+      endpoint = cleanAddress;
+      const fileName = cleanAddress.split(/[/\\]/).pop() || cleanAddress;
+      cameraName = `Footage (${fileName})`;
+      cleanProtocol = "file";
+      sourceType = "video_footage";
+    } else {
+      const cleanPort = port.trim();
+      cleanProtocol = cleanProtocol || ((cleanPort === "4747" || cleanPort === "8080") ? "http" : cleanPort === "554" ? "rtsp" : "http");
+      let cleanPath = streamPath.trim().replace(/^\/+/, "");
+      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
+        cleanPath = "video";
+      }
+
+      if (!cleanAddress || !cleanPort || !cleanProtocol) {
+        setSaveError("Enter the device IP, port, and protocol before saving.");
+        return;
+      }
+
+      endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
+      const isPhone = cleanPort === "4747" || cleanPort === "8080" || cleanPath.toLowerCase().includes("video");
+      cameraName = cleanPort === "4747"
+        ? `Phone Camera (${cleanAddress})`
+        : `Camera ${cleanAddress || (Date.now() % 1000)}`;
+      sourceType = isPhone ? "smartphone_ip_webcam" : "ip_camera";
+    }
 
     setSaving(true);
     setSaveError("");
@@ -181,7 +232,7 @@ export const ConnectModal = memo(function ConnectModal() {
         password: password || undefined,
         site_cidr_allowlist: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
         name: cameraName,
-        source_type: isPhone ? "smartphone_ip_webcam" : "ip_camera",
+        source_type: sourceType,
         protocol: cleanProtocol as any,
         temporary,
       });

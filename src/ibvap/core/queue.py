@@ -54,6 +54,8 @@ class BoundedQueue:
             self.dropped += len(self._q)
             self._q.clear()
             return None
+        self.dropped += len(self._q) - 1
+        self._q.clear()
         return item
 
     def get(self) -> object | None:

@@ -15,6 +15,9 @@ import {
   CloseIcon,
   PercentIcon,
 } from "../components/Icons";
+import { TacticalRadarModal } from "../components/TacticalRadarModal";
+import { MilitarySitrepModal } from "../components/MilitarySitrepModal";
+import { TargetDossierModal } from "../components/TargetDossierModal";
 
 const EMPTY_FENCE: [number, number][] = [];
 
@@ -119,6 +122,11 @@ export const Cockpit = memo(function Cockpit({
   const [drawingFenceFor, setDrawingFenceFor] = useState<string | null>(null);
   const [showFence, setShowFence] = useState(false);
   const [fenceSaveState, setFenceSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  // Tactical Novelty Feature Modals
+  const [radarOpen, setRadarOpen] = useState(false);
+  const [sitrepOpen, setSitrepOpen] = useState(false);
+  const [dossierOpen, setDossierOpen] = useState(false);
 
   const n = cameras.length;
   const soloCamera = useMemo(
@@ -241,7 +249,38 @@ export const Cockpit = memo(function Cockpit({
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Tactical Features Triggers */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRadarOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-mono font-semibold bg-emerald-950/50 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-900/60 transition-all cursor-pointer shadow-sm"
+              title="Open Tactical 2D BEV Radar"
+            >
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>BEV Radar</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSitrepOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-mono font-semibold bg-indigo-950/50 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-900/60 transition-all cursor-pointer shadow-sm"
+              title="Generate Military SITREP"
+            >
+              <span>Military SITREP</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDossierOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-mono font-semibold bg-slate-800/80 text-slate-200 border border-white/15 hover:bg-slate-700 transition-all cursor-pointer shadow-sm"
+              title="View Target Handover Dossiers"
+            >
+              <span>Target Dossier</span>
+            </button>
+          </div>
+
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
             Model:
           </span>
@@ -744,6 +783,11 @@ export const Cockpit = memo(function Cockpit({
           </div>
         </div>
       )}
+
+      {/* Tactical Novelty Modals */}
+      <TacticalRadarModal isOpen={radarOpen} onClose={() => setRadarOpen(false)} />
+      <MilitarySitrepModal isOpen={sitrepOpen} onClose={() => setSitrepOpen(false)} />
+      <TargetDossierModal isOpen={dossierOpen} onClose={() => setDossierOpen(false)} />
 
       {modalOpen ? <span className="hidden" data-testid="modal-open" /> : null}
     </div>

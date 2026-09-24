@@ -25,14 +25,6 @@ class Base(DeclarativeBase):
 
 
 def _uuid7() -> uuid.UUID:
-    # uuid7 available in Python 3.14+; fallback to uuid4 for 3.12
-    uuid7_fn = getattr(uuid, "uuid7", None)
-    if uuid7_fn is not None:
-        try:
-            return uuid7_fn()  # type: ignore[no-untyped-call]
-        except Exception:
-            pass
-    # Fallback: uuid4 is sufficient for Phase 1 (unique, not strictly sortable)
     return uuid.uuid4()
 
 
@@ -94,6 +86,12 @@ class Outbox(Base):
     dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_outbox_status_created_at", "status", "created_at"),
+        Index("ix_outbox_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_outbox_status_topic", "status", "topic"),
+    )
 
 
 class CredentialReference(Base):

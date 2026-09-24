@@ -42,6 +42,7 @@ def test_ip_webcam_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
                     "stimeout": "3000000",
                     "analyzeduration": "3000000",
                     "probesize": "500000",
+                    "follow_redirects": "0",
                 },
             },
         )
@@ -459,3 +460,34 @@ def test_stop_worker_joins_thread() -> None:
         assert C._stop_worker("cid-quick", timeout=2.0) is True
     finally:
         C._WORKERS.pop("cid-quick", None)
+
+
+def test_network_stream_with_video_extension_not_treated_as_file(api_client: TestClient) -> None:
+    """Network streams (RTSP/HTTP) ending in .mp4/.mkv must not be misclassified as local files."""
+    from ibvap.api.routes.cameras import _is_file_endpoint
+
+    assert not _is_file_endpoint("rtsp://192.168.1.50:554/live.mp4", "rtsp")
+    assert not _is_file_endpoint("rtsp://192.168.1.50:554/live.mp4", None)
+    assert not _is_file_endpoint("http://192.168.1.50:8080/stream.mp4", "http")
+    assert not _is_file_endpoint("http://192.168.1.50:8080/stream.mp4", None)
+    assert not _is_file_endpoint("192.168.1.50:554/live.mp4", None)
+
+    # Calling test endpoint with rtsp .mp4 URL must pass through to SSRF/network probe, not invalid_file_path
+    resp = api_client.post(
+        "/api/v1/cameras/test",
+        json={"endpoint": "rtsp://192.168.1.50:554/live.mp4", "protocol": "rtsp"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reason_code"] != "invalid_file_path"
+
+
+def test_clean_file_path_edge_cases() -> None:
+    """_clean_file_path handles various quote, space, and file URI permutations."""
+    from ibvap.api.routes.cameras import _clean_file_path
+
+    assert _clean_file_path('  " C:\\video.mp4 "  ') == "C:\\video.mp4"
+    assert _clean_file_path("file:///C:/video.mp4") == "C:/video.mp4"
+    assert _clean_file_path("file://localhost/C:/video.mp4") == "C:/video.mp4"
+    assert _clean_file_path("file://C:/video.mp4") == "C:/video.mp4"
+    assert _clean_file_path("file:\\\\\\C:\\video.mp4") == "C:\\video.mp4"
+

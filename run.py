@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import functools
+import os
 import shutil
 import subprocess
 import sys
@@ -172,6 +173,12 @@ def launch_browser_delayed(url: str, delay: float = 1.2) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(__file__).resolve().parent
+
+    # Default private CIDR allowlist for local IP camera streaming (DroidCam, IP Webcam, RTSP)
+    os.environ.setdefault(
+        "IBVAP_MEDIA__SITE_CIDR_ALLOWLIST",
+        '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]',
+    )
 
     env_created = bootstrap_environment(root)
     if env_created:

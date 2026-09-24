@@ -177,9 +177,10 @@ export async function fetchCameras(): Promise<Camera[]> {
 // tries to open + decode a few frames. Returns codec/res/fps for the preview step.
 export async function testCamera(payload: {
   endpoint: string;
+  protocol?: string;
   username?: string;
   password?: string;
-  site_cidr_allowlist: string[];
+  site_cidr_allowlist?: string[];
 }): Promise<TestResult> {
   const r = await fetch(base("/api/v1/cameras/test"), {
     method: "POST",
@@ -562,3 +563,123 @@ export async function deleteModelWeights(modelName: string): Promise<{ status: s
   if (!r.ok) throw new Error(data.detail || `Delete weights failed (${r.status})`);
   return data;
 }
+
+// Tactical Novelty Types & APIs: BEV Radar, Military SITREP, and Dossiers
+export type RadarBlip = {
+  track_id: number;
+  camera_id: string;
+  camera_name: string;
+  class_name: string;
+  threat_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  is_intrusion: boolean;
+  identity?: string | null;
+  x_m: number;
+  y_m: number;
+  distance_m: number;
+  bearing_deg: number;
+};
+
+export type CameraSector = {
+  camera_id: string;
+  name: string;
+  azimuth_deg: number;
+  fov_deg: number;
+  range_m: number;
+  status: string;
+};
+
+export type TacticalRadarData = {
+  max_range_m: number;
+  range_rings_m: number[];
+  cameras: CameraSector[];
+  blips: RadarBlip[];
+};
+
+export type MilitarySitrepSection = {
+  title: string;
+  content: string[];
+};
+
+export type MilitarySitrep = {
+  dtg: string;
+  classification: string;
+  unit_station: string;
+  threat_posture: "GREEN" | "AMBER" | "RED" | "BLACK";
+  total_active_tracks: number;
+  critical_breaches: number;
+  watchlist_hits: number;
+  vehicles_tracked: number;
+  sections: MilitarySitrepSection[];
+  formatted_text: string;
+};
+
+export type SightingRecord = {
+  camera_id: string;
+  camera_name: string;
+  timestamp: number;
+  track_id?: number | null;
+  bbox_norm: [number, number, number, number];
+  confidence: number;
+  identity?: string | null;
+  plate?: string | null;
+  is_intrusion?: boolean;
+};
+
+export type SubjectDossier = {
+  dossier_id: string;
+  subject_type: string;
+  label: string;
+  threat_level: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  first_seen_ts: number;
+  last_seen_ts: number;
+  cameras_visited: string[];
+  sightings: SightingRecord[];
+  plate?: string | null;
+  is_active: boolean;
+};
+
+export async function fetchTacticalRadar(): Promise<TacticalRadarData> {
+  const r = await fetch(base("/api/v1/tactical/radar"));
+  if (!r.ok) throw new Error(`Radar fetch failed (${r.status})`);
+  return await r.json();
+}
+
+export function useTacticalRadar(enabled = true) {
+  return useQuery({
+    queryKey: ["tactical-radar"],
+    queryFn: fetchTacticalRadar,
+    refetchInterval: 300,
+    enabled,
+  });
+}
+
+export async function fetchMilitarySitrep(): Promise<MilitarySitrep> {
+  const r = await fetch(base("/api/v1/tactical/sitrep"));
+  if (!r.ok) throw new Error(`SITREP fetch failed (${r.status})`);
+  return await r.json();
+}
+
+export function useMilitarySitrep(enabled = true) {
+  return useQuery({
+    queryKey: ["military-sitrep"],
+    queryFn: fetchMilitarySitrep,
+    refetchInterval: 5000,
+    enabled,
+  });
+}
+
+export async function fetchTargetDossiers(): Promise<SubjectDossier[]> {
+  const r = await fetch(base("/api/v1/tactical/dossiers"));
+  if (!r.ok) throw new Error(`Dossiers fetch failed (${r.status})`);
+  return await r.json();
+}
+
+export function useTargetDossiers(enabled = true) {
+  return useQuery({
+    queryKey: ["target-dossiers"],
+    queryFn: fetchTargetDossiers,
+    refetchInterval: 1000,
+    enabled,
+  });
+}
+

@@ -156,10 +156,13 @@ def link_synthetic_tracks(
     """
     real_boxes = [t.bbox_norm for t in tracks if t.class_name == "person" and not getattr(t, "synthetic", False)]
     links: dict[int, dict[str, Any]] = {}
+    used_face_indices: set[int] = set()
     for track in tracks:
         if not getattr(track, "synthetic", False):
             continue
-        for face in faces:
+        for f_idx, face in enumerate(faces):
+            if f_idx in used_face_indices:
+                continue
             if not face.get("quality_passed", False):
                 continue
             fb = face["bbox_norm"]
@@ -168,6 +171,7 @@ def link_synthetic_tracks(
             if any(_box_iou(fb, rb) > 0.0 for rb in real_boxes):
                 continue
             links[track.track_id] = face
+            used_face_indices.add(f_idx)
             break
     return links
 
@@ -196,28 +200,52 @@ def associate_faces_to_tracks(
     th = np.maximum(1e-5, ty2 - ty1)
     hx = (tx1 + tx2) / 2.0
     hy = ty1 + 0.12 * th
-    min_x = tx1 + 0.12 * tw
-    max_x = tx2 - 0.12 * tw
+    min_x = tx1 + 0.18 * tw
+    max_x = tx2 - 0.18 * tw
     min_y = ty1 + 0.02 * th
-    # Upper 60% (not 42%): near-camera head-and-shoulders framing puts the
-    # face center mid-box (~50% down) while the scale gate (fh/h in
-    # 0.08..0.58) + Hungarian max_cost still reject background faces.
-    max_y = ty1 + 0.60 * th
-
     fx1, fy1, fx2, fy2 = f_boxes[:, 0], f_boxes[:, 1], f_boxes[:, 2], f_boxes[:, 3]
     fh = np.maximum(1e-5, fy2 - fy1)
     fcx = (fx1 + fx2) / 2.0
     fcy = (fy1 + fy2) / 2.0
 
-    # (n_t, n_f) broadcast of face centers against per-track head gates.
-    gate = (fcx[None, :] >= min_x[:, None]) & (fcx[None, :] <= max_x[:, None]) & (fcy[None, :] >= min_y[:, None]) & (fcy[None, :] <= max_y[:, None])
     ratio = fh[None, :] / th[:, None]
+    # For head-and-shoulders close-ups (face >= 28% of track height), face center
+    # can sit mid-box (~50% down). For normal full/upper body framing, head center
+    # is strictly in the upper 42% (faces lower down belong to background persons
+    # standing behind or near).
+    is_closeup = ratio >= 0.28
+    max_y_grid = np.where(is_closeup, ty1[:, None] + 0.60 * th[:, None], ty1[:, None] + 0.42 * th[:, None])
+
+    # (n_t, n_f) broadcast of face centers against per-track head gates.
+    gate = (
+        (fcx[None, :] >= min_x[:, None])
+        & (fcx[None, :] <= max_x[:, None])
+        & (fcy[None, :] >= min_y[:, None])
+        & (fcy[None, :] <= max_y_grid)
+    )
     gate &= (ratio >= 0.08) & (ratio <= 0.58)
 
     dx = np.abs(fcx[None, :] - hx[:, None]) / np.maximum(tw[:, None], 1e-5)
     dy = np.abs(fcy[None, :] - hy[:, None]) / np.maximum(th[:, None], 1e-5)
     dist = np.sqrt(dx * dx + dy * dy)
-    cost_matrix = np.where(gate, dist + 0.32 * np.abs(ratio - 0.22), 1e5)
+
+    # Continuity affinity: tracks with an established/locked identity retain prior
+    # preference for their own head-ROI face so a bystander walking near/in front
+    # cannot snatch the face on a marginal distance split.
+    is_locked = np.array([bool(getattr(t, "identity_locked", False)) for t in person_tracks], dtype=bool)
+    is_critical = np.array(
+        [
+            bool(
+                getattr(t, "identity_locked", False)
+                and getattr(t, "identity", {})
+                and getattr(t, "identity", {}).get("threat_level") == "CRITICAL"
+            )
+            for t in person_tracks
+        ],
+        dtype=bool,
+    )
+    locked_bonus = np.where(is_critical[:, None] & gate, 0.30, np.where(is_locked[:, None] & gate, 0.18, 0.0))
+    cost_matrix = np.where(gate, dist + 0.32 * np.abs(ratio - 0.22) - locked_bonus, 1e5)
 
     rows, cols = linear_sum_assignment_numpy(cost_matrix)
     assignments: dict[int, dict[str, Any]] = {}

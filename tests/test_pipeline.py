@@ -582,3 +582,366 @@ def test_pipeline_warmup_never_raises() -> None:
     face_detector._detector = stub  # type: ignore[assignment]
     pipe = MiniPipeline(camera_id="cam-warmup-broken", stream_epoch=1, detector=_EmptyDetector(), face_detector=face_detector)
     pipe.warmup()  # must not raise
+
+
+def test_bystander_near_critical_target_never_marked_critical() -> None:
+    """When target A is our critical target, and person B stands near or walks
+
+    in front of A, B must NEVER also be marked as critical.
+    """
+    from ibvap.core.detector import Detection
+    from ibvap.core.face import FaceDetector
+    from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+
+    clear_all()
+    rng = np.random.default_rng(42)
+    v = rng.standard_normal(128).astype(np.float32)
+    feat = v / float(np.linalg.norm(v))
+    store = get_watchlist_store()
+    store.add_entry(
+        WatchlistEntry(
+            id="crit-target-A",
+            name="Critical Target A",
+            threat_level=ThreatLevel.CRITICAL,
+            notes="Critical target isolation test",
+            gallery=[feat],
+            created_at=1.0,
+        )
+    )
+
+    class MultiDetScript:
+        def __init__(self, script: list[list[tuple[float, float, float, float]]]) -> None:
+            self.script = script
+            self.idx = 0
+
+        def detect(self, frame: np.ndarray, frame_id: int) -> list:
+            boxes = self.script[min(self.idx, len(self.script) - 1)]
+            self.idx += 1
+            return [
+                Detection(
+                    class_id=0,
+                    class_name="person",
+                    bbox_norm=box,
+                    confidence=0.90,
+                    model_id="stub",
+                    runtime="cpu",
+                )
+                for box in boxes
+            ]
+
+    # Scripted sequence:
+    # Frame 0-2: Person A alone at (0.35, 0.15, 0.55, 0.85)
+    # Frame 3-5: Person B stands near A at (0.45, 0.15, 0.65, 0.85), A is at (0.35, 0.15, 0.55, 0.85)
+    # Frame 6-8: Person B walks in front of A at (0.38, 0.15, 0.58, 0.85), A is at (0.35, 0.15, 0.55, 0.85)
+    box_A = (0.35, 0.15, 0.55, 0.85)
+    box_B_near = (0.45, 0.15, 0.65, 0.85)
+    box_B_infront = (0.38, 0.15, 0.58, 0.85)
+    seq = (
+        [[box_A]] * 3
+        + [[box_B_near, box_A]] * 3
+        + [[box_B_infront, box_A]] * 3
+    )
+
+    # Face of Target A on a 640x480 frame:
+    # x: 0.40 * 640 = 256, y: 0.20 * 480 = 96, w: 0.10 * 640 = 64, h: 0.12 * 480 = 57.6
+    face_row = np.array(
+        [[256.0, 96.0, 64.0, 58.0, 275.0, 115.0, 305.0, 115.0, 290.0, 130.0, 280.0, 145.0, 300.0, 145.0, 0.95]],
+        dtype=np.float32,
+    )
+
+    class StubFaceDet:
+        def setInputSize(self, size: tuple[int, int]) -> None:
+            pass
+
+        def detect(self, img: np.ndarray) -> tuple[int, np.ndarray]:
+            return 1, face_row
+
+    try:
+        face_detector = FaceDetector.__new__(FaceDetector)
+        face_detector.model_path = "stub"
+        face_detector.conf_threshold = 0.45
+        face_detector._detector = StubFaceDet()  # type: ignore[assignment]
+        pipe = MiniPipeline(
+            camera_id="cam-crit-isolation",
+            stream_epoch=1,
+            detector=MultiDetScript(seq),  # type: ignore[arg-type]
+            face_detector=face_detector,
+            face_recognizer=_FixedRecognizer(feat),
+            enable_face=True,
+            face_stride=1,
+            sample_stride=1,
+        )
+
+        for step in range(len(seq)):
+            pipe.process_frame(_textured_frame(step))
+            # At EVERY step, verify that at most ONE track is marked as critical:
+            crit_tracks = [
+                t for t in pipe.last_tracks
+                if t.identity and t.identity.get("threat_level") == "CRITICAL"
+            ]
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: "
+                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
+            if crit_tracks:
+                assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
+
+        # Final check: Exactly 2 people active in scene (A and B), but only A is critical
+        assert len(pipe.last_tracks) == 2
+        crit_tracks = [
+            t for t in pipe.last_tracks
+            if t.identity and t.identity.get("threat_level") == "CRITICAL"
+        ]
+        assert len(crit_tracks) == 1
+        non_crit_tracks = [t for t in pipe.last_tracks if t not in crit_tracks]
+        assert len(non_crit_tracks) == 1
+        # Bystander B must NOT have critical identity
+        assert non_crit_tracks[0].identity is None or non_crit_tracks[0].identity.get("threat_level") != "CRITICAL"
+    finally:
+        store.remove_entry("crit-target-A")
+
+
+def test_bystander_near_critical_with_occlusion_and_miss_never_causes_two_critical_tracks() -> None:
+    """Rigorous reproduction test: Person B stands near Target A, Target A is missed
+
+    for 1 frame (partial occlusion/detector miss), then both re-emerge.
+    At NO step must both A and B be marked as critical!
+    """
+    from ibvap.core.detector import Detection
+    from ibvap.core.face import FaceDetector
+    from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+
+    clear_all()
+    rng = np.random.default_rng(42)
+    v = rng.standard_normal(128).astype(np.float32)
+    feat = v / float(np.linalg.norm(v))
+    store = get_watchlist_store()
+    store.add_entry(
+        WatchlistEntry(
+            id="crit-target-A",
+            name="Critical Target A",
+            threat_level=ThreatLevel.CRITICAL,
+            notes="Occlusion and miss test",
+            gallery=[feat],
+            created_at=1.0,
+        )
+    )
+
+    class MultiDetScript:
+        def __init__(self, script: list[list[tuple[float, float, float, float]]]) -> None:
+            self.script = script
+            self.idx = 0
+
+        def detect(self, frame: np.ndarray, frame_id: int) -> list:
+            boxes = self.script[min(self.idx, len(self.script) - 1)]
+            self.idx += 1
+            return [
+                Detection(
+                    class_id=0,
+                    class_name="person",
+                    bbox_norm=box,
+                    confidence=0.90,
+                    model_id="stub",
+                    runtime="cpu",
+                )
+                for box in boxes
+            ]
+
+    # Frame 0: Target A alone at (0.35..0.55)
+    # Frame 1: Target A at (0.35..0.55), Person B stands near at (0.42..0.62)
+    # Frame 2: Person B at (0.42..0.62). Target A is missed for 1 frame!
+    # Frame 3: Both A and B detected again!
+    seq = [
+        [(0.35, 0.15, 0.55, 0.85)],
+        [(0.35, 0.15, 0.55, 0.85), (0.42, 0.15, 0.62, 0.85)],
+        [(0.42, 0.15, 0.62, 0.85)],
+        [(0.35, 0.15, 0.55, 0.85), (0.42, 0.15, 0.62, 0.85)],
+    ]
+
+    # Face of Target A
+    face_row = np.array(
+        [[256.0, 96.0, 64.0, 58.0, 275.0, 115.0, 305.0, 115.0, 290.0, 130.0, 280.0, 145.0, 300.0, 145.0, 0.95]],
+        dtype=np.float32,
+    )
+
+    class StubFaceDet:
+        def setInputSize(self, size: tuple[int, int]) -> None:
+            pass
+
+        def detect(self, img: np.ndarray) -> tuple[int, np.ndarray]:
+            return 1, face_row
+
+    try:
+        face_detector = FaceDetector.__new__(FaceDetector)
+        face_detector.model_path = "stub"
+        face_detector.conf_threshold = 0.45
+        face_detector._detector = StubFaceDet()  # type: ignore[assignment]
+        pipe = MiniPipeline(
+            camera_id="cam-occlusion-test",
+            stream_epoch=1,
+            detector=MultiDetScript(seq),  # type: ignore[arg-type]
+            face_detector=face_detector,
+            face_recognizer=_FixedRecognizer(feat),
+            enable_face=True,
+            face_stride=1,
+            sample_stride=1,
+        )
+
+        for step in range(len(seq)):
+            pipe.process_frame(_textured_frame(step))
+            crit_tracks = [
+                t for t in pipe.last_tracks
+                if t.identity and t.identity.get("threat_level") == "CRITICAL"
+            ]
+            # INVARIANT: At NO step can more than 1 track be marked as critical!
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: "
+                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
+            if crit_tracks:
+                assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
+
+        # Step 3 check: Both A and B are active, but ONLY A is critical!
+        assert len(pipe.last_tracks) == 2
+        crit_tracks = [
+            t for t in pipe.last_tracks
+            if t.identity and t.identity.get("threat_level") == "CRITICAL"
+        ]
+        assert len(crit_tracks) == 1
+        assert crit_tracks[0].track_id == 1
+        non_crit = [t for t in pipe.last_tracks if t.track_id != 1][0]
+        assert non_crit.identity is None or non_crit.identity.get("threat_level") != "CRITICAL"
+    finally:
+        store.remove_entry("crit-target-A")
+
+
+def test_bystander_walks_in_front_crossover_never_marks_bystander_critical() -> None:
+    """Complex multi-frame occlusion crossover: Person B walks from left to right directly
+
+    in front of Target A. During crossover, YOLO detects only the foreground person (B)
+    for 2 frames while A's face is partially visible. Then they separate.
+    At NO step must B become marked as critical, and only A can hold the critical identity.
+    """
+    from ibvap.core.detector import Detection
+    from ibvap.core.face import FaceDetector
+    from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+
+    clear_all()
+    rng = np.random.default_rng(99)
+    v = rng.standard_normal(128).astype(np.float32)
+    feat = v / float(np.linalg.norm(v))
+    store = get_watchlist_store()
+    store.add_entry(
+        WatchlistEntry(
+            id="crit-target-A",
+            name="Critical Target A",
+            threat_level=ThreatLevel.CRITICAL,
+            notes="Crossover test",
+            gallery=[feat],
+            created_at=1.0,
+        )
+    )
+
+    class MultiDetScript:
+        def __init__(self, script: list[list[tuple[float, float, float, float]]]) -> None:
+            self.script = script
+            self.idx = 0
+
+        def detect(self, frame: np.ndarray, frame_id: int) -> list:
+            boxes = self.script[min(self.idx, len(self.script) - 1)]
+            self.idx += 1
+            return [
+                Detection(
+                    class_id=0,
+                    class_name="person",
+                    bbox_norm=box,
+                    confidence=0.90,
+                    model_id="stub",
+                    runtime="cpu",
+                )
+                for box in boxes
+            ]
+
+    # Target A stands at (0.40..0.60).
+    # Person B walks from left (0.20..0.40) to right (0.60..0.80), directly crossing in front of A!
+    seq = [
+        # Frame 0: Target A alone
+        [(0.40, 0.15, 0.60, 0.85)],
+        # Frame 1: B approaches from left, A at center
+        [(0.40, 0.15, 0.60, 0.85), (0.25, 0.15, 0.45, 0.85)],
+        # Frame 2: B is directly in front of A! Detector outputs B at (0.42..0.62)
+        [(0.42, 0.15, 0.62, 0.85)],
+        # Frame 3: B continues across (0.48..0.68), A still occluded
+        [(0.48, 0.15, 0.68, 0.85)],
+        # Frame 4: B moves right (0.60..0.80), A re-emerges at (0.40..0.60)
+        [(0.40, 0.15, 0.60, 0.85), (0.60, 0.15, 0.80, 0.85)],
+    ]
+
+    # Face of Target A is at x=0.50 (norm center 0.45..0.55)
+    face_row = np.array(
+        [[288.0, 96.0, 64.0, 58.0, 307.0, 115.0, 337.0, 115.0, 322.0, 130.0, 312.0, 145.0, 332.0, 145.0, 0.95]],
+        dtype=np.float32,
+    )
+
+    class StubFaceDet:
+        def setInputSize(self, size: tuple[int, int]) -> None:
+            pass
+
+        def detect(self, img: np.ndarray) -> tuple[int, np.ndarray]:
+            return 1, face_row
+
+    class _FixedRecognizer:
+        def __init__(self, f: np.ndarray) -> None:
+            self.f = f
+
+        def align_crop(self, frame: np.ndarray, raw_face: object) -> np.ndarray:
+            return frame
+
+        def extract_feature(self, crop: np.ndarray) -> np.ndarray:
+            return self.f
+
+    try:
+        face_detector = FaceDetector.__new__(FaceDetector)
+        face_detector.model_path = "stub"
+        face_detector.conf_threshold = 0.45
+        face_detector._detector = StubFaceDet()  # type: ignore[assignment]
+        pipe = MiniPipeline(
+            camera_id="cam-crossover-test",
+            stream_epoch=1,
+            detector=MultiDetScript(seq),  # type: ignore[arg-type]
+            face_detector=face_detector,
+            face_recognizer=_FixedRecognizer(feat),
+            enable_face=True,
+            face_stride=1,
+            sample_stride=1,
+        )
+
+        for step in range(len(seq)):
+            pipe.process_frame(_textured_frame(step))
+            crit_tracks = [
+                t for t in pipe.last_tracks
+                if t.identity and t.identity.get("threat_level") == "CRITICAL"
+            ]
+            # INVARIANT: At NO frame can multiple tracks be marked as critical!
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: "
+                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
+            if crit_tracks:
+                assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
+
+        # Final check: Exactly 2 people active, ONLY Target A is critical
+        assert len(pipe.last_tracks) == 2
+        crit_tracks = [
+            t for t in pipe.last_tracks
+            if t.identity and t.identity.get("threat_level") == "CRITICAL"
+        ]
+        assert len(crit_tracks) == 1
+        # Bystander B is non-critical
+        bystanders = [t for t in pipe.last_tracks if t not in crit_tracks]
+        assert len(bystanders) == 1
+        assert bystanders[0].identity is None or bystanders[0].identity.get("threat_level") != "CRITICAL"
+    finally:
+        store.remove_entry("crit-target-A")
+
+

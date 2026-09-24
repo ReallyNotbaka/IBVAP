@@ -25,7 +25,7 @@ from ibvap.core.association import (
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
-from ibvap.core.tracker import CentroidTracker
+from ibvap.core.tracker import CentroidTracker, Track
 from ibvap.core.watchlist import get_watchlist_store
 from ibvap.core.zone_engine import DEFAULT_ZONE, Zone, is_intrusion
 from ibvap.events.outbox import transactional_write
@@ -54,6 +54,7 @@ class MiniPipeline:
         face_stride: int = 3,
         sample_stride: int = 1,
         max_face_size: int | None = None,
+        skip_face_without_person: bool = False,
     ) -> None:
         self.camera_id = camera_id
         self.stream_epoch = stream_epoch
@@ -93,6 +94,7 @@ class MiniPipeline:
         self.face_stride = max(1, face_stride)
         self.max_face_size = max_face_size
         self.enable_face = enable_face
+        self.skip_face_without_person = skip_face_without_person
         # Face models are heavy (~1s YuNet+SFace): construct lazily on the
         # first face-stride frame (see _ensure_face_models), not at camera
         # start, so decoding begins immediately. Injected instances pass through.
@@ -157,6 +159,23 @@ class MiniPipeline:
         self._last_intrusion_alert_time.clear()
         self._last_exit_alert_time.clear()
         self._unseen_streak.clear()
+
+    def prune_track(self, track_id: int) -> None:
+        """Discard tracking, alert timestamp, and rule state when a track terminates."""
+        self.alerted_tracks.discard(track_id)
+        self.watchlist_alerted_tracks.discard(track_id)
+        self._active_line_intruders.discard(track_id)
+        self._track_outside_count.pop(track_id, None)
+        self._unseen_streak.pop(track_id, None)
+        self._line_miss_count.pop(track_id, None)
+        for k in list(self._last_exit_alert_time.keys()):
+            if (isinstance(k, tuple) and len(k) == 2 and k[1] == track_id) or k == track_id:
+                self._last_exit_alert_time.pop(k, None)
+        for k in list(self._last_intrusion_alert_time.keys()):
+            if (isinstance(k, tuple) and len(k) == 2 and k[1] == track_id) or k == track_id:
+                self._last_intrusion_alert_time.pop(k, None)
+        if hasattr(self, "rule_engine") and hasattr(self.rule_engine, "prune_track"):
+            self.rule_engine.prune_track(track_id)
 
     def _end_presence_event(
         self,
@@ -229,16 +248,7 @@ class MiniPipeline:
             self.frame_idx += 1
             return None
 
-        # sampling queue - drop stale
-        self.q_demux_to_sample.put(frame)
-        latest = self.q_demux_to_sample.get_latest()
-        if latest is None:
-            return None
-        # inference queue
-        self.q_sample_to_infer.put(latest)  # type: ignore[arg-type]
-        infer_frame = self.q_sample_to_infer.get_latest()
-        if infer_frame is None:
-            return None
+        infer_frame = frame
 
         # detect (person/vehicle) on the queued infer_frame (bounded-queue sync path)
         if self.detector_handle is not None and hasattr(self.detector_handle, "acquire"):
@@ -269,40 +279,47 @@ class MiniPipeline:
         # to virtual person boxes below so the tracker holds them normally.
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
         new_faces_detected = False
+        # Check if persons are in scene (either freshly detected or actively tracked)
+        has_persons = any(d.get("class_name") == "person" for d in det_dicts) or any(t.class_name == "person" for t in self.last_tracks)
         if self.enable_face and (self.face_detector is None or self.face_recognizer is None):
             self._ensure_face_models()
         if self.enable_face and self.face_detector is not None:
-            # Run YuNet only every face_stride sampled frames to save ~8ms per frame
-            sampled_idx = self.frame_idx // self.sample_stride if self.sample_stride > 1 else self.frame_idx
-            if (sampled_idx % self.face_stride) == 0:
-                try:
-                    # Native resolution processing (do not drop resolution for maximum detection accuracy)
-                    fd_frame = infer_frame
-                    if self.max_face_size is not None and self.max_face_size > 0:
-                        h, w = infer_frame.shape[:2]
-                        if max(h, w) > self.max_face_size:
-                            scale = self.max_face_size / float(max(h, w))
-                            nw, nh = int(w * scale), int(h * scale)
-                            if nw > 0 and nh > 0:
-                                fd_frame = cv2.resize(infer_frame, (nw, nh), interpolation=cv2.INTER_AREA)
-                    raw_faces = self.face_detector.detect(fd_frame)  # type: ignore[union-attr]
-                    self._last_face_frame = fd_frame
-                    self.last_faces = [
-                        {
-                            "bbox_norm": f.bbox_norm,
-                            "confidence": f.confidence,
-                            "quality_passed": f.quality.passed,
-                            "landmarks": f.landmarks,
-                            "blur": f.quality.blur,
-                            "illumination": f.quality.illumination,
-                            "_raw": f,
-                        }
-                        for f in raw_faces
-                    ]
-                    self.faces_analyzed += 1
-                    new_faces_detected = bool(self.last_faces)
-                except Exception:
-                    pass
+            if self.skip_face_without_person and not has_persons:
+                # 0 persons in scene: skip expensive full-frame YuNet inference and clear stale faces
+                self.last_faces = []
+                self._last_face_frame = None
+            else:
+                # Run YuNet only every face_stride sampled frames to save ~8ms per frame
+                sampled_idx = self.frame_idx // self.sample_stride if self.sample_stride > 1 else self.frame_idx
+                if (sampled_idx % self.face_stride) == 0:
+                    try:
+                        # Native resolution processing (do not drop resolution for maximum detection accuracy)
+                        fd_frame = infer_frame
+                        if self.max_face_size is not None and self.max_face_size > 0:
+                            h, w = infer_frame.shape[:2]
+                            if max(h, w) > self.max_face_size:
+                                scale = self.max_face_size / float(max(h, w))
+                                nw, nh = int(w * scale), int(h * scale)
+                                if nw > 0 and nh > 0:
+                                    fd_frame = cv2.resize(infer_frame, (nw, nh), interpolation=cv2.INTER_AREA)
+                        raw_faces = self.face_detector.detect(fd_frame)  # type: ignore[union-attr]
+                        self._last_face_frame = fd_frame
+                        self.last_faces = [
+                            {
+                                "bbox_norm": f.bbox_norm,
+                                "confidence": f.confidence,
+                                "quality_passed": f.quality.passed,
+                                "landmarks": f.landmarks,
+                                "blur": f.quality.blur,
+                                "illumination": f.quality.illumination,
+                                "_raw": f,
+                            }
+                            for f in raw_faces
+                        ]
+                        self.faces_analyzed += 1
+                        new_faces_detected = bool(self.last_faces)
+                    except Exception:
+                        pass
 
         # ---- face-anchored fallback: virtual person box for orphan faces ----
         # Someone standing right in front of the camera shows a face but no
@@ -339,26 +356,35 @@ class MiniPipeline:
         # ---- Hungarian Head-ROI track-to-face spatial fusion & biometric identification ----
         if new_faces_detected and self.last_faces and self.face_recognizer is not None:
             try:
-                assignments = associate_faces_to_tracks(tracks, self.last_faces)
+                # Include active person tracks plus temporarily occluded critical tracks (age <= 3)
+                # so an occluded critical target does not falsely surrender its face to a bystander.
+                face_candidate_tracks = [t for t in tracks if t.class_name == "person"]
+                for t in self.tracker.tracks.values():
+                    if (
+                        t.class_name == "person"
+                        and t not in face_candidate_tracks
+                        and getattr(t, "identity_locked", False)
+                        and getattr(t, "identity", {}).get("threat_level") == "CRITICAL"
+                        and t.age <= 3
+                    ):
+                        face_candidate_tracks.append(t)
+
+                assignments = associate_faces_to_tracks(face_candidate_tracks, self.last_faces)
                 # Provenance links for face-anchored tracks the gates cannot
                 # see (extreme close-ups): fill only unassigned slots so the
                 # Hungarian optimum for real tracks is never disturbed.
-                for trk_id, face_info in link_synthetic_tracks(tracks, self.last_faces).items():
+                for trk_id, face_info in link_synthetic_tracks(face_candidate_tracks, self.last_faces).items():
                     assignments.setdefault(trk_id, face_info)
                 wl_store = get_watchlist_store()
                 crop_frame = getattr(self, "_last_face_frame", infer_frame)
-                track_by_id = {t.track_id: t for t in tracks}
+                track_by_id = {t.track_id: t for t in self.tracker.tracks.values()}
                 for trk_id, face_info in assignments.items():
                     target_track = track_by_id.get(trk_id)
                     if target_track is None:
                         continue
-                    # Check locked state and threat level
+                    # Check locked state
                     is_locked = getattr(target_track, "identity_locked", False)
-                    curr_threat = getattr(target_track, "identity", {}).get("threat_level") if target_track.identity else None
-                    # If already locked to a CRITICAL target, identity cannot be overridden; skip redundant extraction
-                    if is_locked and curr_threat == "CRITICAL":
-                        continue
-                    # For non-critical locked tracks, poll at a lower cadence (every 30 frames) to allow CRITICAL target override
+                    # For locked tracks, poll at a lower cadence (every 30 frames) to allow periodic re-verification
                     # For unlocked tracks, check at most once every 6 frames
                     last_bio = getattr(target_track, "last_bio_frame", -999)
                     cadence = 30 if is_locked else 6
@@ -384,6 +410,37 @@ class MiniPipeline:
                                 wl_store.record_sighting(match.entry_id, time.time())
             except Exception:
                 pass
+
+        # Strict camera-wide watchlist identity mutual exclusivity across tracks:
+        seen_wl: dict[str, Track] = {}
+        for trk in list(self.tracker.tracks.values()):
+            if trk.identity and trk.identity.get("entry_id"):
+                eid = trk.identity["entry_id"]
+                if eid in seen_wl:
+                    prev = seen_wl[eid]
+                    prev_locked = getattr(prev, "identity_locked", False)
+                    curr_locked = getattr(trk, "identity_locked", False)
+                    prev_crit = (getattr(prev, "identity", None) or {}).get("threat_level") == "CRITICAL"
+                    curr_crit = (getattr(trk, "identity", None) or {}).get("threat_level") == "CRITICAL"
+                    prev_score = float(prev.identity.get("score", 0.0))
+                    curr_score = float(trk.identity.get("score", 0.0))
+                    if (curr_locked and not prev_locked) or (curr_locked == prev_locked and (curr_crit and not prev_crit or curr_score > prev_score)):
+                        prev.identity = None
+                        prev.identity_locked = False
+                        self.watchlist_alerted_tracks.discard(prev.track_id)
+                        seen_wl[eid] = trk
+                    else:
+                        trk.identity = None
+                        trk.identity_locked = False
+                        self.watchlist_alerted_tracks.discard(trk.track_id)
+                else:
+                    seen_wl[eid] = trk
+
+        # Clean up alerted track records for any track whose identity was cleared
+        for tid in list(self.watchlist_alerted_tracks):
+            t = self.tracker.tracks.get(tid)
+            if t is None or not t.identity:
+                self.watchlist_alerted_tracks.discard(tid)
 
         primary_event: dict | None = None
         intrusion_track_ids: set[int] = set()
@@ -444,6 +501,7 @@ class MiniPipeline:
                         self._active_line_intruders.discard(trk.track_id)
                         self._line_miss_count.pop(trk.track_id, None)
 
+            trk.is_intrusion = intruding
             if intruding:
                 intrusion_track_ids.add(trk.track_id)
                 self._track_outside_count[trk.track_id] = 0
@@ -671,6 +729,8 @@ class MiniPipeline:
                 self.events_created += 1
                 if primary_event is None:
                     primary_event = ev_exit
+
+            self.prune_track(term.track_id)
 
         self.frame_idx += 1
         return primary_event

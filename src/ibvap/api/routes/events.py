@@ -54,7 +54,7 @@ async def get_events(
     want_exit = tab_clean in _EXIT_TABS if tab_clean else False
     want_system = tab_clean in _SYSTEM_TABS if tab_clean else False
 
-    filtered: list[tuple[float, dict[str, Any]]] = []
+    matches: list[dict[str, Any]] = []
     for ev in raw:
         if camera_id and ev.get("camera_id") != camera_id:
             continue
@@ -77,13 +77,10 @@ async def get_events(
             ):
                 continue
 
-        filtered.append((_parse_timestamp(ev.get("created_at")), ev))
+        matches.append(ev)
 
-    # Sort only the filtered set newest-first, then apply limit.
-    filtered.sort(key=lambda item: item[0], reverse=True)
-    if len(filtered) > limit:
-        del filtered[limit:]
-    return [ev for _, ev in filtered]
+    matches.sort(key=lambda ev: _parse_timestamp(ev.get("created_at")), reverse=True)
+    return matches[:limit]
 
 
 @router.delete("", response_model=dict[str, Any])

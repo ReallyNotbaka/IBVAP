@@ -78,10 +78,13 @@ class PacketRingBuffer:
         snap_path = f"data/evidence/{event_id}_snap.jpg" if snap else None
         clip_path = f"data/evidence/{event_id}_clip.mp4" if clip else None
         if snap and snap_path:
-            Path(snap_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(snap_path).write_bytes(snap)
+            p_snap = Path(snap_path)
+            p_snap.parent.mkdir(parents=True, exist_ok=True)
+            p_snap.write_bytes(snap)
         if clip and clip_path:
-            Path(clip_path).write_bytes(clip)
+            p_clip = Path(clip_path)
+            p_clip.parent.mkdir(parents=True, exist_ok=True)
+            p_clip.write_bytes(clip)
         return EvidenceManifest(
             event_id=event_id,
             snapshot_path=snap_path,

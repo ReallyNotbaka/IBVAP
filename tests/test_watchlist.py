@@ -288,3 +288,254 @@ class TestTrackerOcclusionAndReappearance:
         new_trk.record_biometric_match("suspect-001", "John Doe", score=0.64, tier="RED")
         assert new_trk.identity_locked
         assert new_trk.identity["name"] == "John Doe"
+
+
+class TestBystanderNearCriticalTarget:
+    """Rigorous verification: when A is our critical target and person B stands near
+
+    or walks in front of A, B must NEVER also be marked as critical.
+    """
+
+    def test_global_iou_matching_prevents_track_hijacking_by_earlier_detection(self) -> None:
+        """A bystander B appearing before target A in the detector's output list
+
+        must not hijack A's existing track when A has higher IoU.
+        """
+        tracker = CentroidTracker(max_age=30)
+        # Frame 1: Person A alone in scene -> Track 1
+        det_A_init = {
+            "bbox_norm": (0.40, 0.20, 0.60, 0.80),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.90,
+        }
+        tracks, _, _ = tracker.update([det_A_init], timestamp=1.0)
+        assert len(tracks) == 1
+        trk_A = tracks[0]
+        trk_A.record_biometric_match("crit-001", "Target A", score=0.85, tier="RED", threat_level="CRITICAL")
+        assert trk_A.identity_locked
+        assert trk_A.identity["threat_level"] == "CRITICAL"
+        orig_tid = trk_A.track_id
+
+        # Frame 2: Person B stands near A. Detector outputs Person B FIRST, Person A SECOND.
+        # Person B has IoU ~0.35 with Track 1. Person A has IoU ~0.95 with Track 1.
+        det_B = {
+            "bbox_norm": (0.48, 0.20, 0.68, 0.80),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.88,
+        }
+        det_A = {
+            "bbox_norm": (0.40, 0.20, 0.60, 0.80),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.92,
+        }
+        # det_B is placed at index 0 (earlier in list)
+        tracks, new_entries, _ = tracker.update([det_B, det_A], timestamp=1.033)
+        assert len(tracks) == 2
+
+        # Track 1 MUST remain with Person A (at 0.40..0.60)
+        track_1 = next(t for t in tracks if t.track_id == orig_tid)
+        assert track_1.identity_locked
+        assert track_1.identity["entry_id"] == "crit-001"
+        # Track 1's horizontal center must remain close to Person A's position (0.50), not Person B's (0.58)
+        assert track_1.center[0] < 0.54
+
+        # The new track must be Person B, and MUST NOT carry critical identity
+        bystander_track = next(t for t in tracks if t.track_id != orig_tid)
+        assert bystander_track.identity is None
+        assert not bystander_track.identity_locked
+
+    def test_full_body_person_rejects_bystander_mid_body_face(self) -> None:
+        """When person B is in front of A, A's face sits ~50% down B's body.
+
+        For normal full-body framing, max_y gate (0.42) must reject it from B.
+        """
+        bystander_trk = Track(
+            track_id=2,
+            class_name="person",
+            class_id=0,
+            bbox_norm=(0.30, 0.10, 0.70, 0.90),  # full body: h = 0.80
+            confidence=0.90,
+        )
+        # Target A's face seen behind B, at y=0.50..0.60 (mid-body of B, ~56% down)
+        target_face = {
+            "bbox_norm": (0.45, 0.50, 0.55, 0.60),  # fh = 0.10, ratio = 0.125
+            "confidence": 0.95,
+            "quality_passed": True,
+        }
+        assignments = associate_faces_to_tracks([bystander_trk], [target_face])
+        assert 2 not in assignments
+
+    def test_locked_target_track_prioritized_over_nearby_bystander(self) -> None:
+        """When both target A and bystander B overlap face A's gate, target A's
+
+        locked identity gives it affinity priority so bystander B cannot steal the face.
+        """
+        target_trk = Track(
+            track_id=1,
+            class_name="person",
+            class_id=0,
+            bbox_norm=(0.35, 0.10, 0.65, 0.90),
+            confidence=0.90,
+        )
+        target_trk.identity_locked = True
+        target_trk.identity = {"entry_id": "crit-001", "name": "Target A", "threat_level": "CRITICAL"}
+
+        bystander_trk = Track(
+            track_id=2,
+            class_name="person",
+            class_id=0,
+            bbox_norm=(0.38, 0.10, 0.68, 0.90),
+            confidence=0.88,
+        )
+
+        face_A = {
+            "bbox_norm": (0.47, 0.14, 0.55, 0.24),
+            "confidence": 0.95,
+            "quality_passed": True,
+        }
+
+        assignments = associate_faces_to_tracks([target_trk, bystander_trk], [face_A])
+        # Face must go to target_trk (1), not bystander (2)
+        assert assignments.get(1) == face_A
+        assert 2 not in assignments
+
+    def test_duplicate_and_bad_bounding_boxes_suppressed_by_tracker(self) -> None:
+        """Duplicate detections and bad sub-boxes (e.g. torso inside full-body)
+
+        must be deduplicated and must NOT spawn duplicate phantom tracks.
+        """
+        tracker = CentroidTracker()
+        det_full = {
+            "bbox_norm": (0.35, 0.15, 0.55, 0.85),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.92,
+        }
+        det_dup = {
+            "bbox_norm": (0.355, 0.152, 0.553, 0.848),  # IoU > 0.90 duplicate box
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.86,
+        }
+        det_sub_torso = {
+            "bbox_norm": (0.36, 0.16, 0.54, 0.52),  # sub-box contained inside full-body
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.75,
+        }
+        tracks, new_entries, _ = tracker.update([det_full, det_dup, det_sub_torso], timestamp=1.0)
+        # Exactly 1 clean track created, not 3
+        assert len(tracks) == 1
+        assert len(new_entries) == 1
+
+    def test_unmatched_duplicate_detection_does_not_spawn_duplicate_track(self) -> None:
+        """When an established track exists, a subsequent duplicate detection
+
+        overlapping it must be discarded in Stage 2 rather than spawning a duplicate track.
+        """
+        tracker = CentroidTracker()
+        det_1 = {
+            "bbox_norm": (0.35, 0.15, 0.55, 0.85),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.92,
+        }
+        tracker.update([det_1], timestamp=1.0)
+
+        # Frame 2: Det 1 matched, Det 2 is a duplicate box
+        det_2_dup = {
+            "bbox_norm": (0.354, 0.151, 0.552, 0.849),
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.85,
+        }
+        tracks, new_entries, _ = tracker.update([det_1, det_2_dup], timestamp=1.033)
+        assert len(tracks) == 1
+        assert len(new_entries) == 0
+
+    def test_torso_subbox_with_higher_confidence_does_not_replace_full_body(self) -> None:
+        """When YOLO produces both a torso sub-box (e.g. conf 0.88) and a full-body box (conf 0.82),
+
+        the tracker MUST retain the enclosing full-body box and discard the torso sub-box.
+        Footpoint must be at the feet (y=0.90), not waist (y=0.50).
+        """
+        tracker = CentroidTracker()
+        det_torso = {
+            "bbox_norm": (0.40, 0.20, 0.60, 0.50),  # Torso only!
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.88,
+        }
+        det_full = {
+            "bbox_norm": (0.40, 0.20, 0.60, 0.90),  # Full body!
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.82,
+        }
+        tracks, _, _ = tracker.update([det_torso, det_full], timestamp=1.0)
+        assert len(tracks) == 1
+        trk = tracks[0]
+        assert trk.bbox_norm[3] >= 0.88, f"Expected feet near 0.90, got {trk.bbox_norm[3]}"
+        assert trk.footpoint[1] >= 0.88
+        assert trk.confidence >= 0.88  # Peak confidence transferred
+
+    def test_inverted_and_degenerate_bounding_boxes_sanitized(self) -> None:
+        """Inverted coordinates (x1 > x2 or y1 > y2), out-of-bounds, or degenerate
+
+        bounding boxes must be sanitized or rejected so the tracker never corrupts.
+        """
+        tracker = CentroidTracker()
+        det_inverted = {
+            "bbox_norm": (0.60, 0.90, 0.40, 0.20),  # inverted x and y
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.85,
+        }
+        det_oob = {
+            "bbox_norm": (-0.10, 0.20, 0.60, 1.05),  # out of bounds x1 and y2
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.80,
+        }
+        det_zero = {
+            "bbox_norm": (0.50, 0.50, 0.50, 0.50),  # zero area degenerate
+            "class_name": "person",
+            "class_id": 0,
+            "confidence": 0.90,
+        }
+        tracks, _, _ = tracker.update([det_inverted, det_zero], timestamp=1.0)
+        # Inverted box sanitized to (0.40, 0.20, 0.60, 0.90), degenerate dropped
+        assert len(tracks) == 1
+        trk = tracks[0]
+        assert trk.bbox_norm == (0.40, 0.20, 0.60, 0.90)
+        assert trk.footpoint == (0.50, 0.90)
+
+        # OOB box is clamped: (-0.10, 0.20, 0.60, 1.05) -> (0.0, 0.20, 0.60, 1.0)
+        tracks_oob, _, _ = tracker.update([det_oob], timestamp=1.033)
+        assert len(tracks_oob) == 1
+        assert tracks_oob[0].bbox_norm[0] >= 0.0
+        assert tracks_oob[0].bbox_norm[3] <= 1.0
+
+    def test_two_tracks_cannot_simultaneously_hold_same_critical_identity(self) -> None:
+        """At tracker level, two tracks cannot simultaneously hold the same entry_id.
+
+        If a second track claims the entry_id, only the highest score/active track retains it.
+        """
+        tracker = CentroidTracker()
+        det_1 = {"bbox_norm": (0.30, 0.15, 0.50, 0.85), "class_name": "person", "class_id": 0, "confidence": 0.90}
+        det_2 = {"bbox_norm": (0.60, 0.15, 0.80, 0.85), "class_name": "person", "class_id": 0, "confidence": 0.90}
+        tracks, _, _ = tracker.update([det_1, det_2], timestamp=1.0)
+        assert len(tracks) == 2
+        t1, t2 = tracks[0], tracks[1]
+
+        t1.record_biometric_match("crit-001", "Target A", score=0.85, tier="RED", threat_level="CRITICAL")
+        t2.record_biometric_match("crit-001", "Target A", score=0.92, tier="RED", threat_level="CRITICAL")
+
+        # After update cycle:
+        tracks, _, _ = tracker.update([det_1, det_2], timestamp=1.033)
+        crit_tracks = [t for t in tracks if t.identity and t.identity.get("entry_id") == "crit-001"]
+        assert len(crit_tracks) == 1
+        assert crit_tracks[0].track_id == t2.track_id  # Higher score retains it

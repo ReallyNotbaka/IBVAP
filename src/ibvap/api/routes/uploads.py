@@ -196,8 +196,8 @@ def probe_quarantined_video(path: Path) -> None:
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise HTTPException(status_code=422, detail="No video stream")
-        if container.duration is not None and stream.time_base:
-            duration_s = float(container.duration * stream.time_base)
+        if container.duration is not None:
+            duration_s = max(0.0, float(container.duration) / av.time_base)
             if duration_s > MAX_DURATION_SECS:
                 raise HTTPException(status_code=422, detail="Clip exceeds maximum duration")
         if next(container.decode(stream), None) is None:
@@ -265,14 +265,17 @@ async def analyze_upload(
     sample_stride = max(1, min(sample_stride, 10))
     face_stride = max(1, min(face_stride, 10))
     try:
+        from ibvap.core.model_manager import get_shared_detector_handle
         from ibvap.core.pipeline import MiniPipeline
 
         def _run_analysis() -> dict[str, object]:
             pipeline = MiniPipeline(
                 camera_id=f"upload-{upload_id}",
+                detector_handle=get_shared_detector_handle(),
                 enable_face=enable_face,
                 sample_stride=sample_stride,
                 face_stride=face_stride,
+                skip_face_without_person=True,
             )
             # process_video_file is already optimized (PyAV + sampling)
             events = pipeline.process_video_file(

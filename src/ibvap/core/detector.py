@@ -7,6 +7,7 @@ Mock detector exists for tests when there's no model file around.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -68,13 +69,14 @@ class ONNXDetectorProvider:
         self._iou_threshold = iou_threshold
         self._input_size = input_size
         self._model_id = Path(model_path).stem
-        self._canvas: np.ndarray = np.full((input_size, input_size, 3), 114, dtype=np.uint8)
-        self._last_pad_sig: tuple[int, int, int, int] | None = None
+        self._local = threading.local()
+        self._inference_lock = threading.Lock()
 
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         sess_options.enable_mem_pattern = True
         sess_options.enable_cpu_mem_arena = True
+        sess_options.intra_op_num_threads = 4
 
         available = ort.get_available_providers()
         try:
@@ -123,6 +125,7 @@ class ONNXDetectorProvider:
             except Exception:
                 self._session = ort.InferenceSession(
                     self._model_path,
+                    sess_options=sess_options,
                     providers=["CPUExecutionProvider"],
                 )
                 self._runtime = "cpu"
@@ -142,6 +145,14 @@ class ONNXDetectorProvider:
     def runtime(self) -> str:
         return self._runtime
 
+    @property
+    def _canvas(self) -> np.ndarray | None:
+        return getattr(self._local, "canvas", None)
+
+    @_canvas.setter
+    def _canvas(self, val: np.ndarray | None) -> None:
+        self._local.canvas = val
+
     def _preprocess(self, frame: np.ndarray) -> tuple[np.ndarray, float, float, float]:
         """Letterbox to (input_size, input_size) preserving aspect ratio.
 
@@ -157,23 +168,25 @@ class ONNXDetectorProvider:
         top = int(round(dh - 0.1))
         left = int(round(dw - 0.1))
 
-        if self._canvas is None or self._canvas.shape != (self._input_size, self._input_size, 3):
-            self._canvas = np.full((self._input_size, self._input_size, 3), 114, dtype=np.uint8)
-            self._last_pad_sig = None
+        canvas = getattr(self._local, "canvas", None)
+        if canvas is None or canvas.shape != (self._input_size, self._input_size, 3):
+            canvas = np.full((self._input_size, self._input_size, 3), 114, dtype=np.uint8)
+            self._local.canvas = canvas
+            self._local.last_pad_sig = None
 
         pad_sig = (top, left, new_unpad_h, new_unpad_w)
-        if self._last_pad_sig != pad_sig:
-            self._canvas.fill(114)
-            self._last_pad_sig = pad_sig
+        if getattr(self._local, "last_pad_sig", None) != pad_sig:
+            canvas.fill(114)
+            self._local.last_pad_sig = pad_sig
 
-        target_slice = self._canvas[top : top + new_unpad_h, left : left + new_unpad_w]
+        target_slice = canvas[top : top + new_unpad_h, left : left + new_unpad_w]
         if (orig_w, orig_h) == (new_unpad_w, new_unpad_h):
             target_slice[:] = frame
         else:
             cv2.resize(frame, (new_unpad_w, new_unpad_h), dst=target_slice, interpolation=cv2.INTER_LINEAR)
 
         blob = cv2.dnn.blobFromImage(
-            self._canvas,
+            canvas,
             scalefactor=1.0 / 255.0,
             swapRB=True,
             crop=False,
@@ -191,7 +204,8 @@ class ONNXDetectorProvider:
         orig_h, orig_w = frame.shape[:2]
         blob, scale, pad_x, pad_y = self._preprocess(frame)
 
-        outputs = self._session.run(None, {self._input_name: blob})
+        with self._inference_lock:
+            outputs = self._session.run(None, {self._input_name: blob})
         output: np.ndarray = np.asarray(outputs[0], dtype=np.float32)
 
         if output.ndim == 3:

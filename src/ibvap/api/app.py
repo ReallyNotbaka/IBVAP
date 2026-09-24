@@ -18,6 +18,7 @@ from ibvap.api.routes.events import router as events_router
 from ibvap.api.routes.health import router as health_router
 from ibvap.api.routes.models import router as models_router
 from ibvap.api.routes.sites import router as sites_router
+from ibvap.api.routes.tactical import router as tactical_router
 from ibvap.api.routes.uploads import router as uploads_router
 from ibvap.api.routes.watchlist import router as watchlist_router
 from ibvap.api.routes.ws import router as ws_router
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Software-defined border video analytics (Phase 1 foundation)",
         lifespan=lifespan,
     )
+    app.state.settings = cfg
 
     # CORS - strict allowlist, not "*" (threat-model T-01 fix)
     app.add_middleware(
@@ -79,7 +81,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Correlation-ID"],
     )
     # Compress JSON/MJPEG-manifest payloads >=1KB (no new deps; starlette built-in).
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    # Exclude multipart streams from GZip compression to avoid buffering/latency overhead.
+    from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES
+
+    app.add_middleware(
+        GZipMiddleware,
+        minimum_size=1024,
+        exclude_content_types=DEFAULT_EXCLUDED_CONTENT_TYPES + ("multipart/*", "multipart/x-mixed-replace"),
+    )
 
     # problem-details error envelope
     def _http_exception_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -127,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(ws_router)
     app.include_router(watchlist_router)
+    app.include_router(tactical_router)
 
     # optional frontend mount - existence checked at runtime (Phase 7 will always mount)
     try:

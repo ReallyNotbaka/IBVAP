@@ -5,13 +5,14 @@ from __future__ import annotations
 import threading
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import NullPool, StaticPool
+from sqlalchemy.pool import AsyncAdaptedQueuePool, StaticPool
 
 from ibvap.config import Settings
 
@@ -43,11 +44,27 @@ def get_engine(settings: Settings | None = None) -> AsyncEngine:
             else:
                 _engine = create_async_engine(
                     cfg.url,
-                    poolclass=NullPool,
+                    poolclass=AsyncAdaptedQueuePool,
+                    pool_size=cfg.pool_size,
+                    max_overflow=cfg.max_overflow,
                     connect_args=connect_args,
                     echo=cfg.echo,
                     future=True,
                 )
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                    cursor.execute("PRAGMA cache_size=-64000")
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
+                finally:
+                    cursor.close()
         else:
             _engine = create_async_engine(
                 cfg.url,

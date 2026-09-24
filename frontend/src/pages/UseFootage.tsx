@@ -8,18 +8,55 @@ export function UseFootage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
-  const [status, setStatus] = useState("Choose a video file to analyze.");
+  const [customPath, setCustomPath] = useState("");
+  const [status, setStatus] = useState("Choose a video file or enter a file path.");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [isBusy, setIsBusy] = useState(false);
 
   async function handleUseFootage() {
-    if (!file) {
+    const cleanPath = customPath.trim().replace(/^["']|["']$/g, "").trim();
+    if (!file && !cleanPath) {
       setStatusKind("error");
-      setStatus("Please choose a supported video file first.");
+      setStatus("Please choose a video file or enter a file path.");
       return;
     }
 
-    const supportedExtension = /\.(mp4|mov|avi|mkv|webm)$/i.test(file.name);
+    if (cleanPath) {
+      const supportedExtension = /\.(mp4|mov|avi|mkv|webm)$/i.test(cleanPath);
+      if (!supportedExtension) {
+        setStatusKind("error");
+        setStatus("Enter a path to an MP4, MOV, AVI, MKV, or WEBM file.");
+        return;
+      }
+      setIsBusy(true);
+      setStatusKind("info");
+      setStatus("Configuring footage source...");
+      try {
+        const name = cleanPath.split(/[/\\]/).pop() || cleanPath;
+        await createCamera({
+          name,
+          site_id: "00000000-0000-0000-0000-000000000001",
+          source_type: "video_footage",
+          protocol: "file",
+          endpoint: cleanPath,
+          site_cidr_allowlist: [],
+          temporary: true,
+        });
+        setStatus("Refreshing camera list...");
+        await queryClient.invalidateQueries({ queryKey: ["cameras"] });
+        setStatus(`Footage ready: ${name}`);
+        navigate("/");
+      } catch (error) {
+        const message = error instanceof Error && error.message ? error.message : "Unable to use the selected footage.";
+        setStatusKind("error");
+        setStatus(message);
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
+    const supportedExtension = /\.(mp4|mov|avi|mkv|webm)$/i.test(file!.name);
     if (!supportedExtension) {
       setStatusKind("error");
       setStatus("Choose an MP4, MOV, AVI, MKV, or WEBM file.");
@@ -31,13 +68,13 @@ export function UseFootage() {
     setStatus("Uploading footage...");
 
     try {
-      const upload = await uploadFootage(file);
+      const upload = await uploadFootage(file!);
       setStatus("Finalizing footage...");
       const finalized = await finalizeUpload(upload.upload_id);
       setStatus("Configuring footage source...");
 
       await createCamera({
-        name: file.name,
+        name: file!.name,
         site_id: "00000000-0000-0000-0000-000000000001",
         source_type: "video_footage",
         protocol: "file",
@@ -48,7 +85,7 @@ export function UseFootage() {
 
       setStatus("Refreshing camera list...");
       await queryClient.invalidateQueries({ queryKey: ["cameras"] });
-      setStatus(`Footage ready: ${file.name}`);
+      setStatus(`Footage ready: ${file!.name}`);
       navigate("/");
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : "Unable to use the selected footage.";
@@ -77,16 +114,18 @@ export function UseFootage() {
         </div>
 
         <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          Upload a local MP4, MOV, AVI, MKV, or WEBM clip and process it through the vision pipeline.
+          Upload a local video clip or enter its local file path to process through the vision pipeline.
         </p>
 
-        <label className="mt-6 block rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 p-6 text-sm text-slate-600 dark:text-slate-300 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+        {/* Option 1: File Browse */}
+        <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 p-5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
           <input
             type="file"
             accept=".mp4,.mov,.avi,.mkv,.webm,video/*"
             className="hidden"
             onChange={(event) => {
               setFile(event.target.files?.[0] ?? null);
+              if (event.target.files?.[0]) setCustomPath("");
               setStatusKind("info");
               setStatus("Ready to upload.");
             }}
@@ -102,11 +141,34 @@ export function UseFootage() {
           </div>
         </label>
 
+        {/* Divider */}
+        <div className="my-4 flex items-center gap-3">
+          <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+          <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">OR ENTER FILE PATH</span>
+          <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+        </div>
+
+        {/* Option 2: Path text input */}
+        <div>
+          <input
+            type="text"
+            placeholder="C:\Users\...\video.mp4"
+            value={customPath}
+            onChange={(e) => {
+              setCustomPath(e.target.value);
+              if (e.target.value) setFile(null);
+              setStatusKind("info");
+              setStatus("Ready to configure footage.");
+            }}
+            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2.5 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+          />
+        </div>
+
         <div className="mt-5 flex gap-3">
           <button
             type="button"
             onClick={handleUseFootage}
-            disabled={!file || isBusy}
+            disabled={(!file && !customPath.trim()) || isBusy}
             className="primary-button flex-1 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
           >
             {isBusy ? "Processing..." : statusKind === "error" ? "Try again" : "Use footage"}

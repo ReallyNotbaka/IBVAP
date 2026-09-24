@@ -13,7 +13,6 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.52",
     "alembic==1.19.1",
     "asyncpg==0.31.0",
-    "psycopg[binary]==3.2.9",
     "greenlet>=3.0",
     "av==18.1.0",
     "opencv-python==5.0.0.93",
@@ -23,13 +22,7 @@ dependencies = [
     "uvicorn[standard]==0.52.4",
     "python-multipart==0.0.32",
     "httpx==0.28.1",
-    "websockets==15.0.1",
-    "python-jose[cryptography]==3.5.0",
-    "passlib[bcrypt]==1.7.4",
     "structlog==25.4.0",
-    "opentelemetry-api==1.37.0",
-    "opentelemetry-sdk==1.37.0",
-    "prometheus-client==0.22.1",
     "paddleocr==3.7.0",
     "onnxruntime-directml==1.24.4",
     "aiosqlite==0.22.1",
@@ -106,6 +99,7 @@ reportArgumentType = false
 reportReturnType = false
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

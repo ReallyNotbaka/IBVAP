@@ -152,6 +152,11 @@ class RuleEngine:
                     ls.dwell_triggered = False
         return events
 
+    def prune_track(self, track_id: int) -> None:
+        """Evict state for a terminated track to prevent unbounded memory growth."""
+        self._trip_state.pop(track_id, None)
+        self._loiter_state.pop(track_id, None)
+
     def _should_emit(self, dedup: str, now: float) -> bool:
         if self.cooldown_seconds <= 0:
             self._last_event_at[dedup] = now
@@ -160,6 +165,9 @@ class RuleEngine:
         if last is not None and (now - last) < self.cooldown_seconds:
             return False
         self._last_event_at[dedup] = now
+        if len(self._last_event_at) > 1000:
+            cutoff = now - max(self.cooldown_seconds * 2, 60.0)
+            self._last_event_at = {k: v for k, v in self._last_event_at.items() if v >= cutoff}
         return True
 
     def explain(self, event: dict) -> dict:

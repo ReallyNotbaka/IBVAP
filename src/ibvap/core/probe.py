@@ -18,7 +18,7 @@ from urllib.parse import urlparse, urlunparse
 import av
 
 from ibvap.core.credentials import build_authenticated_url
-from ibvap.core.ssrf import DEFAULT_POLICY, SSRFPolicy, preflight_stream_url
+from ibvap.core.ssrf import DEFAULT_POLICY, SSRFPolicy, pin_stream_url
 
 
 def normalize_mjpeg_url(url: str) -> str:
@@ -27,14 +27,15 @@ def normalize_mjpeg_url(url: str) -> str:
     DroidCam runs on 4747, IP Webcam on 8080. Both expect /video at the end,
     without it you get the settings page instead of the feed.
     """
+    clean = url.strip().strip('"').strip("'")
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(clean)
         path = parsed.path.lower().rstrip("/")
-        if parsed.port in (4747, 8080) and not path:
+        if parsed.port in (4747, 8080, 8000, 8081) and not path:
             return urlunparse(parsed._replace(path="/video"))
     except Exception:
         pass
-    return url
+    return clean
 
 
 @dataclass(frozen=True)
@@ -84,10 +85,10 @@ def probe_url(
     url = normalize_mjpeg_url(url)
     if policy is None:
         policy = DEFAULT_POLICY
-    preflight_stream_url(url, policy, timeout=min(timeout, 3.0))
-    open_url = url
+    pinned_url, _ = pin_stream_url(url, policy, timeout=min(timeout, 3.0))
+    open_url = pinned_url
     if auth is not None:
-        open_url = build_authenticated_url(url, auth[0], auth[1])
+        open_url = build_authenticated_url(pinned_url, auth[0], auth[1])
     start = time.monotonic()
     # FFmpeg-level network timeout in microseconds.
     # Do NOT pass timeout= kwarg to av.open() — PyAV's I/O callback
@@ -101,10 +102,12 @@ def probe_url(
         "probesize": "500000",  # 500KB probe buffer (enough for MJPEG headers)
     }
     parsed_url = urlparse(url)
+    if parsed_url.scheme.lower() in ("http", "https") and not policy.allow_redirects:
+        opts["follow_redirects"] = "0"
     path = parsed_url.path.lower().rstrip("/")
     is_ip_webcam_mjpeg = (
         path in {"/video", "/videofeed", "/mjpegfeed"}
-        or parsed_url.port == 4747
+        or parsed_url.port in (4747, 8080)
         or parsed_url.scheme == "mjpeg"
         or path.endswith((".mjpg", ".mjpeg"))
     )
@@ -155,8 +158,10 @@ def probe_url(
             fps = None
         duration: float | None = None
         try:
-            if container.duration and v.time_base:
-                duration = float(container.duration * v.time_base)
+            if container.duration is not None:
+                duration = max(0.0, float(container.duration) / av.time_base)
+            elif v.duration is not None and v.time_base:
+                duration = max(0.0, float(v.duration * v.time_base))
         except Exception:
             duration = None
         warnings: list[str] = []

@@ -10,12 +10,16 @@ Implements multi-vector gallery matching on the SFace embedding manifold S^127:
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
+import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -23,19 +27,19 @@ logger = logging.getLogger(__name__)
 
 
 class ThreatLevel(str, Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
     CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
 
 
 @dataclass
 class MatchResult:
     entry_id: str
     name: str
-    threat_level: ThreatLevel
     score: float
-    tier: str  # "RED" | "AMBER" | "NEUTRAL"
+    threat_level: ThreatLevel
+    tier: str  # RED or AMBER
     notes: str = ""
 
 
@@ -46,35 +50,41 @@ class WatchlistEntry:
     threat_level: ThreatLevel = ThreatLevel.HIGH
     notes: str = ""
     created_at: float = field(default_factory=time.time)
-    gallery: list[np.ndarray] = field(default_factory=list)
+    gallery: list[np.ndarray] = field(default_factory=list)  # (128,) SFace embedding vectors
     thumbnail_b64: str = ""
     sight_count: int = 0
     last_sighted: float | None = None
+    _cached_matrix: np.ndarray | None = field(default=None, init=False, repr=False)
 
     @property
     def matrix(self) -> np.ndarray:
-        """Return (K, 128) exemplar gallery matrix normalized to unit hypersphere."""
+        """Return (K, 128) exemplar gallery matrix normalized to unit hypersphere (cached)."""
+        if getattr(self, "_cached_matrix", None) is not None:
+            return self._cached_matrix
         if not self.gallery:
-            return np.zeros((0, 128), dtype=np.float32)
+            self._cached_matrix = np.zeros((0, 128), dtype=np.float32)
+            return self._cached_matrix
         m = np.vstack([np.asarray(v, dtype=np.float32).reshape(1, -1) for v in self.gallery])
         norms = np.linalg.norm(m, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
-        return m / norms
+        self._cached_matrix = (m / norms).astype(np.float32)
+        return self._cached_matrix
+
+    def invalidate_cache(self) -> None:
+        self._cached_matrix = None
 
 
 def is_valid_exemplar(arr: np.ndarray) -> bool:
-    """Ensure vector is non-empty, 128-d, finite, non-zero norm, and has genuine biometric variance.
-
-    Rejects constant, all-zero, or corrupted dummy vectors that create spurious cosine matches.
-    """
-    if not isinstance(arr, np.ndarray) or arr.size != 128:
+    """True if 128-d float array has non-trivial variance (not all zeros or corrupt)."""
+    if arr is None:
         return False
-    if not np.all(np.isfinite(arr)):
+    a = np.asarray(arr, dtype=np.float32).flatten()
+    if a.shape != (128,) or not np.all(np.isfinite(a)):
         return False
-    norm = float(np.linalg.norm(arr))
+    norm = float(np.linalg.norm(a))
     if norm < 1e-4:
         return False
-    var = float(np.var(arr))
+    var = float(np.var(a))
     return var >= 1e-4
 
 
@@ -82,9 +92,13 @@ class WatchlistStore:
     """Thread-safe persistent storage and matcher for biometric watchlist targets."""
 
     def __init__(self, storage_path: Path | str = Path("data/watchlist.json")) -> None:
-        self.storage_path = Path(storage_path)
+        self.storage_path = Path(storage_path).resolve()
         self._entries: dict[str, WatchlistEntry] = {}
         self._load()
+
+    def flush(self, timeout: float = 2.0) -> None:
+        """Wait for any background save for this store to finish (no-op: saves are atomic)."""
+        pass
 
     def _load(self) -> None:
         if not self.storage_path.exists():
@@ -130,29 +144,29 @@ class WatchlistStore:
         except Exception as ex:
             logger.warning("Failed to load watchlist from %s: %s", self.storage_path, ex)
 
-    def _save(self) -> None:
+    def _save(self, sync: bool = True) -> None:
+        serialized = []
+        for e in list(self._entries.values()):
+            b64_gallery = [
+                base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii")
+                for v in e.gallery
+            ]
+            serialized.append(
+                {
+                    "id": e.id,
+                    "name": e.name,
+                    "threat_level": e.threat_level.value,
+                    "notes": e.notes,
+                    "created_at": e.created_at,
+                    "gallery": b64_gallery,
+                    "thumbnail_b64": e.thumbnail_b64,
+                    "sight_count": e.sight_count,
+                    "last_sighted": e.last_sighted,
+                }
+            )
         try:
             self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            serialized = []
-            for e in self._entries.values():
-                b64_gallery = [
-                    base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii")
-                    for v in e.gallery
-                ]
-                serialized.append(
-                    {
-                        "id": e.id,
-                        "name": e.name,
-                        "threat_level": e.threat_level.value,
-                        "notes": e.notes,
-                        "created_at": e.created_at,
-                        "gallery": b64_gallery,
-                        "thumbnail_b64": e.thumbnail_b64,
-                        "sight_count": e.sight_count,
-                        "last_sighted": e.last_sighted,
-                    }
-                )
-            tmp_path = self.storage_path.with_suffix(".tmp")
+            tmp_path = self.storage_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump({"entries": serialized}, f, indent=2)
             tmp_path.replace(self.storage_path)
@@ -161,6 +175,7 @@ class WatchlistStore:
 
     def add_entry(self, entry: WatchlistEntry) -> None:
         entry.gallery = [v for v in entry.gallery if is_valid_exemplar(v)]
+        entry.invalidate_cache()
         self._entries[entry.id] = entry
         self._save()
 
