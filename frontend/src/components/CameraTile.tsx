@@ -33,6 +33,9 @@ export interface TargetInspectData {
   label: string;
   confidence?: number;
   thumbnail?: string | null;
+  targetType?: "face" | "plate";
+  plateNumber?: string;
+  vehicleClass?: string;
 }
 
 // One video tile. <img> shows MJPEG from GET /cameras/{id}/stream,
@@ -295,10 +298,46 @@ export const CameraTile = memo(function CameraTile({
         const isCritical = threatLevel === "CRITICAL" || identity?.tier === "RED";
         const targetName = identity?.name;
 
+        const rawClass = item.class_name?.toLowerCase() ?? "";
+        const isVehicle = ["car", "truck", "bus", "motorcycle"].includes(rawClass);
+        const trackIdStr = "track_id" in item && item.track_id !== undefined ? String(item.track_id) : undefined;
+
+        let plateText = (trackItem as { plate?: string | null })?.plate || null;
+        if (!plateText && trackIdStr && observations?.plates) {
+          const matched = observations.plates.find(
+            (p) => p.track_id !== undefined && String(p.track_id) === trackIdStr && p.text
+          );
+          if (matched?.text) plateText = matched.text;
+        }
+        if (!plateText && trackIdStr && observations?.plate_detections) {
+          const matched = observations.plate_detections.find(
+            (p) => p.track_id !== undefined && String(p.track_id) === trackIdStr && p.text
+          );
+          if (matched?.text) plateText = matched.text;
+        }
+        if (!plateText && isVehicle && observations?.plate_detections) {
+          const matched = observations.plate_detections.find((p) => {
+            if (!p.text || !p.bbox_norm) return false;
+            const [px1, py1, px2, py2] = p.bbox_norm;
+            const pcx = (px1 + px2) / 2;
+            const pcy = (py1 + py2) / 2;
+            return pcx >= x1 && pcx <= x2 && pcy >= y1 && pcy <= y2;
+          });
+          if (matched?.text) plateText = matched.text;
+        }
+
+        const hasPlate = Boolean(plateText);
+
         const displayLabel = isFenceIntrusion
-          ? (isWatchlistMatch ? `ROI INTRUDER: [${targetName}]` : "ROI INTRUDER")
+          ? (isWatchlistMatch
+              ? `ROI INTRUDER: [${targetName}]`
+              : hasPlate
+              ? `ROI INTRUDER: [${plateText!.toUpperCase()}]`
+              : "ROI INTRUDER")
           : isWatchlistMatch
           ? (isCritical ? `CRITICAL: [${targetName}]` : `TARGET: [${targetName}]`)
+          : hasPlate
+          ? plateText!.toUpperCase()
           : item.class_name;
 
         return {
@@ -308,13 +347,16 @@ export const CameraTile = memo(function CameraTile({
           h: y2 - y1,
           label: displayLabel,
           confidence: isWatchlistMatch ? identity?.score : item.confidence,
-          trackId: "track_id" in item ? String(item.track_id) : undefined,
+          trackId: trackIdStr,
           isAlert: isWatchlistMatch || isFenceIntrusion,
           isFenceIntrusion,
           targetName: targetName,
           threatLevel: threatLevel,
           isCritical: isCritical,
-          isPlate: false,
+          isPlate: hasPlate,
+          plateText: plateText || undefined,
+          vehicleClass: isVehicle ? item.class_name : undefined,
+          rawClass,
         };
       })
       .filter(
@@ -323,7 +365,7 @@ export const CameraTile = memo(function CameraTile({
           (item.isPlate ||
             item.isAlert ||
             ["person", "car", "truck", "bus", "motorcycle", "bicycle"].includes(
-              item.label.toLowerCase()
+              (item.rawClass || item.label).toLowerCase()
             ))
       )
       .sort((a, b) => {
@@ -335,7 +377,7 @@ export const CameraTile = memo(function CameraTile({
         }
         return (b.confidence ?? 0) - (a.confidence ?? 0);
       });
-  }, [tracks, detections, cameraFence, showFence, fencePoints, fencePointsLen]);
+  }, [tracks, detections, cameraFence, showFence, fencePoints, fencePointsLen, observations?.plates, observations?.plate_detections]);
 
   const minFaceConf = 0.50;
   const isMinimal = preset === "clean" || mode === "minimal";
@@ -385,28 +427,51 @@ export const CameraTile = memo(function CameraTile({
   }, [faces, isMinimal]);
 
   const plateBoxes: Box[] = useMemo(() => {
+    // Suppress bumper boxes if the parent vehicle already displays the plate,
+    // or if the vehicle is already tracked and rendered in boxes
+    const activeVehiclePlates = new Set<string>();
+    const activeVehicleTracks = new Set<string>();
+    for (const b of boxes) {
+      if (b.trackId) activeVehicleTracks.add(b.trackId);
+      if (b.plateText) activeVehiclePlates.add(b.plateText.toUpperCase());
+      if (b.label) activeVehiclePlates.add(b.label.toUpperCase());
+    }
+
     const detectionsPlates = observations?.plate_detections ?? [];
     const result: Box[] = [];
 
     for (const d of detectionsPlates) {
       if (!d.bbox_norm) continue;
+      const tid = d.track_id !== undefined ? String(d.track_id) : undefined;
+      const pText = d.text ? d.text.trim().toUpperCase() : undefined;
+      const conf = d.confidence || 0;
+
+      // Filter out invalid/empty/zero-confidence detections:
+      // NEVER show 0% confidence boxes or empty "NUMBER PLATE" placeholders!
+      if (!pText || conf <= 0 || conf < 0.40) continue;
+
+      // If this plate belongs to a vehicle already tracked and drawn on screen,
+      // suppress the duplicate sub-box (the vehicle box itself displays the plate).
+      if (tid && activeVehicleTracks.has(tid)) continue;
+      if (activeVehiclePlates.has(pText)) continue;
+
       const [x1, y1, x2, y2] = d.bbox_norm;
-      const label = d.text ? `PLATE: ${d.text}` : "PLATE";
       result.push({
         x: x1,
         y: y1,
         w: x2 - x1,
         h: y2 - y1,
-        label,
-        confidence: d.confidence || 0,
-        trackId: d.track_id !== undefined ? String(d.track_id) : undefined,
+        label: pText,
+        confidence: conf,
+        trackId: tid,
         isAlert: false,
         isPlate: true,
+        plateText: d.text,
       });
     }
 
     return result;
-  }, [observations?.plate_detections]);
+  }, [observations?.plate_detections, boxes]);
 
   const allBoxes = useMemo(() => {
     return [...boxes, ...faceBoxes, ...plateBoxes];
@@ -461,11 +526,29 @@ export const CameraTile = memo(function CameraTile({
 
   const handlePutOnWatchlist = useCallback(() => {
     if (!activeSelectedBox) return;
+    const isPlate = Boolean(activeSelectedBox.isPlate || activeSelectedBox.label.startsWith("NUMBER PLATE"));
+    let plateText = activeSelectedBox.plateText || null;
+    if (!plateText) {
+      if (isPlate) {
+        const m = activeSelectedBox.label.match(/NUMBER PLATE:\s*([^\s]+)/i);
+        if (m) plateText = m[1];
+        else if (activeSelectedBox.label && activeSelectedBox.label.toUpperCase() !== "NUMBER PLATE") {
+          plateText = activeSelectedBox.label;
+        }
+      } else {
+        const m = activeSelectedBox.label.match(/\[([A-Z0-9]+)\]/i);
+        if (m) plateText = m[1];
+      }
+    }
+
     onInspectTarget?.({
       trackId: activeSelectedBox.trackId,
       label: activeSelectedBox.label,
       confidence: activeSelectedBox.confidence,
       thumbnail: targetThumb,
+      targetType: isPlate || plateText ? "plate" : "face",
+      plateNumber: plateText || undefined,
+      vehicleClass: activeSelectedBox.vehicleClass || undefined,
     });
     setSelectedBox(null);
   }, [activeSelectedBox, onInspectTarget, targetThumb]);

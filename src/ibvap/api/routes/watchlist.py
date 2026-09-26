@@ -15,7 +15,13 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from ibvap.core.face import FaceDetector, FaceRecognizer
-from ibvap.core.watchlist import ThreatLevel, WatchlistEntry, get_watchlist_store
+from ibvap.core.watchlist import (
+    TargetType,
+    ThreatLevel,
+    WatchlistEntry,
+    get_watchlist_store,
+    normalize_plate_string,
+)
 
 router = APIRouter(prefix="/api/v1/watchlist", tags=["watchlist"])
 
@@ -48,10 +54,22 @@ class WatchlistSummaryItem(BaseModel):
     thumbnail_b64: str
     sight_count: int
     last_sighted: float | None
+    target_type: str = "face"
+    plate_number: str | None = None
+    vehicle_description: str | None = None
 
 
 class WatchlistResponse(BaseModel):
     entries: list[WatchlistSummaryItem]
+
+
+class PlateEnrollRequest(BaseModel):
+    name: str
+    plate_number: str
+    threat_level: str = "HIGH"
+    notes: str = ""
+    vehicle_description: str | None = None
+    thumbnail_b64: str | None = None
 
 
 @router.get("", response_model=WatchlistResponse)
@@ -70,9 +88,55 @@ def list_watchlist() -> WatchlistResponse:
                 thumbnail_b64=e.thumbnail_b64,
                 sight_count=e.sight_count,
                 last_sighted=e.last_sighted,
+                target_type=e.target_type.value,
+                plate_number=e.plate_number,
+                vehicle_description=e.vehicle_description,
             )
         )
     return WatchlistResponse(entries=items)
+
+
+@router.post("/enroll-plate")
+def enroll_plate(req: PlateEnrollRequest) -> dict[str, Any]:
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Target name cannot be empty")
+    raw_plate = req.plate_number.strip()
+    if not raw_plate:
+        raise HTTPException(status_code=400, detail="License plate cannot be empty")
+
+    norm_plate = normalize_plate_string(raw_plate)
+    if len(norm_plate) < 3:
+        raise HTTPException(status_code=400, detail="Plate must have at least 3 alphanumeric characters")
+
+    try:
+        threat = ThreatLevel(req.threat_level.upper())
+    except ValueError:
+        threat = ThreatLevel.HIGH
+
+    store = get_watchlist_store()
+    entry_id = str(uuid.uuid4())
+    entry = WatchlistEntry(
+        id=entry_id,
+        name=name,
+        threat_level=threat,
+        notes=req.notes.strip(),
+        target_type=TargetType.PLATE,
+        plate_number=raw_plate.upper(),
+        normalized_plate=norm_plate,
+        vehicle_description=req.vehicle_description.strip() if req.vehicle_description else None,
+        thumbnail_b64=req.thumbnail_b64 or "",
+    )
+    store.add_entry(entry)
+    logger.info("enrolled_plate_target", entry_id=entry_id, plate=norm_plate, name=name)
+    return {
+        "status": "enrolled",
+        "entry_id": entry_id,
+        "name": name,
+        "plate_number": entry.plate_number,
+        "threat_level": entry.threat_level.value,
+        "target_type": "plate",
+    }
 
 
 @router.post("/enroll")
@@ -131,7 +195,6 @@ async def enroll_suspect(
             continue
 
         h, w = img.shape[:2]
-        faces = detector.detect(img)
         if not faces:
             rejection_reasons.append(f"Photo {idx + 1}: no face detected")
             continue

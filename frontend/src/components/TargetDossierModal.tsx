@@ -103,8 +103,8 @@ export const TargetDossierModal = memo(function TargetDossierModal({
                     </div>
 
                     {d.plate && (
-                      <div className="mt-1 text-[10px] text-indigo-300 bg-indigo-950/40 border border-indigo-500/30 rounded px-1.5 py-0.5">
-                        PLATE: {d.plate}
+                      <div className="mt-1 text-[10px] font-bold tracking-wider text-amber-300 bg-amber-950/50 border border-amber-500/40 rounded px-1.5 py-0.5">
+                        NUMBER PLATE: {d.plate}
                       </div>
                     )}
                   </div>
@@ -186,7 +186,11 @@ export const TargetDossierModal = memo(function TargetDossierModal({
                             <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-3">
                               <span>Track #{s.track_id ?? "--"}</span>
                               <span>Confidence: {Math.round(s.confidence * 100)}%</span>
-                              {s.plate && <span className="text-indigo-300">Plate: {s.plate}</span>}
+                              {s.plate && (
+                                <span className="font-bold text-amber-300 bg-amber-950/60 border border-amber-500/40 px-1.5 py-0.5 rounded text-[10px]">
+                                  NUMBER PLATE: {s.plate}
+                                </span>
+                              )}
                             </div>
 
                             {s.is_intrusion && (

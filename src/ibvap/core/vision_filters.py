@@ -15,10 +15,9 @@ import numpy as np
 
 def apply_white_hot_flir(image: np.ndarray) -> np.ndarray:
     """Simulate White-Hot Forward Looking Infrared (FLIR) thermal imaging."""
-    if len(image.shape) == 3 and image.shape[2] == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
+    if image is None or image.size == 0 or len(image.shape) < 2 or image.shape[0] < 2 or image.shape[1] < 2:
+        return image
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 and image.shape[2] == 3 else image.copy()
 
     # Contrast stretch with thermal curve emphasis
     norm = cv2.normalize(gray, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
@@ -32,16 +31,17 @@ def apply_white_hot_flir(image: np.ndarray) -> np.ndarray:
 
 def apply_black_hot_flir(image: np.ndarray) -> np.ndarray:
     """Simulate Black-Hot FLIR thermal imaging (inverted heat signature)."""
+    if image is None or image.size == 0 or len(image.shape) < 2 or image.shape[0] < 2 or image.shape[1] < 2:
+        return image
     white_hot = apply_white_hot_flir(image)
     return cv2.bitwise_not(white_hot)
 
 
 def apply_ironbow_flir(image: np.ndarray) -> np.ndarray:
     """Simulate military Ironbow false-color thermal palette."""
-    if len(image.shape) == 3 and image.shape[2] == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
+    if image is None or image.size == 0 or len(image.shape) < 2 or image.shape[0] < 2 or image.shape[1] < 2:
+        return image
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 and image.shape[2] == 3 else image.copy()
 
     # Pre-process with CLAHE for local thermal contrast
     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
@@ -52,19 +52,26 @@ def apply_ironbow_flir(image: np.ndarray) -> np.ndarray:
 
 def apply_tactical_defog(image: np.ndarray) -> np.ndarray:
     """Apply tactical defog / haze penetration using LAB CLAHE and unsharp masking."""
-    if len(image.shape) != 3 or image.shape[2] != 3:
-        return image.copy()
+    if (
+        image is None
+        or image.size == 0
+        or len(image.shape) != 3
+        or image.shape[2] != 3
+        or image.shape[0] < 2
+        or image.shape[1] < 2
+    ):
+        return image if image is None else image.copy()
 
     # Convert to LAB color space
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
+    l_chan, a_chan, b_chan = cv2.split(lab)
 
     # Apply CLAHE to luminance channel
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    cl = clahe.apply(l)
+    cl = clahe.apply(l_chan)
 
     # Merge back and convert to BGR
-    merged = cv2.merge((cl, a, b))
+    merged = cv2.merge((cl, a_chan, b_chan))
     enhanced = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
     # High-pass unsharp mask for perimeter edge clarity
@@ -75,6 +82,8 @@ def apply_tactical_defog(image: np.ndarray) -> np.ndarray:
 
 def process_tactical_filter(image: np.ndarray, mode: str) -> np.ndarray:
     """Apply the specified tactical vision mode."""
+    if image is None or image.size == 0 or len(image.shape) < 2 or image.shape[0] < 2 or image.shape[1] < 2:
+        return image
     mode_lower = mode.strip().lower()
     if mode_lower in {"white-hot", "white_hot", "w_hot"}:
         return apply_white_hot_flir(image)

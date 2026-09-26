@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useEvents, clearEvents, useCameras, type EventItem } from "../lib/api";
+import { useEvents, clearEvents, useCameras, type EventItem, base } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   BellIcon,
@@ -9,7 +9,12 @@ import {
   VideoIcon,
   CloseIcon,
   SparkIcon,
+  DownloadIcon,
+  SettingsIcon,
+  ImageIcon,
 } from "../components/Icons";
+import { EvidenceModal } from "../components/EvidenceModal";
+import { SettingsModal } from "../components/SettingsModal";
 
 type AlertTab = "all" | "watchlist" | "intrusions" | "exits" | "system";
 
@@ -23,6 +28,8 @@ export function Alerts() {
   const [isClearing, setIsClearing] = useState(false);
   const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(new Set());
   const [actionError, setActionError] = useState("");
+  const [selectedEvidenceEvent, setSelectedEvidenceEvent] = useState<EventItem | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const { data: rawEvents = [], isLoading, isError, refetch } = useEvents({ limit: 100 });
   const { data: cameras = [] } = useCameras();
@@ -159,6 +166,56 @@ export function Alerts() {
     setAcknowledgedIds((prev) => new Set(prev).add(id));
   };
 
+  const handleExportCSV = () => {
+    if (filteredEvents.length === 0) return;
+    const headers = [
+      "Timestamp",
+      "ISO_Time",
+      "Camera_ID",
+      "Camera_Name",
+      "Event_Type",
+      "Threat_Level",
+      "Track_ID",
+      "Zone_ID",
+      "Suspect_or_Target",
+      "Confidence_Pct",
+      "Occurrences",
+    ];
+
+    const rows = filteredEvents.map(({ event: ev, count, latestTime }) => {
+      const isoTime = latestTime ? new Date(latestTime * 1000).toISOString() : "";
+      const camName = cameraMap.get(ev.camera_id) || ev.camera_id;
+      const threat = (ev.explanation?.threat_level || ev.explanation?.tier || "INFO").toUpperCase();
+      const target = ev.explanation?.suspect_name || ev.explanation?.plate || ev.explanation?.rule || "";
+      const conf = ev.confidence !== undefined ? Math.round(ev.confidence * 100) : "";
+
+      return [
+        latestTime,
+        `"${isoTime}"`,
+        `"${ev.camera_id}"`,
+        `"${camName}"`,
+        `"${ev.event_type}"`,
+        `"${threat}"`,
+        ev.track_id !== undefined ? ev.track_id : "",
+        `"${ev.zone_id || ""}"`,
+        `"${target.replace(/"/g, '""')}"`,
+        conf,
+        count,
+      ].join(",");
+    });
+
+    const csvData = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvData], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ibvap_incidents_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const formatTime = (epochSeconds?: number) => {
     if (!epochSeconds) return "Recent";
     const diff = Math.floor(Date.now() / 1000 - epochSeconds);
@@ -207,6 +264,25 @@ export function Alerts() {
             className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-xs transition-colors cursor-pointer"
           >
             Refresh
+          </button>
+
+          <button
+            onClick={handleExportCSV}
+            disabled={filteredEvents.length === 0}
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+            title="Export filtered alerts to CSV incident report"
+          >
+            <DownloadIcon className="w-3.5 h-3.5" />
+            <span>Export CSV</span>
+          </button>
+
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+            title="Configure C2 Webhook Relay & Sensitivity Parameters"
+          >
+            <SettingsIcon className="w-3.5 h-3.5" />
+            <span>C2 & Settings</span>
           </button>
 
           <button
@@ -380,6 +456,24 @@ export function Alerts() {
                     )}
                   </div>
 
+                  {(ev.crop_url || ev.snapshot_url) && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEvidenceEvent(ev)}
+                      className="group relative flex-shrink-0 h-12 w-12 rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 bg-black/60 shadow-xs cursor-pointer hover:border-indigo-500 transition-colors"
+                      title="Inspect Forensic Evidence"
+                    >
+                      <img
+                        src={base(ev.crop_url || ev.snapshot_url!)}
+                        alt="Evidence thumbnail"
+                        className="h-full w-full object-cover group-hover:scale-110 transition-transform"
+                      />
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
+                        <ImageIcon className="w-3.5 h-3.5" />
+                      </div>
+                    </button>
+                  )}
+
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${badgeBg}`}>
@@ -437,6 +531,17 @@ export function Alerts() {
                     {formatTime(latestTime)}
                   </span>
 
+                  {(ev.snapshot_url || ev.crop_url) && (
+                    <button
+                      onClick={() => setSelectedEvidenceEvent(ev)}
+                      className="rounded-lg border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 px-2.5 py-1 text-xs font-semibold shadow-xs transition-colors cursor-pointer flex items-center gap-1"
+                      title="View forensic snapshots and target crop"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>Evidence</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => handleAcknowledge(ev.id)}
                     className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-xs transition-colors cursor-pointer"
@@ -450,6 +555,18 @@ export function Alerts() {
           })
         )}
       </div>
+
+      <EvidenceModal
+        isOpen={Boolean(selectedEvidenceEvent)}
+        onClose={() => setSelectedEvidenceEvent(null)}
+        event={selectedEvidenceEvent}
+        cameraName={selectedEvidenceEvent ? cameraMap.get(selectedEvidenceEvent.camera_id) : undefined}
+      />
+
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
     </div>
   );
 }

@@ -19,12 +19,15 @@ build/
 # Data / runtime - keep committed placeholders, ignore generated
 data/db/*.db
 data/db/*.db-*
+data/*.db
+data/*.db-*
 data/frames/*.jpg
 data/frames/*.mp4
 data/logs/*.log*
 data/bin/
 data/*.mp4
 data/watchlist.json
+data/settings.json
 *.part
 *.pt
 *.onnx

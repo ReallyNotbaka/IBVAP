@@ -114,3 +114,68 @@ async def dispose_engine() -> None:
         _sessionmaker = None
     if engine is not None:
         await engine.dispose()
+
+
+async def init_db(settings: Settings | None = None) -> bool:
+    """Initialize database tables with automatic SQLite WAL fallback if primary DB is unavailable."""
+    global _engine, _sessionmaker
+    from pathlib import Path
+
+    import structlog
+
+    from ibvap.models import Base
+
+    logger = structlog.get_logger("ibvap.db")
+    engine = get_engine(settings)
+
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        return True
+    except Exception as e:
+        logger.warning(
+            "db_primary_unavailable",
+            error=str(e),
+            msg="Configured primary database unavailable; falling back to durable SQLite store",
+        )
+        with _engine_lock:
+            if _engine is not None:
+                import contextlib
+
+                with contextlib.suppress(Exception):
+                    await _engine.dispose()
+                _engine = None
+                _sessionmaker = None
+
+            Path("data").mkdir(parents=True, exist_ok=True)
+            sqlite_url = "sqlite+aiosqlite:///data/ibvap.db"
+            connect_args = {"check_same_thread": False}
+            _engine = create_async_engine(
+                sqlite_url,
+                poolclass=AsyncAdaptedQueuePool,
+                connect_args=connect_args,
+                echo=False,
+                future=True,
+            )
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
+                    cursor.execute("PRAGMA cache_size=-64000")
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                except Exception:
+                    pass
+                finally:
+                    cursor.close()
+
+            _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False, class_=AsyncSession)
+
+        async with _engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("db_sqlite_fallback_ready", db_path="data/ibvap.db")
+        return True
+

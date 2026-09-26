@@ -10,10 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from pathlib import Path
 import time
-from typing import Any, Literal
 import uuid
+from typing import Any, Literal
 
 import av
 import structlog
@@ -25,10 +24,10 @@ from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
 from ibvap.core.geometry import validate_fence
 from ibvap.core.jail import (
-    _cached_jail_roots,
-    _cached_writable_jail,
-    _clean_file_path,
-    _file_jail_roots,
+    _cached_jail_roots,  # noqa: F401
+    _cached_writable_jail,  # noqa: F401
+    _clean_file_path,  # noqa: F401
+    _file_jail_roots,  # noqa: F401
     _import_external_video_if_needed,
     _is_file_endpoint,
     _resolve_jailed_file,
@@ -36,8 +35,8 @@ from ibvap.core.jail import (
     _synthetic_allowed,
 )
 from ibvap.core.ocr_worker import (
-    _match_vehicle_track,
-    _select_plate_detections,
+    _match_vehicle_track,  # noqa: F401
+    _select_plate_detections,  # noqa: F401
 )
 from ibvap.core.probe import ProbeError, normalize_mjpeg_url, probe_url
 from ibvap.core.ssrf import (
@@ -67,13 +66,13 @@ from ibvap.services.stream_worker import (
     _STREAM_CLIENT_COUNT,
     _STREAM_SUBSCRIBERS,
     _STREAM_SUBSCRIBERS_LOCK,
-    _WORKERS,
-    _camera_worker,
-    _connect_endpoint,
+    _WORKERS,  # noqa: F401
+    _camera_worker,  # noqa: F401
+    _connect_endpoint,  # noqa: F401
     _is_file_camera,
-    _notify_stream_subscribers,
+    _notify_stream_subscribers,  # noqa: F401
     _policy_from_request,
-    _release_pipeline,
+    _release_pipeline,  # noqa: F401
     _start_camera_worker,
     _stop_worker,
 )
@@ -419,6 +418,12 @@ async def create_camera(req: CameraCreate) -> dict[str, Any]:
         }
     if not is_synthetic:
         _start_camera_worker(cam_id)
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        asyncio.create_task(save_camera_to_db(data))
+    except Exception as e:
+        logger.debug("save_camera_db_trigger_error", error=str(e))
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
@@ -570,6 +575,12 @@ async def set_camera_fence(camera_id: str, req: CameraFenceRequest) -> dict[str,
         pipeline.zone = zone
         if hasattr(pipeline, "_active_line_intruders"):
             pipeline._active_line_intruders.clear()
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id]))
+    except Exception:
+        pass
     return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
 
 
@@ -584,6 +595,12 @@ async def delete_camera_fence(camera_id: str) -> dict[str, Any]:
         pipeline.zone = DEFAULT_ZONE
         if hasattr(pipeline, "_active_line_intruders"):
             pipeline._active_line_intruders.clear()
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id]))
+    except Exception:
+        pass
     return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
 
 
@@ -688,6 +705,12 @@ async def enable_camera(camera_id: str) -> dict[str, Any]:
     is_synthetic = bool(cam.get("endpoint", "").startswith("synthetic://"))
     if not is_synthetic:
         _start_camera_worker(camera_id)
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        asyncio.create_task(save_camera_to_db(cam))
+    except Exception:
+        pass
     return {k: v for k, v in cam.items() if not k.startswith("_")}
 
 
@@ -702,6 +725,12 @@ async def disable_camera(camera_id: str) -> dict[str, Any]:
         cam["observed_state"] = sm.state.value
         cam["desired_state"] = "DISABLED"
     _stop_worker(camera_id)
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        asyncio.create_task(save_camera_to_db(cam))
+    except Exception:
+        pass
     return {k: v for k, v in cam.items() if not k.startswith("_")}
 
 
@@ -749,6 +778,12 @@ async def delete_camera(camera_id: str) -> dict[str, str]:
         if not loop.is_closed():
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(event.set)
+    try:
+        from ibvap.services.persistence import delete_camera_from_db
+
+        asyncio.create_task(delete_camera_from_db(camera_id))
+    except Exception:
+        pass
     return {"status": "deleted", "id": camera_id}
 
 

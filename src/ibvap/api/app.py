@@ -13,10 +13,13 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from ibvap.api.routes.anpr import router as anpr_router
 from ibvap.api.routes.cameras import router as cameras_router
 from ibvap.api.routes.events import router as events_router
+from ibvap.api.routes.evidence import router as evidence_router
 from ibvap.api.routes.health import router as health_router
 from ibvap.api.routes.models import router as models_router
+from ibvap.api.routes.settings import router as settings_router
 from ibvap.api.routes.sites import router as sites_router
 from ibvap.api.routes.tactical import router as tactical_router
 from ibvap.api.routes.uploads import router as uploads_router
@@ -56,9 +59,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Warm the shared YOLO session now (~1s model load + first GPU
     # inference): the first camera then connects fast instead of stalling
     # its worker. Blocking IO stays off the event loop.
+    from ibvap.core.dispatcher import load_settings
     from ibvap.core.model_manager import warmup_shared_detector
+    from ibvap.services.persistence import init_persistence
 
+    load_settings()
     await asyncio.to_thread(warmup_shared_detector)
+    await init_persistence(settings)
     yield
 
 
@@ -137,6 +144,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ws_router)
     app.include_router(watchlist_router)
     app.include_router(tactical_router)
+    app.include_router(anpr_router)
+    app.include_router(evidence_router)
+    app.include_router(settings_router)
 
     # optional frontend mount - existence checked at runtime (Phase 7 will always mount)
     try:

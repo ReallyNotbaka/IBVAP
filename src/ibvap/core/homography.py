@@ -8,7 +8,9 @@ into 2D top-down ground coordinates (X, Y in meters) using either calibrated
 from __future__ import annotations
 
 import math
+import threading
 from typing import Any
+
 import cv2
 import numpy as np
 
@@ -81,7 +83,6 @@ class HomographyProjector:
 
         # Fallback perspective ground-plane projection
         # Azimuth angle relative to camera optical axis
-        half_fov = self.fov_deg / 2.0
         azimuth_offset = (u - 0.5) * self.fov_deg
         azimuth_rad = math.radians(self.azimuth_deg + azimuth_offset)
 
@@ -107,16 +108,19 @@ class HomographyProjector:
 
 # Global store for camera homography calibrations
 _CAMERA_HOMOGRAPHY: dict[str, HomographyProjector] = {}
+_HOMOGRAPHY_LOCK = threading.Lock()
 
 
 def get_camera_projector(camera_id: str, azimuth_deg: float = 0.0) -> HomographyProjector:
-    if camera_id not in _CAMERA_HOMOGRAPHY:
-        _CAMERA_HOMOGRAPHY[camera_id] = HomographyProjector(camera_id=camera_id, azimuth_deg=azimuth_deg)
-    return _CAMERA_HOMOGRAPHY[camera_id]
+    with _HOMOGRAPHY_LOCK:
+        if camera_id not in _CAMERA_HOMOGRAPHY:
+            _CAMERA_HOMOGRAPHY[camera_id] = HomographyProjector(camera_id=camera_id, azimuth_deg=azimuth_deg)
+        return _CAMERA_HOMOGRAPHY[camera_id]
 
 
 def set_camera_projector(projector: HomographyProjector) -> None:
-    _CAMERA_HOMOGRAPHY[projector.camera_id] = projector
+    with _HOMOGRAPHY_LOCK:
+        _CAMERA_HOMOGRAPHY[projector.camera_id] = projector
 
 
 def compute_radar_blips(

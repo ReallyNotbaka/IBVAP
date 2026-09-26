@@ -10,16 +10,13 @@ Implements multi-vector gallery matching on the SFace embedding manifold S^127:
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
 import logging
-import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -31,6 +28,17 @@ class ThreatLevel(str, Enum):
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+
+
+class TargetType(str, Enum):
+    FACE = "face"
+    PLATE = "plate"
+
+
+def normalize_plate_string(text: str) -> str:
+    """Strip whitespace and non-alphanumeric characters, convert to uppercase."""
+    import re
+    return re.sub(r"[^A-Za-z0-9]", "", text).upper()
 
 
 @dataclass
@@ -54,6 +62,10 @@ class WatchlistEntry:
     thumbnail_b64: str = ""
     sight_count: int = 0
     last_sighted: float | None = None
+    target_type: TargetType = TargetType.FACE
+    plate_number: str | None = None
+    normalized_plate: str | None = None
+    vehicle_description: str | None = None
     _cached_matrix: np.ndarray | None = field(default=None, init=False, repr=False)
 
     @property
@@ -127,6 +139,13 @@ class WatchlistStore:
                 except ValueError:
                     threat = ThreatLevel.HIGH
 
+                target_type_str = str(item.get("target_type", "face")).lower()
+                target_type = TargetType.PLATE if target_type_str == "plate" else TargetType.FACE
+                plate_number = item.get("plate_number")
+                normalized_plate = item.get("normalized_plate") or (
+                    normalize_plate_string(plate_number) if plate_number else None
+                )
+
                 entry = WatchlistEntry(
                     id=item["id"],
                     name=item["name"],
@@ -137,6 +156,10 @@ class WatchlistStore:
                     thumbnail_b64=item.get("thumbnail_b64", ""),
                     sight_count=int(item.get("sight_count", 0)),
                     last_sighted=float(item["last_sighted"]) if item.get("last_sighted") is not None else None,
+                    target_type=target_type,
+                    plate_number=plate_number,
+                    normalized_plate=normalized_plate,
+                    vehicle_description=item.get("vehicle_description"),
                 )
                 entries[entry.id] = entry
             self._entries = entries
@@ -162,6 +185,10 @@ class WatchlistStore:
                     "thumbnail_b64": e.thumbnail_b64,
                     "sight_count": e.sight_count,
                     "last_sighted": e.last_sighted,
+                    "target_type": e.target_type.value,
+                    "plate_number": e.plate_number,
+                    "normalized_plate": e.normalized_plate,
+                    "vehicle_description": e.vehicle_description,
                 }
             )
         try:
@@ -175,6 +202,8 @@ class WatchlistStore:
 
     def add_entry(self, entry: WatchlistEntry) -> None:
         entry.gallery = [v for v in entry.gallery if is_valid_exemplar(v)]
+        if entry.target_type == TargetType.PLATE and entry.plate_number and not entry.normalized_plate:
+            entry.normalized_plate = normalize_plate_string(entry.plate_number)
         entry.invalidate_cache()
         self._entries[entry.id] = entry
         self._save()
@@ -198,6 +227,76 @@ class WatchlistStore:
             entry.sight_count += 1
             entry.last_sighted = timestamp
             self._save()
+
+    def match_plate(
+        self,
+        plate_text: str,
+        amber_threshold: float = 0.80,
+    ) -> MatchResult | None:
+        """Perform normalized and fuzzy matching against plate watchlist targets."""
+        if not self._entries or not plate_text:
+            return None
+
+        q = normalize_plate_string(plate_text)
+        if not q or len(q) < 3:
+            return None
+
+        # 1. Exact match
+        for entry in self._entries.values():
+            if entry.target_type == TargetType.PLATE and entry.normalized_plate == q:
+                return MatchResult(
+                    entry_id=entry.id,
+                    name=entry.name,
+                    threat_level=entry.threat_level,
+                    score=1.0,
+                    tier="RED",
+                    notes=entry.notes,
+                )
+
+        # 2. Character substitution matrix for OCR confusions
+        def _canon(s: str) -> str:
+            return (
+                s.replace("O", "0")
+                .replace("I", "1")
+                .replace("B", "8")
+                .replace("Z", "2")
+                .replace("S", "5")
+            )
+
+        q_canon = _canon(q)
+        for entry in self._entries.values():
+            if (
+                entry.target_type == TargetType.PLATE
+                and entry.normalized_plate
+                and _canon(entry.normalized_plate) == q_canon
+            ):
+                return MatchResult(
+                    entry_id=entry.id,
+                    name=entry.name,
+                    threat_level=entry.threat_level,
+                    score=0.92,
+                    tier="RED" if entry.threat_level == ThreatLevel.CRITICAL else "AMBER",
+                    notes=entry.notes,
+                )
+
+        # 3. Single-character edit distance for longer plates (len >= 8)
+        if len(q) >= 8:
+            for entry in self._entries.values():
+                if entry.target_type == TargetType.PLATE and entry.normalized_plate:
+                    np_str = entry.normalized_plate
+                    if len(np_str) == len(q):
+                        diffs = sum(1 for c1, c2 in zip(np_str, q, strict=True) if c1 != c2)
+                        if diffs == 1 and amber_threshold <= 0.85:
+                            return MatchResult(
+                                entry_id=entry.id,
+                                name=entry.name,
+                                threat_level=entry.threat_level,
+                                score=0.85,
+                                tier="AMBER",
+                                notes=entry.notes,
+                            )
+
+        return None
 
     def identify(
         self,

@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { deleteCameraFence, setCameraFence, useCameras, useModels, useWatchlist, useEvents } from "../lib/api";
+import { playTacticalAlert } from "../lib/audio";
 import { CameraTile, type TargetInspectData } from "../components/CameraTile";
 import { AlertRail } from "../components/AlertRail";
 import { HealthBar } from "../components/HealthBar";
@@ -143,6 +144,26 @@ export const Cockpit = memo(function Cockpit({
     () => suspectList.filter((s) => (s && s.sight_count ? s.sight_count > 0 : false)),
     [suspectList],
   );
+
+  // Play audio chime for new critical or high threat alert
+  const lastAlertIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (events.length > 0) {
+      const latest = events[0];
+      if (lastAlertIdRef.current && latest.id !== lastAlertIdRef.current) {
+        const threat = (latest.explanation?.threat_level || latest.explanation?.tier || "LOW").toUpperCase();
+        if (
+          threat === "CRITICAL" ||
+          threat === "HIGH" ||
+          latest.event_type.includes("watchlist") ||
+          latest.event_type.includes("intrusion")
+        ) {
+          playTacticalAlert(threat === "CRITICAL" ? "CRITICAL" : "HIGH");
+        }
+      }
+      lastAlertIdRef.current = latest.id;
+    }
+  }, [events]);
 
   const handleSoloToggle = useCallback((id: string) => {
     setSolo((prev) => (prev === id ? null : id));

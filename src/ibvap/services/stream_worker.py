@@ -24,7 +24,7 @@ import numpy as np
 import structlog
 
 from ibvap.config import Settings
-from ibvap.core.anpr import ANPRPipeline
+from ibvap.core.anpr import ANPRPipeline, get_sightings_store
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import build_authenticated_url, decrypt_secret
 from ibvap.core.jail import (
@@ -46,6 +46,7 @@ from ibvap.core.ssrf import (
     SSRFPolicy,
     pin_stream_url,
 )
+from ibvap.core.watchlist import get_watchlist_store
 from ibvap.core.zone_engine import DEFAULT_ZONE, Zone
 
 if sys.platform == "win32":
@@ -79,6 +80,51 @@ _OBSERVATIONS: dict[str, dict[str, Any]] = {}
 _ACTIVE_PIPELINES: dict[str, MiniPipeline] = {}
 _PLAYBACK: dict[str, dict[str, Any]] = {}
 _PLAYBACK_LOCK = threading.Lock()
+
+
+class CameraStreamContext:
+    """Unified per-camera operational context encapsulating pipeline, frames, and health."""
+
+    def __init__(
+        self,
+        camera_id: str,
+        camera_data: dict[str, Any],
+        state_machine: CameraStateMachine,
+        pipeline: MiniPipeline | None = None,
+        latest_frame: bytes | None = None,
+        frame_version: int = 0,
+        condition: threading.Condition | None = None,
+        observations: dict[str, Any] | None = None,
+        health: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.camera_id = camera_id
+        self.camera_data = camera_data
+        self.state_machine = state_machine
+        self.pipeline = pipeline
+        self.latest_frame = latest_frame
+        self.frame_version = frame_version
+        self.condition = condition or threading.Condition()
+        self.observations = observations or {}
+        self.health = health or []
+
+
+def get_stream_context(camera_id: str) -> CameraStreamContext | None:
+    """Retrieve encapsulated operational context for a given camera."""
+    cam = _CAMERAS.get(camera_id)
+    if not cam:
+        return None
+    sm = _STATE_MACHINES.get(camera_id) or CameraStateMachine(camera_id=camera_id)
+    return CameraStreamContext(
+        camera_id=camera_id,
+        camera_data=cam,
+        state_machine=sm,
+        pipeline=_ACTIVE_PIPELINES.get(camera_id),
+        latest_frame=_FRAMES.get(camera_id),
+        frame_version=_FRAME_VERSIONS.get(camera_id, 0),
+        condition=_FRAME_CONDITIONS.setdefault(camera_id, threading.Condition()),
+        observations=_OBSERVATIONS.get(camera_id, {}),
+        health=_HEALTH.get(camera_id, []),
+    )
 
 
 def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
@@ -193,6 +239,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     ocr_last_submitted: dict[int | tuple[int, float, float], float] = {}
     ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"anpr-{camera_id[:8]}")
     pending_ocr: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
+    track_plates: dict[int, str] = {}
 
     def recognize_vehicle(
         crop: np.ndarray,
@@ -213,9 +260,13 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 plate_boxes=plate_boxes,
             )
         except Exception:
-            return vehicle_plate_detections, None
-        if not plate or not plate.consensus:
-            return vehicle_plate_detections, None
+            return [], None
+        if not plate:
+            return [], None
+        confidence = max(0.0, min(1.0, plate.candidates[0].confidence if plate.candidates else 0.0))
+        display_text = plate.consensus or (plate.plate_text if confidence >= ANPR_DISPLAY_CONFIDENCE else None)
+        if not display_text or confidence < ANPR_DISPLAY_CONFIDENCE:
+            return [], None
         if not vehicle_plate_detections and plate.candidates:
             bx1, by1, bx2, by2 = plate.candidates[0].bbox_norm
             vehicle_plate_detections.append(
@@ -226,18 +277,16 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         x1 + bx2 * (x2 - x1),
                         y1 + by2 * (y2 - y1),
                     ),
-                    "confidence": 0.0,
+                    "confidence": confidence,
                     "vehicle_class": vehicle_class,
                     "track_id": vehicle_id,
+                    "text": display_text,
                 }
             )
-        confidence = max(0.0, min(1.0, plate.candidates[0].confidence if plate.candidates else 0.0))
-        if confidence < ANPR_DISPLAY_CONFIDENCE:
-            return vehicle_plate_detections, None
         for item in vehicle_plate_detections:
-            item["text"] = plate.consensus
+            item["text"] = display_text
             item["confidence"] = confidence
-        return vehicle_plate_detections, {"text": plate.consensus, "confidence": confidence}
+        return vehicle_plate_detections, {"text": display_text, "confidence": confidence, "track_id": vehicle_id}
 
     last_night_result = None
     last_night_time = 0.0
@@ -267,9 +316,42 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                     completed_results = [future.result() for future in completed]
                     last_plate_detections = [item for detections, _ in completed_results for item in detections]
                     unique_plates: dict[str, dict[str, Any]] = {}
+                    wl_store = get_watchlist_store()
+                    sightings_store = get_sightings_store()
                     for _, plate in completed_results:
                         if plate is not None:
-                            unique_plates[plate["text"]] = plate
+                            tid = plate.get("track_id")
+                            plate_str = plate.get("text")
+                            conf = float(plate.get("confidence", 0.90))
+                            if tid and plate_str:
+                                track_plates[tid] = plate_str
+                                v_track = pipeline.tracker.tracks.get(tid)
+                                v_class = getattr(v_track, "class_name", "car") if v_track else "car"
+                                bbox = getattr(v_track, "bbox_norm", None) if v_track else None
+                                sightings_store.record_sighting(
+                                    camera_id=camera_id,
+                                    plate_text=plate_str,
+                                    confidence=conf,
+                                    vehicle_class=v_class,
+                                    bbox_norm=bbox,
+                                )
+
+                                match = wl_store.match_plate(plate_str)
+                                if match is not None:
+                                    if v_track is not None:
+                                        v_track.identity = {
+                                            "name": match.name,
+                                            "score": match.score,
+                                            "threat_level": match.threat_level.value,
+                                            "tier": match.tier,
+                                            "entry_id": match.entry_id,
+                                            "target_type": "plate",
+                                            "plate_number": plate_str,
+                                        }
+                                        v_track.identity_locked = True
+                                    wl_store.record_sighting(match.entry_id, time.time())
+                            if plate_str:
+                                unique_plates[plate_str] = plate
                     last_plates = list(unique_plates.values())
                     last_plate_at_mono = time.monotonic()
 
@@ -308,6 +390,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         crop_plate_boxes: list[tuple[float, float, float, float]] = []
                         if run_ocr and id(detection) in ocr_detection_ids:
                             crop_plate_boxes = anpr.detector.detect(crop)
+                            if not crop_plate_boxes:
+                                crop_plate_boxes = [(0.05, 0.35, 0.95, 0.98)]
                             for bx1, by1, bx2, by2 in crop_plate_boxes:
                                 vehicle_plate_detections.append(
                                     {
@@ -320,6 +404,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                         "confidence": 0.0,
                                         "vehicle_class": detection["class_name"],
                                         "track_id": vehicle_id,
+                                        "text": track_plates.get(vehicle_id),
                                     }
                                 )
                         if vehicle_id != 0:
@@ -351,18 +436,32 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                     list(crop_plate_boxes),
                                 )
                             )
-                        plate_detections.extend(vehicle_plate_detections)
+                        if vehicle_plate_detections:
+                            plate_detections.extend([d for d in vehicle_plate_detections if d.get("text")])
 
                 vehicle_boxes = [d["bbox_norm"] for d in pipeline.last_detections if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}]
                 cache_reused = _select_plate_detections(
                     plate_detections, last_plate_detections, last_plate_at_mono, time.monotonic(), vehicle_boxes
                 )
-                plates_for_obs = last_plates if cache_reused is last_plate_detections else []
-                plate_detections = cache_reused
+                plate_detections = [d for d in cache_reused if d.get("text")]
+                for d in plate_detections:
+                    tid = d.get("track_id")
+                    if tid and tid in track_plates and not d.get("text"):
+                        d["text"] = track_plates[tid]
 
                 # Prune dead vehicle tracks and bounded OCR throttle state
                 active_tids = {t.track_id for t in pipeline.tracker.tracks.values()}
                 anpr.evict_dead_tracks(active_track_ids=active_tids, stream_epoch=cam.get("stream_epoch", 0))
+                for tid in list(track_plates):
+                    if tid not in active_tids:
+                        track_plates.pop(tid, None)
+
+                # Persist plates for active vehicle tracks across frames
+                active_plates = [p for p in last_plates if p.get("track_id") in active_tids or not p.get("track_id")]
+                plates_for_obs = [
+                    {"text": text, "confidence": 0.90, "track_id": tid}
+                    for tid, text in track_plates.items()
+                ] or (active_plates if active_plates else last_plates)
 
                 now_m = time.monotonic()
                 stale_ocr = [
@@ -401,6 +500,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             "bbox_norm": track.bbox_norm,
                             "identity": getattr(track, "identity", None),
                             "identity_locked": getattr(track, "identity_locked", False),
+                            "plate": track_plates.get(track.track_id),
                             "intrusion": (
                                 bool(getattr(pipeline.zone, "enabled", True))
                                 and pipeline.zone.id != DEFAULT_ZONE.id

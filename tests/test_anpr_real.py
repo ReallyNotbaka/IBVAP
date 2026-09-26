@@ -230,3 +230,47 @@ def test_anpr_pipeline_empty_and_blank() -> None:
 
     blank = np.full((200, 300, 3), 100, dtype=np.uint8)
     assert pipeline.process_vehicle_crop(blank, vehicle_id=1) is None
+
+
+def test_ocr_reader_uses_onnxruntime_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OCRReader must configure PaddleOCR with engine='onnxruntime' to avoid missing paddlepaddle crash."""
+    captured_kwargs = {}
+
+    class FakePaddle:
+        def __init__(self, **kwargs) -> None:
+            captured_kwargs.update(kwargs)
+
+        def predict(self, input: object) -> list:
+            return [{"rec_texts": ["KA01AB1234"], "rec_scores": [0.95], "rec_boxes": [[[0, 0], [100, 0], [100, 30], [0, 30]]]}]
+
+    import sys
+    import types
+    fake_mod = types.ModuleType("paddleocr")
+    fake_mod.PaddleOCR = FakePaddle  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "paddleocr", fake_mod)
+
+    reader = OCRReader(ocr_engine=None, device="cpu")
+    # High-quality sharp test image
+    img = np.full((50, 150, 3), 255, dtype=np.uint8)
+    cv2.putText(img, "KA01AB1234", (5, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+    cands = reader.recognize(img)
+
+    assert captured_kwargs.get("engine") == "onnxruntime"
+    assert len(cands) == 1
+    assert cands[0].text == "KA01AB1234"
+
+
+def test_plate_detector_wider_aspect_and_area_ratios() -> None:
+    """Plate detector must detect 2-row plates (aspect ~1.4) and small plates on large trucks (area ratio ~0.005)."""
+    detector = PlateDetector()
+
+    # Two-row plate: 70x50 -> aspect 1.4, area 3500 in 200x300 (total area 60000, ratio 0.058)
+    crop_2row = np.full((200, 300, 3), 100, dtype=np.uint8)
+    cv2.rectangle(crop_2row, (100, 100), (170, 150), (250, 250, 250), -1)
+    cv2.rectangle(crop_2row, (100, 100), (170, 150), (10, 10, 10), 2)
+    cv2.putText(crop_2row, "DL01", (105, 122), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(crop_2row, "AB12", (105, 142), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+    boxes = detector.detect(crop_2row)
+    assert len(boxes) >= 1, "Failed to detect 2-row plate with aspect ~1.4"
+

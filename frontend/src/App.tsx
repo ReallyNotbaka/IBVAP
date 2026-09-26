@@ -5,6 +5,7 @@ import { Topbar } from "./components/Topbar";
 import { ConnectModal } from "./components/ConnectModal";
 import { WatchlistModal } from "./components/WatchlistModal";
 import { ModelSelectorModal } from "./components/ModelSelectorModal";
+import { SettingsModal } from "./components/SettingsModal";
 import { Alerts } from "./pages/Alerts";
 import { EmptyState } from "./pages/EmptyState";
 import { Health } from "./pages/Health";
@@ -50,6 +51,7 @@ function AppShell() {
   const location = useLocation();
   const [watchlistOpen, setWatchlistOpen] = useState(false);
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [initialTarget, setInitialTarget] = useState<TargetInspectData | null>(null);
 
   const cameraList = cameras ?? [];
@@ -84,6 +86,7 @@ function AppShell() {
         onAddPhone={() => navigate("/connect/phone")}
         onOpenWatchlist={handleOpenWatchlist}
         onOpenModels={() => setModelsOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="content-area">
         <div key={location.pathname} className="page-transition">
@@ -120,6 +123,7 @@ function AppShell() {
         initialTarget={initialTarget}
       />
       <ModelSelectorModal isOpen={modelsOpen} onClose={() => setModelsOpen(false)} />
+      <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

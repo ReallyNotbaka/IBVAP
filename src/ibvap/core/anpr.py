@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -59,10 +60,10 @@ class PlateDetector:
 
     def __init__(
         self,
-        min_ar: float = 1.8,
-        max_ar: float = 5.5,
-        min_area_ratio: float = 0.008,
-        max_area_ratio: float = 0.35,
+        min_ar: float = 0.8,
+        max_ar: float = 6.0,
+        min_area_ratio: float = 0.003,
+        max_area_ratio: float = 0.45,
     ) -> None:
         self.min_ar = min_ar
         self.max_ar = max_ar
@@ -187,6 +188,7 @@ class OCRReader:
 
                     self._paddle_ocr = PaddleOCR(
                         lang="en",
+                        engine="onnxruntime",
                         device=self.device,
                         use_doc_orientation_classify=False,
                         use_doc_unwarping=False,
@@ -414,3 +416,88 @@ class ANPRPipeline:
             consensus=consensus,
             quality=best_cand.quality,
         )
+
+
+@dataclass
+class PlateSighting:
+    id: str
+    camera_id: str
+    plate_text: str
+    confidence: float
+    vehicle_class: str
+    timestamp: float
+    sight_count: int = 1
+    bbox_norm: tuple[float, float, float, float] | None = None
+
+
+class SightingsStore:
+    """Thread-safe in-memory LRU store for historical license plate captures."""
+
+    def __init__(self, max_sightings: int = 5000) -> None:
+        self.max_sightings = max_sightings
+        self._sightings: list[PlateSighting] = []
+        self._lock = threading.Lock()
+        self._recent_index: dict[tuple[str, str], PlateSighting] = {}
+
+    def record_sighting(
+        self,
+        camera_id: str,
+        plate_text: str,
+        confidence: float,
+        vehicle_class: str,
+        timestamp: float | None = None,
+        bbox_norm: tuple[float, float, float, float] | None = None,
+    ) -> PlateSighting:
+        ts = timestamp or time.time()
+        norm_plate = normalize_plate(plate_text)
+        key = (camera_id, norm_plate)
+        with self._lock:
+            existing = self._recent_index.get(key)
+            if existing and (ts - existing.timestamp) < 30.0:
+                existing.sight_count += 1
+                existing.timestamp = ts
+                existing.confidence = max(existing.confidence, confidence)
+                return existing
+
+            sighting = PlateSighting(
+                id=str(uuid.uuid4()),
+                camera_id=camera_id,
+                plate_text=norm_plate,
+                confidence=confidence,
+                vehicle_class=vehicle_class,
+                timestamp=ts,
+                bbox_norm=bbox_norm,
+            )
+            self._sightings.append(sighting)
+            self._recent_index[key] = sighting
+            if len(self._sightings) > self.max_sightings:
+                old = self._sightings.pop(0)
+                self._recent_index.pop((old.camera_id, old.plate_text), None)
+            return sighting
+
+    def query_sightings(
+        self,
+        plate_prefix: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 50,
+    ) -> list[PlateSighting]:
+        with self._lock:
+            results = list(self._sightings)
+        if camera_id:
+            results = [s for s in results if s.camera_id == camera_id]
+        if plate_prefix:
+            prefix_norm = normalize_plate(plate_prefix)
+            results = [s for s in results if prefix_norm in s.plate_text]
+        results.sort(key=lambda s: s.timestamp, reverse=True)
+        return results[:limit]
+
+
+_GLOBAL_SIGHTINGS_STORE: SightingsStore | None = None
+
+
+def get_sightings_store() -> SightingsStore:
+    global _GLOBAL_SIGHTINGS_STORE
+    if _GLOBAL_SIGHTINGS_STORE is None:
+        _GLOBAL_SIGHTINGS_STORE = SightingsStore()
+    return _GLOBAL_SIGHTINGS_STORE
+

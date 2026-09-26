@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -93,3 +98,83 @@ class PacketRingBuffer:
             clip_sha256=sha(clip),
             created_at=time.time(),
         )
+
+
+MAX_EVIDENCE_FILES = 1000
+_EVIDENCE_LOCK = threading.Lock()
+
+
+def save_frame_evidence(
+    event_id: str,
+    frame: np.ndarray,
+    bbox_norm: tuple[float, float, float, float] | list[float] | None = None,
+    output_dir: str | Path = "data/evidence",
+) -> tuple[str | None, str | None]:
+    """Save full-frame JPEG snapshot and cropped suspect/vehicle JPEG evidence.
+
+    Returns (snapshot_path, crop_path) as relative paths, or (None, None) if frame is invalid.
+    """
+    if frame is None or getattr(frame, "size", 0) == 0 or len(getattr(frame, "shape", ())) < 2:
+        return None, None
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    snap_path = out_dir / f"{event_id}_snap.jpg"
+    crop_path = out_dir / f"{event_id}_crop.jpg"
+
+    h, w = frame.shape[:2]
+    # Encode full frame snapshot
+    try:
+        success, snap_buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        if success:
+            snap_path.write_bytes(snap_buf.tobytes())
+        else:
+            return None, None
+    except Exception:
+        return None, None
+
+    has_crop = False
+    if bbox_norm and len(bbox_norm) == 4:
+        try:
+            x1, y1, x2, y2 = bbox_norm
+            # Add 15% contextual padding
+            bw = x2 - x1
+            bh = y2 - y1
+            pad_x = bw * 0.15
+            pad_y = bh * 0.15
+
+            px1 = max(0, int((x1 - pad_x) * w))
+            py1 = max(0, int((y1 - pad_y) * h))
+            px2 = min(w, int((x2 + pad_x) * w))
+            py2 = min(h, int((y2 + pad_y) * h))
+
+            if px2 - px1 >= 8 and py2 - py1 >= 8:
+                crop_img = frame[py1:py2, px1:px2]
+                c_success, crop_buf = cv2.imencode(".jpg", crop_img, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+                if c_success:
+                    crop_path.write_bytes(crop_buf.tobytes())
+                    has_crop = True
+        except Exception:
+            has_crop = False
+
+    # Evict oldest files if exceeding threshold
+    try:
+        with _EVIDENCE_LOCK:
+            files = sorted(out_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+            if len(files) > MAX_EVIDENCE_FILES:
+                for old_f in files[: len(files) - MAX_EVIDENCE_FILES]:
+                    with contextlib.suppress(Exception):
+                        old_f.unlink()
+    except Exception:
+        pass
+
+    return str(snap_path), (str(crop_path) if has_crop else None)
+
+
+def get_evidence_file(event_id: str, kind: str = "snapshot", base_dir: str | Path = "data/evidence") -> Path | None:
+    """Retrieve Path to evidence JPEG (snapshot or crop) if it exists on disk."""
+    out_dir = Path(base_dir)
+    filename = f"{event_id}_crop.jpg" if kind == "crop" else f"{event_id}_snap.jpg"
+    target = out_dir / filename
+    return target if target.is_file() else None
+

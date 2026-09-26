@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useWatchlist, useModels } from "../lib/api";
 import { ThemeToggle } from "./ThemeToggle";
-import { ArrowLeftIcon, CameraIcon, CpuIcon, CrosshairIcon } from "./Icons";
+import { ArrowLeftIcon, CameraIcon, CpuIcon, CrosshairIcon, SettingsIcon, VolumeIcon, VolumeMuteIcon } from "./Icons";
+import { isAudioMuted, setAudioMuted, playTacticalAlert } from "../lib/audio";
 
 const items = [
   { to: "/", label: "Overview" },
@@ -13,10 +15,12 @@ export function Topbar({
   onAddPhone,
   onOpenWatchlist,
   onOpenModels,
+  onOpenSettings,
 }: {
   onAddPhone: () => void;
   onOpenWatchlist?: () => void;
   onOpenModels?: () => void;
+  onOpenSettings?: () => void;
 }) {
   const loc = useLocation();
   const isCockpit = loc.pathname === "/" || loc.pathname.startsWith("/connect");
@@ -24,6 +28,16 @@ export function Topbar({
   const { data: suspects = [] } = useWatchlist();
   const { data: modelData } = useModels();
   const activeModel = modelData?.active_model || "yolo26n";
+  const [muted, setMutedState] = useState(() => isAudioMuted());
+
+  const handleToggleAudio = () => {
+    const next = !muted;
+    setMutedState(next);
+    setAudioMuted(next);
+    if (!next) {
+      playTacticalAlert("MEDIUM");
+    }
+  };
 
   return (
     <header className="topbar">
@@ -93,8 +107,35 @@ export function Topbar({
           )}
         </button>
 
+        {/* Tactical Audio Alert Toggle */}
+        <button
+          onClick={handleToggleAudio}
+          data-testid="topbar-audio-btn"
+          className={`inline-flex h-8 sm:h-9 w-8 sm:w-9 shrink-0 items-center justify-center rounded-xl border transition-all cursor-pointer ${
+            muted
+              ? "border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-xs"
+          }`}
+          title={muted ? "Unmute Tactical Audio Alarms" : "Mute Tactical Audio Alarms"}
+          aria-label={muted ? "Unmute Tactical Audio Alarms" : "Mute Tactical Audio Alarms"}
+        >
+          {muted ? <VolumeMuteIcon className="w-4 h-4" /> : <VolumeIcon className="w-4 h-4" />}
+        </button>
+
         {/* Animated Light / Dark Mode Toggle Button */}
         <ThemeToggle idPrefix="topbar" />
+
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            data-testid="topbar-settings-btn"
+            className="inline-flex h-8 sm:h-9 w-8 sm:w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-800/80 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 transition-all shadow-xs cursor-pointer"
+            title="System & C2 Dispatch Configuration"
+            aria-label="System Settings"
+          >
+            <SettingsIcon className="w-4 h-4" />
+          </button>
+        )}
 
         <button
           onClick={onAddPhone}

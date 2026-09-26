@@ -43,6 +43,20 @@ export type WatchlistEntry = {
   thumbnail_b64: string;
   sight_count: number;
   last_sighted: number | null;
+  target_type?: "face" | "plate";
+  plate_number?: string | null;
+  vehicle_description?: string | null;
+};
+
+export type PlateSighting = {
+  id: string;
+  camera_id: string;
+  plate_text: string;
+  confidence: number;
+  vehicle_class: string;
+  timestamp: number;
+  sight_count: number;
+  bbox_norm?: [number, number, number, number] | null;
 };
 
 export type ModelItem = {
@@ -94,6 +108,7 @@ export type CameraObservations = {
     } | null;
     identity_locked?: boolean;
     intrusion?: boolean;
+    plate?: string | null;
   }>;
   frame_at: number | null;
   faces?: Array<{
@@ -102,7 +117,7 @@ export type CameraObservations = {
     quality_passed: boolean;
     track_id?: number | null;
   }>;
-  plates?: Array<{ text: string; confidence: number }>;
+  plates?: Array<{ text: string; confidence: number; track_id?: number | null }>;
   plate_detections?: Array<{ bbox_norm: [number, number, number, number]; confidence: number; vehicle_class: string; track_id?: number; text?: string }>;
   night?: { is_night: boolean; illumination_score: number; motion_area: number; confidence: number; limitation: string };
 };
@@ -233,10 +248,13 @@ export type EventItem = {
     threat_level?: string;
     score?: number;
     tier?: string;
+    plate?: string;
   };
   model_id?: string;
   created_at?: number;
   dedup_key?: string;
+  snapshot_url?: string;
+  crop_url?: string;
 };
 
 export async function fetchEvents(
@@ -476,6 +494,38 @@ export async function enrollSuspect(formData: FormData): Promise<{ status: strin
   return data;
 }
 
+export async function enrollPlateTarget(data: {
+  name: string;
+  plate_number: string;
+  threat_level?: ThreatLevel;
+  notes?: string;
+  vehicle_description?: string;
+  thumbnail_b64?: string;
+}): Promise<{ status: string; entry_id: string; name: string; plate_number: string }> {
+  const r = await fetch(base("/api/v1/watchlist/enroll-plate"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  const res = await r.json();
+  if (!r.ok) throw new Error(res.detail || `Plate enrollment failed (${r.status})`);
+  return res;
+}
+
+export async function fetchPlateSightings(params?: {
+  plate?: string;
+  camera_id?: string;
+  limit?: number;
+}): Promise<PlateSighting[]> {
+  const q = new URLSearchParams();
+  if (params?.plate) q.set("plate", params.plate);
+  if (params?.camera_id) q.set("camera_id", params.camera_id);
+  if (params?.limit) q.set("limit", String(params.limit));
+  const r = await fetch(base(`/api/v1/anpr/sightings?${q.toString()}`));
+  if (!r.ok) throw new Error(`sightings ${r.status}`);
+  return await r.json();
+}
+
 export async function deleteSuspect(id: string): Promise<void> {
   const r = await fetch(base(`/api/v1/watchlist/${id}`), {
     method: "DELETE",
@@ -644,6 +694,26 @@ export async function fetchTacticalRadar(): Promise<TacticalRadarData> {
   return await r.json();
 }
 
+export type RadarCalibrationRequest = {
+  camera_id: string;
+  image_points: [number, number][];
+  ground_points: [number, number][];
+  azimuth_deg?: number;
+};
+
+export async function calibrateRadar(
+  req: RadarCalibrationRequest,
+): Promise<{ status: string; camera_id: string }> {
+  const r = await fetch(base("/api/v1/tactical/radar/calibrate"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || `Calibration failed (${r.status})`);
+  return data;
+}
+
 export function useTacticalRadar(enabled = true) {
   return useQuery({
     queryKey: ["tactical-radar"],
@@ -682,4 +752,45 @@ export function useTargetDossiers(enabled = true) {
     enabled,
   });
 }
+
+export type SystemSettings = {
+  c2_webhook_url: string | null;
+  c2_webhook_enabled: boolean;
+  c2_min_severity: "ALL" | "HIGH" | "CRITICAL";
+  detection_confidence_threshold: number;
+  loiter_cooldown_seconds: number;
+  evidence_retention_days: number;
+};
+
+export async function fetchSystemSettings(): Promise<SystemSettings> {
+  const r = await fetch(base("/api/v1/system/settings"));
+  if (!r.ok) throw new Error(`settings ${r.status}`);
+  return await r.json();
+}
+
+export async function updateSystemSettings(
+  data: Partial<SystemSettings>
+): Promise<{ status: string; settings: SystemSettings }> {
+  const r = await fetch(base("/api/v1/system/settings"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error(`update settings ${r.status}`);
+  return await r.json();
+}
+
+export async function testC2Webhook(
+  url: string
+): Promise<{ success: boolean; status_code: number; elapsed_ms: number; message: string }> {
+  const r = await fetch(base("/api/v1/system/webhook/test"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const res = await r.json();
+  if (!r.ok) throw new Error(res.detail || `Webhook test failed (${r.status})`);
+  return res;
+}
+
 

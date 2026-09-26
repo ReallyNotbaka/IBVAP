@@ -16,6 +16,9 @@ export interface Box {
   threatLevel?: string;
   isCritical?: boolean;
   isPlate?: boolean;
+  plateText?: string;
+  vehicleClass?: string;
+  rawClass?: string;
 }
 
 interface ColorTheme {
@@ -183,6 +186,8 @@ export const OverlayCanvas = memo(function OverlayCanvas({
           (showConfidence && b.confidence !== undefined ? 4 : 0);
         const badgeW = isFace
           ? Math.max(5.5, charCount * 0.95 + 1.2)
+          : b.isPlate
+          ? Math.max(10.0, charCount * 1.45 + 2.5)
           : Math.max(9.5, charCount * 1.35 + 2.2);
         const badgeH = isFace ? 2.3 : b.isAlert ? 3.4 : 3.0;
 
@@ -330,10 +335,10 @@ export const OverlayCanvas = memo(function OverlayCanvas({
                   x={badgeX + (isFace ? 0.7 : 0.9)}
                   y={badgeY + (isFace ? 1.55 : b.isAlert ? 2.3 : 2.05)}
                   fill="#f8fafc"
-                  fontSize={isFace ? 1.3 : b.isAlert ? 1.9 : 1.8}
-                  fontWeight={b.isAlert ? 700 : 600}
-                  letterSpacing="0.02em"
-                  fontFamily="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif"
+                  fontSize={isFace ? 1.3 : b.isAlert ? 1.9 : b.isPlate ? 1.7 : 1.8}
+                  fontWeight={b.isAlert ? 700 : b.isPlate ? 700 : 600}
+                  letterSpacing={b.isPlate ? "0.04em" : "0.02em"}
+                  fontFamily={b.isPlate ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif"}
                 >
                   <tspan
                     fill={b.isAlert ? "#ffffff" : theme.accent}

@@ -10,16 +10,12 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 from fastapi.testclient import TestClient
 
-from ibvap.api.app import create_app
-from ibvap.core.handover import HandoverEngine, SubjectDossier
+from ibvap.core.handover import HandoverEngine
 from ibvap.core.homography import (
     HomographyProjector,
     compute_radar_blips,
-    get_camera_projector,
-    set_camera_projector,
 )
 from ibvap.core.sitrep import generate_military_sitrep
 from ibvap.core.vision_filters import (
@@ -267,3 +263,64 @@ def test_tactical_api_endpoints(api_client: TestClient):
     single_dos = client.get(f"/api/v1/tactical/dossiers/{dos_id}")
     assert single_dos.status_code == 200
     assert single_dos.json()["dossier_id"] == dos_id
+
+
+def test_handover_engine_eviction_without_key_error():
+    """Verify that HandoverEngine cleans up reverse mappings when evicting stale dossiers."""
+    engine = HandoverEngine(max_dossiers=5)
+    cams = {"cam-1": {"name": "Gate Cam"}}
+
+    # Insert 15 unique tracks across time
+    for i in range(15):
+        obs = {
+            "cam-1": {
+                "tracks": [
+                    {
+                        "track_id": i + 1,
+                        "class_name": "person",
+                        "bbox_norm": [0.1, 0.1, 0.2, 0.2],
+                        "identity": {"name": f"Suspect {i + 1}"},
+                        "plate_text": f"DL01AB{i + 1:04d}",
+                    }
+                ]
+            }
+        }
+        engine.update_observations(cams, obs)
+
+    # Dossiers should be strictly bounded by max_dossiers
+    assert len(engine.dossiers) <= 5
+
+    # Reverse lookup maps must not point to deleted dossiers
+    assert all(v in engine.dossiers for v in engine._track_map.values())
+    assert all(v in engine.dossiers for v in engine._identity_map.values())
+    assert all(v in engine.dossiers for v in engine._plate_map.values())
+
+    # Re-observing an evicted track (e.g. track 1) must NOT crash with KeyError
+    reobserved = {
+        "cam-1": {
+            "tracks": [
+                {
+                    "track_id": 1,
+                    "class_name": "person",
+                    "bbox_norm": [0.1, 0.1, 0.2, 0.2],
+                    "identity": {"name": "Suspect 1"},
+                }
+            ]
+        }
+    }
+    dossiers = engine.update_observations(cams, reobserved)
+    assert len(dossiers) <= 5
+    assert all(v in engine.dossiers for v in engine._track_map.values())
+
+
+def test_vision_filters_empty_guard():
+    """Verify that vision filters gracefully handle empty, none, or degenerate frame inputs."""
+    empty_frame = np.zeros((0, 0, 3), dtype=np.uint8)
+    tiny_frame = np.zeros((1, 1, 3), dtype=np.uint8)
+
+    assert process_tactical_filter(empty_frame, "white-hot").size == 0
+    assert process_tactical_filter(tiny_frame, "black-hot").shape == (1, 1, 3)
+    assert process_tactical_filter(empty_frame, "ironbow").size == 0
+    assert process_tactical_filter(empty_frame, "defog").size == 0
+    assert process_tactical_filter(None, "white-hot") is None
+

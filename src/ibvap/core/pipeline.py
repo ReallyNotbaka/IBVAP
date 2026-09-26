@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import contextlib
 import time
+import uuid
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -23,12 +25,29 @@ from ibvap.core.association import (
     project_person_box_from_face,
 )
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
+from ibvap.core.evidence import save_frame_evidence
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker, Track
 from ibvap.core.watchlist import get_watchlist_store
 from ibvap.core.zone_engine import DEFAULT_ZONE, Zone, is_intrusion
 from ibvap.events.outbox import transactional_write
+
+
+def _attach_frame_evidence(event: dict[str, Any], frame: np.ndarray | None, bbox_norm: Any = None) -> None:
+    """Attach forensic JPEG snapshot and target crop evidence to an event."""
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return
+    try:
+        eid = str(uuid.uuid4())
+        event["id"] = eid
+        snap_path, crop_path = save_frame_evidence(eid, frame, bbox_norm)
+        if snap_path:
+            event["snapshot_url"] = f"/api/v1/evidence/{eid}/snapshot"
+        if crop_path:
+            event["crop_url"] = f"/api/v1/evidence/{eid}/crop"
+    except Exception:
+        pass
 
 # Lazy import type for face to avoid circular heavy init at import time
 try:
@@ -474,6 +493,7 @@ class MiniPipeline:
                         "explanation": self.rule_engine.explain(rule_event),
                         "model_id": model_id,
                     }
+                    _attach_frame_evidence(event, frame, trk.bbox_norm)
                     transactional_write(event, dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}")
                     self.events_created += 1
                     if primary_event is None:
@@ -530,6 +550,7 @@ class MiniPipeline:
                         },
                         "model_id": model_id,
                     }
+                    _attach_frame_evidence(event, frame, trk.bbox_norm)
                     transactional_write(event, dedup_key=dedup)
                     self.events_created += 1
                     if primary_event is None:
@@ -667,6 +688,7 @@ class MiniPipeline:
                     },
                     "model_id": getattr(self, "model_id", "sface"),
                 }
+                _attach_frame_evidence(ev_watchlist, frame, trk.bbox_norm)
                 transactional_write(ev_watchlist, dedup_key=dedup)
                 self.events_created += 1
                 if primary_event is None:

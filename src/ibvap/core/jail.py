@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import os
 import re
-import shutil
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -142,20 +140,8 @@ def _import_external_video_if_needed(endpoint: str) -> str:
         jailed = _resolve_jailed_file(clean)
         return str(jailed)
     except HTTPException:
-        pass
+        return endpoint
 
-    try:
-        candidate = Path(clean).resolve()
-        if candidate.is_file() and candidate.suffix.lower() in {".mp4", ".avi", ".mkv", ".mov", ".webm"}:
-            upload_dir = Path("data/uploads").resolve()
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            target = upload_dir / f"imported_{candidate.name}"
-            if not target.exists() or target.stat().st_size != candidate.stat().st_size:
-                shutil.copy2(candidate, target)
-            return str(target)
-    except Exception:
-        pass
-    return endpoint
 
 
 def _is_path_inside_jail(path_str: str) -> bool:

@@ -48,7 +48,7 @@ def transactional_write(
             existing = _DEDUP_OUTBOX_INDEX.get(dedup_key)
             if existing is not None and _DEDUP_EVENT_INDEX.get(dedup_key) is not None:
                 return existing
-        eid = str(uuid.uuid4())
+        eid = str(event.get("id")) if event.get("id") else str(uuid.uuid4())
         event["id"] = eid
         event["dedup_key"] = dedup_key
         if event.get("created_at") is None:
@@ -75,7 +75,19 @@ def transactional_write(
             if evicted_out.dedup_key and _DEDUP_OUTBOX_INDEX.get(evicted_out.dedup_key) is evicted_out:
                 _DEDUP_OUTBOX_INDEX.pop(evicted_out.dedup_key, None)
 
-        return entry
+    # Non-blocking async C2 webhook dispatch outside lock
+    try:
+        import asyncio
+
+        from ibvap.core.dispatcher import dispatch_c2_webhook
+
+        loop = asyncio.get_running_loop()
+        if loop.is_running():
+            loop.create_task(dispatch_c2_webhook(event))
+    except (RuntimeError, Exception):
+        pass
+
+    return entry
 
 
 def list_events() -> list[dict[str, Any]]:

@@ -1,6 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import { useTacticalRadar, type RadarBlip } from "../lib/api";
 import { CloseIcon, CrosshairIcon } from "./Icons";
+import { RadarCalibrationModal } from "./RadarCalibrationModal";
 
 export interface TacticalRadarModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ export const TacticalRadarModal = memo(function TacticalRadarModal({
 }: TacticalRadarModalProps) {
   const { data: radarData } = useTacticalRadar(isOpen);
   const [selectedBlip, setSelectedBlip] = useState<RadarBlip | null>(null);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
 
   const blips = radarData?.blips ?? [];
   const cameras = radarData?.cameras ?? [];
@@ -87,6 +89,15 @@ export const TacticalRadarModal = memo(function TacticalRadarModal({
               <span className="text-amber-400 font-bold">[{threatCounts.high} SUSPECT]</span>
               <span className="text-emerald-400 font-bold">[{threatCounts.total} ACTIVE BLIPS]</span>
             </div>
+            <button
+              type="button"
+              onClick={() => setCalibrationOpen(true)}
+              className="px-2.5 py-1 text-xs font-mono font-bold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+              title="Calibrate 4-point homography for radar"
+            >
+              <CrosshairIcon className="w-3.5 h-3.5" />
+              <span>Calibrate Camera</span>
+            </button>
             <button
               onClick={onClose}
               className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
@@ -325,6 +336,12 @@ export const TacticalRadarModal = memo(function TacticalRadarModal({
           </div>
         </div>
       </div>
+
+      {/* Visual Homography Calibration Modal */}
+      <RadarCalibrationModal
+        isOpen={calibrationOpen}
+        onClose={() => setCalibrationOpen(false)}
+      />
     </div>
   );
 });

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-ANPR_DISPLAY_CONFIDENCE = 0.80
+ANPR_DISPLAY_CONFIDENCE = 0.55
 
 
 def _boxes_intersect(
