@@ -245,6 +245,7 @@ def test_ocr_reader_uses_onnxruntime_engine(monkeypatch: pytest.MonkeyPatch) -> 
 
     import sys
     import types
+
     fake_mod = types.ModuleType("paddleocr")
     fake_mod.PaddleOCR = FakePaddle  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "paddleocr", fake_mod)
@@ -273,4 +274,3 @@ def test_plate_detector_wider_aspect_and_area_ratios() -> None:
 
     boxes = detector.detect(crop_2row)
     assert len(boxes) >= 1, "Failed to detect 2-row plate with aspect ~1.4"
-

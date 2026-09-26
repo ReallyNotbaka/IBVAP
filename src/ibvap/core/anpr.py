@@ -500,4 +500,3 @@ def get_sightings_store() -> SightingsStore:
     if _GLOBAL_SIGHTINGS_STORE is None:
         _GLOBAL_SIGHTINGS_STORE = SightingsStore()
     return _GLOBAL_SIGHTINGS_STORE
-

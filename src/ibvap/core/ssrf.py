@@ -38,9 +38,7 @@ _CONTROL_PLANE_NETS = [
 ]
 
 # Camera-relevant ports allowed by default; override via SSRFPolicy.allowed_ports.
-_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({
-    80, 443, 554, 8554, 4747, 8080, 8000, 8081, 8082, 8008, 8888, 5544, 7070, 7447, 9997, 1935
-})
+_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({80, 443, 554, 8554, 4747, 8080, 8000, 8081, 8082, 8008, 8888, 5544, 7070, 7447, 9997, 1935})
 
 
 @dataclass(frozen=True)
@@ -111,13 +109,7 @@ def _check_host_and_port(parsed: urllib.parse.ParseResult, policy: SSRFPolicy) -
     if literal_ip is not None:
         if is_metadata_endpoint(host, str(literal_ip)):
             raise SSRFError("blocked_address", "Resolved address is blocked (metadata endpoint)")
-        if (
-            literal_ip.is_unspecified
-            or literal_ip.is_loopback
-            or literal_ip.is_link_local
-            or literal_ip.is_multicast
-            or literal_ip.is_reserved
-        ):
+        if literal_ip.is_unspecified or literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_multicast or literal_ip.is_reserved:
             raise SSRFError("blocked_address", f"Resolved address {literal_ip} is blocked (reserved range)")
         blocked = _ip_blocked(literal_ip, policy)
         if blocked:

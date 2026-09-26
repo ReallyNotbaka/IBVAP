@@ -241,9 +241,7 @@ async def init_persistence(settings: Settings | None = None) -> None:
             logger.info("cameras_restored_from_db", count=len(saved_cameras))
 
             # 2. Restore recent events to timeline (up to 500)
-            ev_res = await session.execute(
-                select(DBOutbox).order_by(DBOutbox.created_at.desc()).limit(500)
-            )
+            ev_res = await session.execute(select(DBOutbox).order_by(DBOutbox.created_at.desc()).limit(500))
             saved_events = ev_res.scalars().all()
 
             with OUTBOX_LOCK:

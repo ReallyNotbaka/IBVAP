@@ -1,4 +1,5 @@
 """Regression tests for independently verified confirmed bugs."""
+
 from __future__ import annotations
 
 import pytest
@@ -416,6 +417,7 @@ def test_bug_14_concurrent_reconnect_no_double_spawn(api_client: object) -> None
     assert cam_id in C._WORKERS
 
     try:
+
         def do_reconnect() -> None:
             client.post(f"/api/v1/cameras/{cam_id}/reconnect")
 
@@ -425,19 +427,12 @@ def test_bug_14_concurrent_reconnect_no_double_spawn(api_client: object) -> None
 
         # Give a moment for any stopping threads to exit
         import time
+
         time.sleep(0.5)
 
-        active_threads = [
-            t for t in threading.enumerate()
-            if t.name == f"camera-{cam_id[:8]}" and t.is_alive()
-        ]
+        active_threads = [t for t in threading.enumerate() if t.name == f"camera-{cam_id[:8]}" and t.is_alive()]
         assert len(active_threads) == 1, f"Expected 1 alive camera worker thread, found {len(active_threads)}"
     finally:
         C._stop_worker(cam_id)
         C._CAMERAS.pop(cam_id, None)
         C._STATE_MACHINES.pop(cam_id, None)
-
-
-
-
-

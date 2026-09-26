@@ -143,7 +143,6 @@ def _import_external_video_if_needed(endpoint: str) -> str:
         return endpoint
 
 
-
 def _is_path_inside_jail(path_str: str) -> bool:
     try:
         resolved = Path(path_str).resolve()

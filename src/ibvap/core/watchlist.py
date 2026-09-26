@@ -38,6 +38,7 @@ class TargetType(str, Enum):
 def normalize_plate_string(text: str) -> str:
     """Strip whitespace and non-alphanumeric characters, convert to uppercase."""
     import re
+
     return re.sub(r"[^A-Za-z0-9]", "", text).upper()
 
 
@@ -142,9 +143,7 @@ class WatchlistStore:
                 target_type_str = str(item.get("target_type", "face")).lower()
                 target_type = TargetType.PLATE if target_type_str == "plate" else TargetType.FACE
                 plate_number = item.get("plate_number")
-                normalized_plate = item.get("normalized_plate") or (
-                    normalize_plate_string(plate_number) if plate_number else None
-                )
+                normalized_plate = item.get("normalized_plate") or (normalize_plate_string(plate_number) if plate_number else None)
 
                 entry = WatchlistEntry(
                     id=item["id"],
@@ -170,10 +169,7 @@ class WatchlistStore:
     def _save(self, sync: bool = True) -> None:
         serialized = []
         for e in list(self._entries.values()):
-            b64_gallery = [
-                base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii")
-                for v in e.gallery
-            ]
+            b64_gallery = [base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii") for v in e.gallery]
             serialized.append(
                 {
                     "id": e.id,
@@ -255,21 +251,11 @@ class WatchlistStore:
 
         # 2. Character substitution matrix for OCR confusions
         def _canon(s: str) -> str:
-            return (
-                s.replace("O", "0")
-                .replace("I", "1")
-                .replace("B", "8")
-                .replace("Z", "2")
-                .replace("S", "5")
-            )
+            return s.replace("O", "0").replace("I", "1").replace("B", "8").replace("Z", "2").replace("S", "5")
 
         q_canon = _canon(q)
         for entry in self._entries.values():
-            if (
-                entry.target_type == TargetType.PLATE
-                and entry.normalized_plate
-                and _canon(entry.normalized_plate) == q_canon
-            ):
+            if entry.target_type == TargetType.PLATE and entry.normalized_plate and _canon(entry.normalized_plate) == q_canon:
                 return MatchResult(
                     entry_id=entry.id,
                     name=entry.name,

@@ -52,6 +52,7 @@ from ibvap.core.zone_engine import DEFAULT_ZONE, Zone
 if sys.platform == "win32":
     with contextlib.suppress(Exception):
         import ctypes
+
         ctypes.windll.winmm.timeBeginPeriod(1)
 
 logger = structlog.get_logger(__name__)
@@ -366,9 +367,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 plate_detections: list[dict[str, Any]] = []
                 if pipeline.last_detections:
                     vehicle_detections = [
-                        detection
-                        for detection in pipeline.last_detections
-                        if detection["class_name"] in {"car", "truck", "bus", "motorcycle"}
+                        detection for detection in pipeline.last_detections if detection["class_name"] in {"car", "truck", "bus", "motorcycle"}
                     ]
                     ocr_detection_ids = {
                         id(detection)
@@ -413,14 +412,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             throttle_key = (0, round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2))
                         ocr_due = time.monotonic() - ocr_last_submitted.get(throttle_key, 0.0) >= 0.6
                         track_ready = any(track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks)
-                        if (
-                            run_ocr
-                            and track_ready
-                            and ocr_due
-                            and id(detection) in ocr_detection_ids
-                            and len(pending_ocr) < 3
-                            and crop_plate_boxes
-                        ):
+                        if run_ocr and track_ready and ocr_due and id(detection) in ocr_detection_ids and len(pending_ocr) < 3 and crop_plate_boxes:
                             ocr_last_submitted[throttle_key] = time.monotonic()
                             pending_ocr.append(
                                 ocr_executor.submit(
@@ -440,9 +432,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             plate_detections.extend([d for d in vehicle_plate_detections if d.get("text")])
 
                 vehicle_boxes = [d["bbox_norm"] for d in pipeline.last_detections if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}]
-                cache_reused = _select_plate_detections(
-                    plate_detections, last_plate_detections, last_plate_at_mono, time.monotonic(), vehicle_boxes
-                )
+                cache_reused = _select_plate_detections(plate_detections, last_plate_detections, last_plate_at_mono, time.monotonic(), vehicle_boxes)
                 plate_detections = [d for d in cache_reused if d.get("text")]
                 for d in plate_detections:
                     tid = d.get("track_id")
@@ -458,23 +448,22 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                 # Persist plates for active vehicle tracks across frames
                 active_plates = [p for p in last_plates if p.get("track_id") in active_tids or not p.get("track_id")]
-                plates_for_obs = [
-                    {"text": text, "confidence": 0.90, "track_id": tid}
-                    for tid, text in track_plates.items()
-                ] or (active_plates if active_plates else last_plates)
+                plates_for_obs = [{"text": text, "confidence": 0.90, "track_id": tid} for tid, text in track_plates.items()] or (
+                    active_plates if active_plates else last_plates
+                )
 
                 now_m = time.monotonic()
                 stale_ocr = [
-                    k for k, ts in ocr_last_submitted.items()
-                    if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0)
-                    or (not isinstance(k, int) and (now_m - ts) > 5.0)
+                    k
+                    for k, ts in ocr_last_submitted.items()
+                    if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0) or (not isinstance(k, int) and (now_m - ts) > 5.0)
                 ]
                 for k in stale_ocr:
                     ocr_last_submitted.pop(k, None)
 
                 # Safeguard max capacity on ocr_last_submitted (LRU)
                 if len(ocr_last_submitted) > 512:
-                    oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[:len(ocr_last_submitted) - 512]
+                    oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[: len(ocr_last_submitted) - 512]
                     for k, _ in oldest_ocr:
                         ocr_last_submitted.pop(k, None)
 
@@ -505,10 +494,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                 bool(getattr(pipeline.zone, "enabled", True))
                                 and pipeline.zone.id != DEFAULT_ZONE.id
                                 and track.class_name in {"person", "car", "truck", "bus", "motorcycle"}
-                                and (
-                                    track.track_id in getattr(pipeline, "_active_line_intruders", set())
-                                    or getattr(track, "is_intrusion", False)
-                                )
+                                and (track.track_id in getattr(pipeline, "_active_line_intruders", set()) or getattr(track, "is_intrusion", False))
                             ),
                         }
                         for track in pipeline.last_tracks

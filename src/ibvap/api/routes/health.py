@@ -155,11 +155,7 @@ async def health(request: Request) -> HealthResponse:
         handle = get_shared_detector_handle()
 
     active_model = handle.active_model_name if handle else "yolo26n"
-    active_runtime = (
-        getattr(handle.detector, "runtime", "directml" if gpu["directml_available"] else "cpu")
-        if handle
-        else "cpu"
-    )
+    active_runtime = getattr(handle.detector, "runtime", "directml" if gpu["directml_available"] else "cpu") if handle else "cpu"
 
     sys_telemetry = SystemTelemetry(
         gpu_accelerator=gpu["gpu_accelerator"],

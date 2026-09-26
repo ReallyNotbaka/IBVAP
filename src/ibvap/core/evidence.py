@@ -177,4 +177,3 @@ def get_evidence_file(event_id: str, kind: str = "snapshot", base_dir: str | Pat
     filename = f"{event_id}_crop.jpg" if kind == "crop" else f"{event_id}_snap.jpg"
     target = out_dir / filename
     return target if target.is_file() else None
-

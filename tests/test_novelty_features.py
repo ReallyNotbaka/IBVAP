@@ -323,4 +323,3 @@ def test_vision_filters_empty_guard():
     assert process_tactical_filter(empty_frame, "ironbow").size == 0
     assert process_tactical_filter(empty_frame, "defog").size == 0
     assert process_tactical_filter(None, "white-hot") is None
-

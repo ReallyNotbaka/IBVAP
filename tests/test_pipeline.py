@@ -517,9 +517,7 @@ def test_loiter_realerts_new_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipe_module.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(pipe_module.time, "perf_counter", clock.perf_counter)
     seq = [(0.3, 0.4, 0.5, 0.8)] * 26
-    pipe = MiniPipeline(
-        camera_id="cam-loiter-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False
-    )
+    pipe = MiniPipeline(camera_id="cam-loiter-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False)
     # Custom zone id: the rule-engine mirror only runs for non-default zones.
     pipe.zone = Zone(id="zone-loiter-1", name="Loiter Zone", polygon=[[0.05, 0.2], [0.95, 0.2], [0.95, 1.0], [0.05, 1.0]])
     for _ in range(12):
@@ -636,11 +634,7 @@ def test_bystander_near_critical_target_never_marked_critical() -> None:
     box_A = (0.35, 0.15, 0.55, 0.85)
     box_B_near = (0.45, 0.15, 0.65, 0.85)
     box_B_infront = (0.38, 0.15, 0.58, 0.85)
-    seq = (
-        [[box_A]] * 3
-        + [[box_B_near, box_A]] * 3
-        + [[box_B_infront, box_A]] * 3
-    )
+    seq = [[box_A]] * 3 + [[box_B_near, box_A]] * 3 + [[box_B_infront, box_A]] * 3
 
     # Face of Target A on a 640x480 frame:
     # x: 0.40 * 640 = 256, y: 0.20 * 480 = 96, w: 0.10 * 640 = 64, h: 0.12 * 480 = 57.6
@@ -675,23 +669,14 @@ def test_bystander_near_critical_target_never_marked_critical() -> None:
         for step in range(len(seq)):
             pipe.process_frame(_textured_frame(step))
             # At EVERY step, verify that at most ONE track is marked as critical:
-            crit_tracks = [
-                t for t in pipe.last_tracks
-                if t.identity and t.identity.get("threat_level") == "CRITICAL"
-            ]
-            assert len(crit_tracks) <= 1, (
-                f"Step {step}: Multiple critical tracks detected: "
-                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
-            )
+            crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
+            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 
         # Final check: Exactly 2 people active in scene (A and B), but only A is critical
         assert len(pipe.last_tracks) == 2
-        crit_tracks = [
-            t for t in pipe.last_tracks
-            if t.identity and t.identity.get("threat_level") == "CRITICAL"
-        ]
+        crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
         assert len(crit_tracks) == 1
         non_crit_tracks = [t for t in pipe.last_tracks if t not in crit_tracks]
         assert len(non_crit_tracks) == 1
@@ -789,24 +774,15 @@ def test_bystander_near_critical_with_occlusion_and_miss_never_causes_two_critic
 
         for step in range(len(seq)):
             pipe.process_frame(_textured_frame(step))
-            crit_tracks = [
-                t for t in pipe.last_tracks
-                if t.identity and t.identity.get("threat_level") == "CRITICAL"
-            ]
+            crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
             # INVARIANT: At NO step can more than 1 track be marked as critical!
-            assert len(crit_tracks) <= 1, (
-                f"Step {step}: Multiple critical tracks detected: "
-                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
-            )
+            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 
         # Step 3 check: Both A and B are active, but ONLY A is critical!
         assert len(pipe.last_tracks) == 2
-        crit_tracks = [
-            t for t in pipe.last_tracks
-            if t.identity and t.identity.get("threat_level") == "CRITICAL"
-        ]
+        crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
         assert len(crit_tracks) == 1
         assert crit_tracks[0].track_id == 1
         non_crit = [t for t in pipe.last_tracks if t.track_id != 1][0]
@@ -918,24 +894,15 @@ def test_bystander_walks_in_front_crossover_never_marks_bystander_critical() -> 
 
         for step in range(len(seq)):
             pipe.process_frame(_textured_frame(step))
-            crit_tracks = [
-                t for t in pipe.last_tracks
-                if t.identity and t.identity.get("threat_level") == "CRITICAL"
-            ]
+            crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
             # INVARIANT: At NO frame can multiple tracks be marked as critical!
-            assert len(crit_tracks) <= 1, (
-                f"Step {step}: Multiple critical tracks detected: "
-                f"{[(t.track_id, t.identity) for t in crit_tracks]}"
-            )
+            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 
         # Final check: Exactly 2 people active, ONLY Target A is critical
         assert len(pipe.last_tracks) == 2
-        crit_tracks = [
-            t for t in pipe.last_tracks
-            if t.identity and t.identity.get("threat_level") == "CRITICAL"
-        ]
+        crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
         assert len(crit_tracks) == 1
         # Bystander B is non-critical
         bystanders = [t for t in pipe.last_tracks if t not in crit_tracks]
@@ -943,5 +910,3 @@ def test_bystander_walks_in_front_crossover_never_marks_bystander_critical() -> 
         assert bystanders[0].identity is None or bystanders[0].identity.get("threat_level") != "CRITICAL"
     finally:
         store.remove_entry("crit-target-A")
-
-

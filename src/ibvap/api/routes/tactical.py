@@ -45,14 +45,16 @@ async def get_tactical_radar() -> RadarResponse:
         cam_id = str(cam["id"])
         default_azimuth = float((idx * 60) % 360)
         projector = get_camera_projector(cam_id, azimuth_deg=default_azimuth)
-        camera_sectors.append({
-            "camera_id": cam_id,
-            "name": cam.get("name", cam_id[:8]),
-            "azimuth_deg": projector.azimuth_deg,
-            "fov_deg": projector.fov_deg,
-            "range_m": projector.max_range_m,
-            "status": cam.get("observed_state", "UNKNOWN"),
-        })
+        camera_sectors.append(
+            {
+                "camera_id": cam_id,
+                "name": cam.get("name", cam_id[:8]),
+                "azimuth_deg": projector.azimuth_deg,
+                "fov_deg": projector.fov_deg,
+                "range_m": projector.max_range_m,
+                "status": cam.get("observed_state", "UNKNOWN"),
+            }
+        )
 
     return RadarResponse(
         max_range_m=100.0,

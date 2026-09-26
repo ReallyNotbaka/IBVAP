@@ -490,4 +490,3 @@ def test_clean_file_path_edge_cases() -> None:
     assert _clean_file_path("file://localhost/C:/video.mp4") == "C:/video.mp4"
     assert _clean_file_path("file://C:/video.mp4") == "C:/video.mp4"
     assert _clean_file_path("file:\\\\\\C:\\video.mp4") == "C:\\video.mp4"
-

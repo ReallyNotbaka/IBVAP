@@ -52,14 +52,7 @@ def apply_ironbow_flir(image: np.ndarray) -> np.ndarray:
 
 def apply_tactical_defog(image: np.ndarray) -> np.ndarray:
     """Apply tactical defog / haze penetration using LAB CLAHE and unsharp masking."""
-    if (
-        image is None
-        or image.size == 0
-        or len(image.shape) != 3
-        or image.shape[2] != 3
-        or image.shape[0] < 2
-        or image.shape[1] < 2
-    ):
+    if image is None or image.size == 0 or len(image.shape) != 3 or image.shape[2] != 3 or image.shape[0] < 2 or image.shape[1] < 2:
         return image if image is None else image.copy()
 
     # Convert to LAB color space

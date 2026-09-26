@@ -49,6 +49,7 @@ def _attach_frame_evidence(event: dict[str, Any], frame: np.ndarray | None, bbox
     except Exception:
         pass
 
+
 # Lazy import type for face to avoid circular heavy init at import time
 try:
     from ibvap.core.face import FaceDetector as _FaceDetector  # type: ignore

@@ -84,28 +84,34 @@ def generate_military_sitrep(
             identity = track.get("identity")
 
             if is_intrusion:
-                intrusions.append({
-                    "camera": cam_name,
-                    "track_id": track.get("track_id"),
-                    "class": class_name,
-                    "confidence": track.get("confidence", 0.0),
-                })
+                intrusions.append(
+                    {
+                        "camera": cam_name,
+                        "track_id": track.get("track_id"),
+                        "class": class_name,
+                        "confidence": track.get("confidence", 0.0),
+                    }
+                )
 
             if class_name in {"car", "truck", "bus", "motorcycle"}:
-                cam_vehicles.append({
-                    "camera": cam_name,
-                    "track_id": track.get("track_id"),
-                    "class": class_name,
-                })
+                cam_vehicles.append(
+                    {
+                        "camera": cam_name,
+                        "track_id": track.get("track_id"),
+                        "class": class_name,
+                    }
+                )
 
             if identity and identity.get("name"):
-                watchlist_matches.append({
-                    "camera": cam_name,
-                    "name": identity.get("name"),
-                    "tier": identity.get("tier", "AMBER"),
-                    "threat_level": identity.get("threat_level", "HIGH"),
-                    "score": identity.get("score", 0.0),
-                })
+                watchlist_matches.append(
+                    {
+                        "camera": cam_name,
+                        "name": identity.get("name"),
+                        "tier": identity.get("tier", "AMBER"),
+                        "threat_level": identity.get("threat_level", "HIGH"),
+                        "score": identity.get("score", 0.0),
+                    }
+                )
 
         # Plates: attach to vehicle tracks on this camera or add if unmatched
         for plate in obs.get("plates", []):
@@ -116,11 +122,13 @@ def generate_military_sitrep(
                     unassigned["plate"] = plate_text
                     unassigned["confidence"] = plate.get("confidence", 0.0)
                 else:
-                    cam_vehicles.append({
-                        "camera": cam_name,
-                        "plate": plate_text,
-                        "confidence": plate.get("confidence", 0.0),
-                    })
+                    cam_vehicles.append(
+                        {
+                            "camera": cam_name,
+                            "plate": plate_text,
+                            "confidence": plate.get("confidence", 0.0),
+                        }
+                    )
         vehicles.extend(cam_vehicles)
 
     # Determine Threat Posture
@@ -161,8 +169,7 @@ def generate_military_sitrep(
     if watchlist_matches:
         for m in watchlist_matches:
             watchlist_lines.append(
-                f"TARGET ALERT: [{m['name'].upper()}] - TIER {m['tier']} ({m['threat_level']}) "
-                f"CONFIDENCE: {int(m['score'] * 100)}% DETECTED AT {m['camera']}"
+                f"TARGET ALERT: [{m['name'].upper()}] - TIER {m['tier']} ({m['threat_level']}) CONFIDENCE: {int(m['score'] * 100)}% DETECTED AT {m['camera']}"
             )
     else:
         watchlist_lines.append("NO WATCHLIST SUSPECT MATCHES DETECTED.")
@@ -182,22 +189,28 @@ def generate_military_sitrep(
     # 5. Tactical Command Recommendations
     command_recs: list[str] = []
     if threat_posture == "RED":
-        command_recs.extend([
-            "IMMEDIATE ACTION: DISPATCH QUICK REACTION FORCE (QRF) TO BREACH LOCATIONS.",
-            "DIRECT SENSOR PAN TILT ILLUMINATION AND LOCK RADAR TRACKERS.",
-            "NOTIFY ADJACENT CHECKPOINTS AND HOLD OUTBOUND TRAFFIC.",
-        ])
+        command_recs.extend(
+            [
+                "IMMEDIATE ACTION: DISPATCH QUICK REACTION FORCE (QRF) TO BREACH LOCATIONS.",
+                "DIRECT SENSOR PAN TILT ILLUMINATION AND LOCK RADAR TRACKERS.",
+                "NOTIFY ADJACENT CHECKPOINTS AND HOLD OUTBOUND TRAFFIC.",
+            ]
+        )
     elif threat_posture == "AMBER":
-        command_recs.extend([
-            "INCREASE SURVEILLANCE SAMPLE RATE ON MONITORED SECTORS.",
-            "CONFIRM IDENTIFICATION ON SIGHTED TARGETS PRIOR TO INTERDICTION.",
-            "DISPATCH MOBILE PATROL FOR VISUAL RECONNAISSANCE.",
-        ])
+        command_recs.extend(
+            [
+                "INCREASE SURVEILLANCE SAMPLE RATE ON MONITORED SECTORS.",
+                "CONFIRM IDENTIFICATION ON SIGHTED TARGETS PRIOR TO INTERDICTION.",
+                "DISPATCH MOBILE PATROL FOR VISUAL RECONNAISSANCE.",
+            ]
+        )
     else:
-        command_recs.extend([
-            "CONTINUE STANDARD AUTOMATED PERIMETER SCAN PROTOCOLS.",
-            "ALL GEOFENCE AND RADAR TRIPWIRES ACTIVE AND NOMINAL.",
-        ])
+        command_recs.extend(
+            [
+                "CONTINUE STANDARD AUTOMATED PERIMETER SCAN PROTOCOLS.",
+                "ALL GEOFENCE AND RADAR TRIPWIRES ACTIVE AND NOMINAL.",
+            ]
+        )
     sections.append(SitrepSection(title="5. COMMAND DIRECTIVES & INTERDICTION RECOMMENDATIONS", content=command_recs))
 
     # Format into standard military plaintext layout

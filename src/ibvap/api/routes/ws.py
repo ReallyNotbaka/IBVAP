@@ -90,4 +90,3 @@ async def ws_endpoint(ws: WebSocket) -> None:
     finally:
         with contextlib.suppress(Exception):
             await ws.close()
-

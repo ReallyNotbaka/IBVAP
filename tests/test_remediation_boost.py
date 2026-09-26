@@ -27,6 +27,7 @@ from ibvap.services import stream_worker as SW
 # 1. SSRF DNS REBINDING / TOCTOU TESTS
 # ============================================================================
 
+
 def test_ssrf_pinning_eliminates_dns_rebinding_gap(monkeypatch: pytest.MonkeyPatch) -> None:
     """DNS resolution gap is eliminated by pinning the authorized IP into the connection URL.
 
@@ -91,6 +92,7 @@ def test_ssrf_pinning_handles_ipv4_ipv6_and_literals(monkeypatch: pytest.MonkeyP
 
 def test_ssrf_pinning_rejects_if_any_dns_record_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
     """If a domain resolves to multiple A/AAAA records and ANY record is forbidden, fail."""
+
     def mock_dual_records(host: str, port: Any, **kwargs: Any) -> list:
         return [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0)),  # Public
@@ -139,6 +141,7 @@ def test_ssrf_dns_rebinding_av_open_pinned_destination(monkeypatch: pytest.Monke
 
     class DummyContainer:
         streams = []
+
         def close(self) -> None:
             pass
 
@@ -174,6 +177,7 @@ def test_ssrf_dns_rebinding_av_open_pinned_destination(monkeypatch: pytest.Monke
 # ============================================================================
 # 2. ANPR PERSISTENT STATE GROWTH TESTS
 # ============================================================================
+
 
 def test_anpr_bounded_history_and_dead_track_eviction() -> None:
     """Vote history for dead tracks is evicted while active tracks preserve consensus."""
@@ -224,9 +228,9 @@ def test_anpr_ocr_throttling_state_bounded_and_evicts_stale() -> None:
     active_tids = {10, 20}
     now_m = time.monotonic()
     stale_ocr = [
-        k for k, ts in ocr_last_submitted.items()
-        if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0)
-        or (not isinstance(k, int) and (now_m - ts) > 5.0)
+        k
+        for k, ts in ocr_last_submitted.items()
+        if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0) or (not isinstance(k, int) and (now_m - ts) > 5.0)
     ]
     for k in stale_ocr:
         ocr_last_submitted.pop(k, None)
@@ -244,7 +248,7 @@ def test_anpr_ocr_throttling_state_bounded_and_evicts_stale() -> None:
 
     # Run LRU capacity cap
     if len(ocr_last_submitted) > 512:
-        oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[:len(ocr_last_submitted) - 512]
+        oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[: len(ocr_last_submitted) - 512]
         for k, _ in oldest_ocr:
             ocr_last_submitted.pop(k, None)
 
@@ -341,6 +345,7 @@ def test_anpr_stream_epoch_bump_purges_old_history() -> None:
 # 3. WEBSOCKET LIFECYCLE TESTS
 # ============================================================================
 
+
 def test_websocket_disabled_by_default_rejects_with_policy_code() -> None:
     """WebSocket is disabled by default to prevent false production capability."""
     app = create_app()
@@ -368,6 +373,7 @@ def test_websocket_development_mode_notifies_notice() -> None:
 # ============================================================================
 # 4. RTSP WORKER SHUTDOWN TIMING TESTS
 # ============================================================================
+
 
 def test_rtsp_worker_stall_shutdown_within_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Worker stalled in FFmpeg I/O stops deterministically within bounded timeout."""
@@ -504,6 +510,7 @@ def test_ssrf_check_http_redirect_uses_pinned_ip_no_dns_rebinding(monkeypatch: p
     eliminating the TOCTOU / DNS rebinding vulnerability in redirect checks.
     """
     dns_queries: list[str] = []
+
     def mock_getaddrinfo(host: str, port: Any, **kwargs: Any) -> list:
         dns_queries.append(host)
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 80))]
@@ -511,6 +518,7 @@ def test_ssrf_check_http_redirect_uses_pinned_ip_no_dns_rebinding(monkeypatch: p
     monkeypatch.setattr(socket, "getaddrinfo", mock_getaddrinfo)
 
     connected_addrs: list[tuple[str, int]] = []
+
     def mock_create_connection(address: tuple[str, int], *args: Any, **kwargs: Any) -> socket.socket:
         connected_addrs.append(address)
         # Raise to stop after recording socket destination
@@ -536,14 +544,17 @@ def test_ssrf_probe_url_disables_ffmpeg_redirects(monkeypatch: pytest.MonkeyPatc
     from ibvap.core.probe import probe_url
 
     captured_opts: dict[str, str] = {}
+
     def mock_av_open(url: str, **kwargs: Any) -> Any:
         options = kwargs.get("options", {})
         captured_opts.update(options)
         raise av.error.InvalidDataError(1, "mock open exit")
 
     monkeypatch.setattr(av, "open", mock_av_open)
+
     def mock_gai(host: str, port: Any, **kwargs: Any) -> list:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
     monkeypatch.setattr(socket, "getaddrinfo", mock_gai)
 
     from ibvap.core.probe import ProbeError
@@ -558,8 +569,10 @@ def test_ssrf_probe_url_disables_ffmpeg_redirects(monkeypatch: pytest.MonkeyPatc
 def test_ssrf_reconnect_rebind_transitions_to_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     """When a streaming camera rebinds to a forbidden IP on reconnect, worker marks FAILED and stops."""
     dns_state = {"ip": "93.184.216.34"}
+
     def mock_gai(host: str, port: Any, **kwargs: Any) -> list:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (dns_state["ip"], 0))]
+
     monkeypatch.setattr(socket, "getaddrinfo", mock_gai)
 
     cam_id = "test-cam-rebind-fail"
@@ -645,6 +658,7 @@ def test_rtsp_worker_start_lock_contention_eliminated() -> None:
     }
 
     stuck_event = threading.Event()
+
     def slow_stopping_thread() -> None:
         stuck_event.wait(1.5)
 
@@ -758,4 +772,3 @@ def test_rtsp_worker_midstream_stall_disable_and_reconnect(monkeypatch: pytest.M
     srv.close()
     SW._CAMERAS.pop(cam_id, None)
     SW._STATE_MACHINES.pop(cam_id, None)
-

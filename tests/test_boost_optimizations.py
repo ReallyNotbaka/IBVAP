@@ -47,6 +47,7 @@ from ibvap.models import Outbox
 # Area 1: Video Streaming & Decoding
 # ==============================================================================
 
+
 def test_stream_subscribers_threadsafe_multicast():
     """Verify multiple subscribers receive notification without dropped signals or deadlocks."""
     cam_id = "test_cam_stream_sub"
@@ -105,6 +106,7 @@ def test_gzip_middleware_excludes_multipart():
 # ==============================================================================
 # Area 2: Inference & Threading
 # ==============================================================================
+
 
 def test_detector_canvas_thread_isolation():
     """Adversarial stress test: multiple worker threads must not corrupt each other's letterbox canvas."""
@@ -169,6 +171,7 @@ def test_shared_detector_handle_concurrent_acquire():
 # Area 3: Biometrics, ANPR & Tracking
 # ==============================================================================
 
+
 def test_anpr_reuses_cached_plate_boxes():
     """Verify process_vehicle_crop reuses pre-computed plate boxes and skips re-detection."""
     from ibvap.core.anpr import PlateCandidate
@@ -176,9 +179,7 @@ def test_anpr_reuses_cached_plate_boxes():
     anpr = ANPRPipeline()
     anpr.detector = MagicMock()
     anpr.ocr = MagicMock()
-    anpr.ocr.recognize.return_value = [
-        PlateCandidate(text="KA01AB1234", confidence=0.95, quality=0.9, bbox_norm=(0.0, 0.0, 1.0, 1.0))
-    ]
+    anpr.ocr.recognize.return_value = [PlateCandidate(text="KA01AB1234", confidence=0.95, quality=0.9, bbox_norm=(0.0, 0.0, 1.0, 1.0))]
 
     vehicle_crop = np.zeros((200, 300, 3), dtype=np.uint8)
     cached_boxes = [(0.1, 0.2, 0.8, 0.4)]
@@ -229,6 +230,7 @@ def test_track_trajectory_bounding_and_deque():
 def test_watchlist_store_exemplar_caching():
     """Verify WatchlistEntry caches exemplar matrix and invalidates properly on modification."""
     from ibvap.core.watchlist import ThreatLevel
+
     rng = np.random.default_rng(42)
     emb1 = rng.standard_normal(128).astype(np.float32)
     emb2 = rng.standard_normal(128).astype(np.float32)
@@ -252,6 +254,7 @@ def test_watchlist_store_exemplar_caching():
 # Area 4: Concurrency & Memory Leaks
 # ==============================================================================
 
+
 def test_outbox_fifo_eviction_under_load():
     """Verify outbox caps at MAX_EVENTS and MAX_OUTBOX and cleans index mappings."""
     clear_all()
@@ -262,6 +265,7 @@ def test_outbox_fifo_eviction_under_load():
     assert len(_OUTBOX) == 100
 
     import ibvap.events.outbox as outbox_mod
+
     orig_max_events = outbox_mod.MAX_EVENTS
     orig_max_outbox = outbox_mod.MAX_OUTBOX
     try:
@@ -307,6 +311,7 @@ def test_rule_engine_and_pipeline_track_pruning():
 # ==============================================================================
 # Area 5: Database & API
 # ==============================================================================
+
 
 def test_events_api_early_exit_and_ordering(api_client: TestClient):
     """Verify get_events traverses reversed, breaks early on limit, and preserves order."""
@@ -470,6 +475,7 @@ def test_pipeline_prune_track_cleans_intrusion_alert_timestamps():
 def test_watchlist_store_rapid_saves_flush_preserves_latest(tmp_path):
     """Rapid successive saves must not prematurely pop future; flush() must wait for latest state."""
     from ibvap.core.watchlist import ThreatLevel
+
     store_file = tmp_path / "watchlist_test.json"
     store = WatchlistStore(storage_path=store_file)
 
@@ -527,4 +533,3 @@ def test_events_api_delayed_buffered_events_do_not_displace_live(api_client: Tes
     assert retrieved_keys == ["live_9", "live_8", "live_7", "live_6", "live_5"]
     assert "delayed_old" not in retrieved_keys
     clear_all()
-

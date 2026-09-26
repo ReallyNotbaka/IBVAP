@@ -546,8 +546,8 @@ class CentroidTracker:
                 eid = trk.identity["entry_id"]
                 if eid in seen_entries:
                     prev = seen_entries[eid]
-                    prev_active = (prev.age == 0)
-                    curr_active = (trk.age == 0)
+                    prev_active = prev.age == 0
+                    curr_active = trk.age == 0
                     prev_locked = getattr(prev, "identity_locked", False)
                     curr_locked = getattr(trk, "identity_locked", False)
                     prev_crit = (getattr(prev, "identity", None) or {}).get("threat_level") == "CRITICAL"
@@ -572,7 +572,7 @@ class CentroidTracker:
                     elif curr_score < prev_score:
                         trk_wins = False
                     else:
-                        trk_wins = (trk.hits > prev.hits)
+                        trk_wins = trk.hits > prev.hits
 
                     if trk_wins:
                         prev.identity = None

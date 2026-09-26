@@ -217,12 +217,7 @@ def associate_faces_to_tracks(
     max_y_grid = np.where(is_closeup, ty1[:, None] + 0.60 * th[:, None], ty1[:, None] + 0.42 * th[:, None])
 
     # (n_t, n_f) broadcast of face centers against per-track head gates.
-    gate = (
-        (fcx[None, :] >= min_x[:, None])
-        & (fcx[None, :] <= max_x[:, None])
-        & (fcy[None, :] >= min_y[:, None])
-        & (fcy[None, :] <= max_y_grid)
-    )
+    gate = (fcx[None, :] >= min_x[:, None]) & (fcx[None, :] <= max_x[:, None]) & (fcy[None, :] >= min_y[:, None]) & (fcy[None, :] <= max_y_grid)
     gate &= (ratio >= 0.08) & (ratio <= 0.58)
 
     dx = np.abs(fcx[None, :] - hx[:, None]) / np.maximum(tw[:, None], 1e-5)
@@ -235,11 +230,7 @@ def associate_faces_to_tracks(
     is_locked = np.array([bool(getattr(t, "identity_locked", False)) for t in person_tracks], dtype=bool)
     is_critical = np.array(
         [
-            bool(
-                getattr(t, "identity_locked", False)
-                and getattr(t, "identity", {})
-                and getattr(t, "identity", {}).get("threat_level") == "CRITICAL"
-            )
+            bool(getattr(t, "identity_locked", False) and getattr(t, "identity", {}) and getattr(t, "identity", {}).get("threat_level") == "CRITICAL")
             for t in person_tracks
         ],
         dtype=bool,

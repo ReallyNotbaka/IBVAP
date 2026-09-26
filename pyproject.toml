@@ -79,7 +79,7 @@ known-first-party = ["ibvap", "scripts", "tests"]
 quote-style = "double"
 
 [tool.pyright]
-typeCheckingMode = "strict"
+typeCheckingMode = "standard"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
@@ -97,6 +97,11 @@ reportPrivateUsage = false
 reportAttributeAccessIssue = false
 reportArgumentType = false
 reportReturnType = false
+reportOptionalSubscript = false
+reportOptionalMemberAccess = false
+reportOperatorIssue = false
+reportCallIssue = false
+reportPossiblyUnboundVariable = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

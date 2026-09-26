@@ -178,4 +178,3 @@ async def init_db(settings: Settings | None = None) -> bool:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("db_sqlite_fallback_ready", db_path="data/ibvap.db")
         return True
-

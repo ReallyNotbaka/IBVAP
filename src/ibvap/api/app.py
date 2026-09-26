@@ -183,7 +183,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     except Exception:
         logging.getLogger(__name__).warning("Frontend assets were not mounted; build output is missing or invalid.", exc_info=True)
 
-
     return app
 
 

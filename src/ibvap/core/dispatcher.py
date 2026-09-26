@@ -126,11 +126,7 @@ async def test_webhook_connection(url: str) -> dict[str, Any]:
                 "success": resp.status_code < 400,
                 "status_code": resp.status_code,
                 "elapsed_ms": elapsed_ms,
-                "message": (
-                    f"Server responded with {resp.status_code} in {elapsed_ms}ms"
-                    if resp.status_code < 400
-                    else f"HTTP error {resp.status_code}"
-                ),
+                "message": (f"Server responded with {resp.status_code} in {elapsed_ms}ms" if resp.status_code < 400 else f"HTTP error {resp.status_code}"),
             }
     except Exception as e:
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)

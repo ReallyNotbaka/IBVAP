@@ -72,9 +72,7 @@ async def get_events(
             elif want_exit:
                 if "exit" not in etype:
                     continue
-            elif want_system and not (
-                "system" in etype or "low_vis" in etype or "offline" in etype or "reconnect" in etype
-            ):
+            elif want_system and not ("system" in etype or "low_vis" in etype or "offline" in etype or "reconnect" in etype):
                 continue
 
         matches.append(ev)

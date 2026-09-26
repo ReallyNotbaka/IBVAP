@@ -183,9 +183,7 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
             )
         except Exception:
             stage("Inspecting stream", "failed")
-            return CameraTestResponse(
-                result="error", reason_code="local_file_failed", safe_message="Local footage could not be opened", stages=stages
-            )
+            return CameraTestResponse(result="error", reason_code="local_file_failed", safe_message="Local footage could not be opened", stages=stages)
         finally:
             if container is not None:
                 with contextlib.suppress(Exception):
