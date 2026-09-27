@@ -39,9 +39,12 @@ export interface TargetInspectData {
 }
 
 // One video tile. <img> shows MJPEG from GET /cameras/{id}/stream,
-// polling fetchCameraObservations (80ms) gives boxes drawn on OverlayCanvas.
+// polling fetchCameraObservations gives boxes drawn on OverlayCanvas.
 // EMA smoothing keeps boxes from jittering. Fence drawing + click-to-inspect
 // + watchlist enroll all live here.
+// Bounded MJPEG reconnect attempts before the tile is declared dead.
+const MJPEG_MAX_RETRIES = 5;
+const MJPEG_RETRY_DELAY_MS = 2000;
 export const CameraTile = memo(function CameraTile({
   camera,
   preset = "all",
@@ -94,6 +97,28 @@ export const CameraTile = memo(function CameraTile({
   const selectedBoxRef = useRef<Box | null>(null);
   selectedBoxRef.current = selectedBox;
 
+  // Page visibility gate: stop polling when the tab is hidden.
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // MJPEG reconnect state: onError counter + timed cache-busted retry.
+  const [retryStamp, setRetryStamp] = useState<number | null>(null);
+  const [errorCount, setErrorCount] = useState(0);
+  const errorCountRef = useRef(0);
+  const retryTimer = useRef<number | null>(null);
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimer.current !== null) {
+      window.clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+  }, []);
+
   const isFootage = camera.source_type === "video_footage" || camera.protocol === "file";
 
   const { data: playback } = useQuery({
@@ -101,6 +126,8 @@ export const CameraTile = memo(function CameraTile({
     queryFn: () => fetchPlayback(camera.id),
     enabled: isFootage,
     refetchInterval: isFootage ? 500 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
   });
 
   const runTransport = useCallback(
@@ -120,6 +147,10 @@ export const CameraTile = memo(function CameraTile({
   );
 
   const handleReconnect = useCallback(async () => {
+    errorCountRef.current = 0;
+    setErrorCount(0);
+    setRetryStamp(Date.now());
+    setImgError(false);
     try {
       await reconnectCamera(camera.id);
       await qc.invalidateQueries({ queryKey: ["cameras"] });
@@ -127,6 +158,27 @@ export const CameraTile = memo(function CameraTile({
       // Ignored
     }
   }, [camera.id, qc]);
+
+  // Pause → seek → resume so a seek never fights an actively playing stream.
+  const handleSeek = useCallback(
+    async (pos: number) => {
+      const wasPlaying = playback?.state === "playing";
+      setTransportBusy(true);
+      try {
+        if (wasPlaying) {
+          await controlPlayback(camera.id, "pause");
+        }
+        await seekPlayback(camera.id, pos);
+        if (wasPlaying) {
+          await controlPlayback(camera.id, "resume");
+        }
+        await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
+      } finally {
+        setTransportBusy(false);
+      }
+    },
+    [camera.id, playback?.state, qc],
+  );
 
   const handleDisable = useCallback(async () => {
     try {
@@ -143,7 +195,6 @@ export const CameraTile = memo(function CameraTile({
     handleFenceMouseMove,
     handleFenceMouseLeave,
     handleFenceClick,
-    handleUndoPoint,
     fencePointsStr,
   } = useFenceDrawing({
     fencePoints,
@@ -152,30 +203,32 @@ export const CameraTile = memo(function CameraTile({
     onRemoveFencePoint,
   });
 
-  // Track keydown for undo when drawing fence
-  useEffect(() => {
-    if (!fenceDrawing) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === "Backspace" || e.key === "Delete") {
-        handleUndoPoint();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [fenceDrawing, handleUndoPoint]);
+  // NOTE: no local Backspace/Delete undo handler here — Cockpit owns the fence
+  // state and already handles undo. A second handler double-removes (or acts on
+  // a stale index depending on listener order).
 
-  // Stream observations polling (80ms)
+  // Stream observations polling: throttled to 200ms, paused when tab hidden,
+  // never refetching in background.
   const { data: observations } = useQuery({
     queryKey: ["camera-observations", camera.id],
     queryFn: () => fetchCameraObservations(camera.id),
-    refetchInterval: 80,
+    refetchInterval: pageVisible ? 200 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    staleTime: 150,
+    retry: 1,
+    enabled: pageVisible,
   });
 
-  // Reset img error if camera changes
+  // Reset stream error state if camera changes
   useEffect(() => {
+    errorCountRef.current = 0;
+    setErrorCount(0);
+    setRetryStamp(null);
     setImgError(false);
-  }, [camera.id, camera.endpoint, camera.stream_epoch]);
+    clearRetryTimer();
+    return clearRetryTimer;
+  }, [camera.id, camera.endpoint, camera.stream_epoch, clearRetryTimer]);
 
   // Measure container size with ResizeObserver
   useEffect(() => {
@@ -209,8 +262,6 @@ export const CameraTile = memo(function CameraTile({
     return { width: `${Math.round(w)}px`, height: `${Math.round(h)}px` };
   }, [containerSize, effectiveAspect]);
 
-  const fencePointsLen = fencePoints.length;
-  const cameraFence = camera.fence;
   const tracks = observations?.tracks;
   const detections = observations?.detections;
   const faces = observations?.faces;
@@ -257,42 +308,9 @@ export const CameraTile = memo(function CameraTile({
             : null;
         const identity = trackItem?.identity;
         const isWatchlistMatch = Boolean(identity && identity.name);
-        let isFenceIntrusion = "intrusion" in item && Boolean((item as { intrusion?: boolean }).intrusion);
-
-        const activeFence = cameraFence?.polygon && cameraFence.enabled !== false
-          ? cameraFence.polygon
-          : (showFence && fencePoints.length >= 2 ? fencePoints : null);
-        const isPersonClass = ["person", "human", "car", "truck", "bus", "motorcycle", "bicycle"].includes(item.class_name?.toLowerCase() ?? "");
-        if (!isFenceIntrusion && activeFence && activeFence.length >= 2 && isPersonClass) {
-          const footX = (x1 + x2) / 2;
-          const footY = y2;
-          if (activeFence.length === 2) {
-            const [p1, p2] = activeFence;
-            const dx = p2[0] - p1[0];
-            const dy = p2[1] - p1[1];
-            const l2 = dx * dx + dy * dy;
-            const t = l2 > 1e-9 ? Math.max(0, Math.min(1, ((footX - p1[0]) * dx + (footY - p1[1]) * dy) / l2)) : 0;
-            const projX = p1[0] + t * dx;
-            const projY = p1[1] + t * dy;
-            const dist = Math.hypot(footX - projX, footY - projY);
-            if (dist <= 0.045) {
-              isFenceIntrusion = true;
-            }
-          } else if (activeFence.length >= 3) {
-            let inside = false;
-            const n = activeFence.length;
-            for (let i = 0; i < n; i++) {
-              const [ix1, iy1] = activeFence[i];
-              const [ix2, iy2] = activeFence[(i + 1) % n];
-              if (((iy1 > footY) !== (iy2 > footY)) && (footX < ((ix2 - ix1) * (footY - iy1)) / (iy2 - iy1 + 1e-9) + ix1)) {
-                inside = !inside;
-              }
-            }
-            if (inside) {
-              isFenceIntrusion = true;
-            }
-          }
-        }
+        // Trust the backend `intrusion` flag — never recompute intrusion
+        // geometry in the frontend (audit ruling).
+        const isFenceIntrusion = "intrusion" in item && Boolean((item as { intrusion?: boolean }).intrusion);
 
         const threatLevel = identity?.threat_level?.toUpperCase();
         const isCritical = threatLevel === "CRITICAL" || identity?.tier === "RED";
@@ -377,7 +395,7 @@ export const CameraTile = memo(function CameraTile({
         }
         return (b.confidence ?? 0) - (a.confidence ?? 0);
       });
-  }, [tracks, detections, cameraFence, showFence, fencePoints, fencePointsLen, observations?.plates, observations?.plate_detections]);
+  }, [tracks, detections, observations?.plates, observations?.plate_detections]);
 
   const minFaceConf = 0.50;
   const isMinimal = preset === "clean" || mode === "minimal";
@@ -569,13 +587,31 @@ export const CameraTile = memo(function CameraTile({
 
   const handleImageLoad = useCallback(() => {
     setImgError(false);
+    errorCountRef.current = 0;
+    setErrorCount(0);
     const img = imgRef.current;
     if (img && img.naturalWidth && img.naturalHeight) {
       setVideoAspect(img.naturalWidth / img.naturalHeight);
     }
   }, []);
 
-  const handleImageError = useCallback(() => setImgError(true), []);
+  // MJPEG onError counter + timed retry with a cache-busted ?_t= timestamp.
+  // After MJPEG_MAX_RETRIES the tile goes dead with a manual Reconnect action.
+  const handleImageError = useCallback(() => {
+    clearRetryTimer();
+    errorCountRef.current += 1;
+    const count = errorCountRef.current;
+    setErrorCount(count);
+    if (count <= MJPEG_MAX_RETRIES) {
+      retryTimer.current = window.setTimeout(() => {
+        retryTimer.current = null;
+        setImgError(false);
+        setRetryStamp(Date.now());
+      }, MJPEG_RETRY_DELAY_MS);
+    } else {
+      setImgError(true);
+    }
+  }, [clearRetryTimer]);
   const handleCloseInspector = useCallback(() => setSelectedBox(null), []);
 
   const tileStyle = useMemo(() => ({ aspectRatio: effectiveAspect }), [effectiveAspect]);
@@ -600,7 +636,8 @@ export const CameraTile = memo(function CameraTile({
 
   const sourceUnavailable = camera.observed_state === "OFFLINE" || camera.observed_state === "DISABLED";
   const sourceReconnecting = camera.observed_state === "RECONNECTING" || camera.observed_state === "CONNECTING";
-  const streamUrl = base(`/api/v1/cameras/${camera.id}/stream?_t=${camera.stream_epoch}`);
+  const retryingStream = errorCount > 0 && !imgError;
+  const streamUrl = base(`/api/v1/cameras/${camera.id}/stream?_t=${retryStamp ?? camera.stream_epoch}`);
   const targetCount = allBoxes.filter((b) => !b.isPlate).length;
 
   return (
@@ -702,10 +739,29 @@ export const CameraTile = memo(function CameraTile({
               <div className="font-semibold text-slate-200">{sourceReconnecting ? "Reconnecting to camera" : "Video signal unavailable"}</div>
               <div className="mt-1 text-slate-400 text-[11px]">
                 Waiting for stream at {camera.endpoint || "configured endpoint"}
+                {errorCount > 0 && ` (attempt ${errorCount}/${MJPEG_MAX_RETRIES})`}
               </div>
               <div className="mt-3 text-[11px] text-amber-300/90 bg-amber-950/40 border border-amber-800/50 rounded-lg p-2.5">
                 Ensure device is on the same network and stream is active.
               </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleReconnect();
+                }}
+                className="mt-3 rounded-lg bg-amber-400 hover:bg-amber-300 px-3 py-1.5 text-[11px] font-bold text-amber-950 transition-colors cursor-pointer"
+                aria-label="Reconnect camera"
+              >
+                Reconnect now
+              </button>
+            </div>
+          )}
+
+          {/* Transient MJPEG retry indicator */}
+          {retryingStream && (
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-3 py-1 rounded-full bg-black/85 border border-amber-400/50 text-amber-200 text-[10px] font-mono shadow-lg backdrop-blur-md whitespace-nowrap">
+              Retrying stream… attempt {errorCount}/{MJPEG_MAX_RETRIES}
             </div>
           )}
 
@@ -840,7 +896,7 @@ export const CameraTile = memo(function CameraTile({
             </span>
           )}
           <span className="text-[10px] text-slate-300 font-mono bg-black/70 border border-white/10 rounded-full px-2.5 py-0.5 hidden sm:inline backdrop-blur-md">
-            {sourceUnavailable ? "OFFLINE" : sourceReconnecting ? "RECONNECTING" : "CONNECTED"}
+            {sourceUnavailable ? "OFFLINE" : sourceReconnecting ? "RECONNECTING" : retryingStream ? `RETRYING ${errorCount}/${MJPEG_MAX_RETRIES}` : "CONNECTED"}
           </span>
         </div>
       </div>
@@ -851,10 +907,7 @@ export const CameraTile = memo(function CameraTile({
         playback={playback}
         transportBusy={transportBusy}
         onTransport={runTransport}
-        onSeek={async (pos) => {
-          await seekPlayback(camera.id, pos);
-          await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
-        }}
+        onSeek={handleSeek}
         onReconnect={handleReconnect}
         onDisable={handleDisable}
       />

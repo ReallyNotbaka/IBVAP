@@ -272,7 +272,10 @@ export async function fetchEvents(
   const r = await fetch(base(`/api/v1/events?${params.toString()}`));
   if (!r.ok) throw new Error(`events ${r.status}`);
   const j = await r.json();
+  // Backward-compatible: backend may return an unpaginated list or a
+  // paginated { items, total } envelope (Task 5). Accept both.
   if (Array.isArray(j)) return j as EventItem[];
+  if (j && Array.isArray((j as { items?: unknown }).items)) return (j as { items: EventItem[] }).items;
   return [];
 }
 
@@ -331,6 +334,7 @@ export type CameraHealthSample = {
   analysis_fps?: number;
   inference_ms?: number;
   queue_drops?: number;
+  ocr_timeouts?: number;
   decode_errors?: number;
   reconnect_count?: number;
   stream_epoch?: number;
@@ -349,6 +353,7 @@ export type CameraHealthData = {
   source_fps?: number;
   inference_ms?: number;
   queue_drops?: number;
+  ocr_timeouts?: number;
   decode_errors?: number;
   reconnect_count?: number;
   fps?: number;
@@ -451,14 +456,18 @@ export function useCameras(enabled = true) {
 }
 
 export function useEvents(
-  opts: { limit?: number; tab?: string; camera_id?: string } | number = 50,
+  opts: { limit?: number; tab?: string; camera_id?: string; event_type?: string } | number = 50,
   enabled = true,
 ) {
-  const key = typeof opts === "number" ? ["events", opts] : ["events", opts.limit ?? 50, opts.tab ?? "all", opts.camera_id ?? ""];
-  const limit = typeof opts === "number" ? opts : (opts.limit ?? 50);
+  // Canonical key shape for all callers so caches/invalidation stay unified.
+  const normalized = typeof opts === "number" ? { limit: opts } : opts;
+  const limit = normalized.limit ?? 50;
+  const tab = normalized.tab ?? "all";
+  const cameraId = normalized.camera_id ?? "";
+  const eventType = normalized.event_type ?? "";
   return useQuery({
-    queryKey: key,
-    queryFn: () => fetchEvents(opts),
+    queryKey: ["events", limit, tab, cameraId, eventType],
+    queryFn: () => fetchEvents(normalized),
     refetchInterval: limit > 50 ? 4000 : 2500,
     staleTime: 2000,
     refetchOnWindowFocus: false,

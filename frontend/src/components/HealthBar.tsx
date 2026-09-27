@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchHealth } from "../lib/api";
 
 export function HealthBar() {
-  const { data } = useQuery({ queryKey: ["health"], queryFn: fetchHealth, refetchInterval: 5000, retry: 1 });
+  const { data } = useQuery({ queryKey: ["health"], queryFn: fetchHealth, refetchInterval: 5000, refetchIntervalInBackground: false, refetchOnWindowFocus: false, retry: 1 });
 
   if (!data) {
     return (
@@ -13,7 +13,9 @@ export function HealthBar() {
   }
 
   const storage = (data as { storage_pressure?: string }).storage_pressure ?? "Normal";
-  const drops = (data as { queue_drops?: number }).queue_drops ?? 0;
+  // Missing/null backend counters render as unknown — never fabricate.
+  const drops = (data as { queue_drops?: number | null }).queue_drops ?? null;
+  const ocrTimeouts = (data as { ocr_timeouts?: number | null }).ocr_timeouts ?? null;
   const isEmergency = storage === "Emergency";
 
   return (
@@ -25,7 +27,7 @@ export function HealthBar() {
       }`}
     >
       <span className="font-medium">
-        System health • queue_drops {drops} • status {(data as { status?: string }).status ?? "ok"}
+        System health • queue_drops {drops ?? "--"}{ocrTimeouts !== null ? ` • ocr_timeouts ${ocrTimeouts}` : ""} • status {(data as { status?: string }).status ?? "ok"}
       </span>
       <span
         className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${

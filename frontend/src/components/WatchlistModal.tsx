@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   useWatchlist,
   enrollSuspect,
@@ -33,6 +33,19 @@ interface WatchlistModalProps {
   } | null;
 }
 
+// Revoke only blob: object URLs we created (never data-URLs or remote URLs).
+function revokeObjectUrls(urls: string[]) {
+  for (const u of urls) {
+    if (u.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(u);
+      } catch {
+        // ignore double-revoke / invalid URL errors
+      }
+    }
+  }
+}
+
 export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModalProps) {
   const qc = useQueryClient();
   const { data: suspects = [], isLoading } = useWatchlist();
@@ -48,6 +61,17 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
   const [notes, setNotes] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
   const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
+  const previewsRef = useRef<string[]>([]);
+  useEffect(() => {
+    previewsRef.current = photoPreviews;
+  }, [photoPreviews]);
+
+  // Revoke any lingering object URLs on unmount (leak guard).
+  useEffect(() => {
+    return () => {
+      revokeObjectUrls(previewsRef.current);
+    };
+  }, []);
   const [plateThumbnail, setPlateThumbnail] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -153,6 +177,8 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
     const combined = [...photos, ...files].slice(0, 5);
     setPhotos(combined);
 
+    // Revoke previous previews before replacing (object-URL leak fix).
+    revokeObjectUrls(photoPreviews);
     // Generate object URLs for preview
     const urls = combined.map((f) => URL.createObjectURL(f));
     setPhotoPreviews(urls);
@@ -160,10 +186,12 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
   };
 
   const handleRemovePhoto = (index: number) => {
+    // Revoke the removed preview; keep existing URLs for retained photos
+    // (do NOT regenerate object URLs for files we already have).
+    revokeObjectUrls(photoPreviews.slice(index, index + 1));
     const updated = photos.filter((_, i) => i !== index);
     setPhotos(updated);
-    const urls = updated.map((f) => URL.createObjectURL(f));
-    setPhotoPreviews(urls);
+    setPhotoPreviews(photoPreviews.filter((_, i) => i !== index));
   };
 
   const handleEnroll = async (e: React.FormEvent) => {
@@ -197,6 +225,7 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
         setName("");
         setNotes("");
         setPhotos([]);
+        revokeObjectUrls(photoPreviews);
         setPhotoPreviews([]);
         setTimeout(() => {
           setActiveTab("list");

@@ -26,6 +26,8 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
     queryKey: ["camera-health", camera.id],
     queryFn: () => fetchCameraHealth(camera.id),
     refetchInterval: 2000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
   });
 
   const handleReconnect = async () => {
@@ -47,13 +49,16 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
   const isStreaming = camera.observed_state === "STREAMING";
   const isReconnecting = camera.observed_state === "RECONNECTING";
 
-  const sourceFps = latest?.source_fps ?? health?.source_fps ?? (isStreaming ? 30.0 : 0.0);
-  const analysisFps = latest?.analysis_fps ?? health?.analysis_fps ?? (isStreaming ? 30.0 : 0.0);
-  const inferenceMs = latest?.inference_ms ?? health?.inference_ms ?? (isStreaming ? 8.0 : 0.0);
-  const frameAgeMs = latest?.last_frame_age_ms ?? health?.last_frame_age_ms ?? (isStreaming ? 0 : 9999);
-  const queueDrops = latest?.queue_drops ?? health?.queue_drops ?? 0;
-  const decodeErrors = latest?.decode_errors ?? health?.decode_errors ?? 0;
-  const reconnects = latest?.reconnect_count ?? health?.reconnect_count ?? 0;
+  // Missing/null telemetry renders as unknown ("--") — never fabricate values
+  // derived from observed_state or hardcoded guesses.
+  const sourceFps = latest?.source_fps ?? health?.source_fps ?? null;
+  const analysisFps = latest?.analysis_fps ?? health?.analysis_fps ?? null;
+  const inferenceMs = latest?.inference_ms ?? health?.inference_ms ?? null;
+  const frameAgeMs = latest?.last_frame_age_ms ?? health?.last_frame_age_ms ?? null;
+  const queueDrops = latest?.queue_drops ?? health?.queue_drops ?? null;
+  const ocrTimeouts = latest?.ocr_timeouts ?? health?.ocr_timeouts ?? null;
+  const decodeErrors = latest?.decode_errors ?? health?.decode_errors ?? null;
+  const reconnects = latest?.reconnect_count ?? health?.reconnect_count ?? null;
 
   return (
     <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl p-4 sm:p-5 shadow-xs transition-all space-y-3">
@@ -111,7 +116,13 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
             Source FPS
           </span>
           <div className="mt-1 font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-            {sourceFps.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">FPS</span>
+            {sourceFps === null ? (
+              <span className="text-slate-400 font-normal">--</span>
+            ) : (
+              <>
+                {sourceFps.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">FPS</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -120,7 +131,13 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
             Analysis FPS
           </span>
           <div className="mt-1 font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-            {analysisFps.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">FPS</span>
+            {analysisFps === null ? (
+              <span className="text-slate-400 font-normal">--</span>
+            ) : (
+              <>
+                {analysisFps.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">FPS</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -129,7 +146,13 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
             Inference Latency
           </span>
           <div className="mt-1 font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-            {inferenceMs.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">ms</span>
+            {inferenceMs === null ? (
+              <span className="text-slate-400 font-normal">--</span>
+            ) : (
+              <>
+                {inferenceMs.toFixed(1)} <span className="text-[10px] font-normal text-slate-400">ms</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -138,7 +161,7 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
             Frame Age
           </span>
           <div className="mt-1 font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-            {frameAgeMs >= 9999 ? (
+            {frameAgeMs === null ? (
               <span className="text-slate-400 font-normal">--</span>
             ) : (
               <>
@@ -152,8 +175,17 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
           <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
             Queue Drops
           </span>
-          <div className={`mt-1 font-mono font-bold text-sm ${queueDrops > 0 ? "text-amber-500" : "text-slate-900 dark:text-slate-100"}`}>
-            {queueDrops}
+          <div className={`mt-1 font-mono font-bold text-sm ${(queueDrops ?? 0) > 0 ? "text-amber-500" : "text-slate-900 dark:text-slate-100"}`}>
+            {queueDrops === null ? <span className="text-slate-400 font-normal">--</span> : queueDrops}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-2.5">
+          <span className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">
+            OCR Timeouts
+          </span>
+          <div className={`mt-1 font-mono font-bold text-sm ${(ocrTimeouts ?? 0) > 0 ? "text-amber-500" : "text-slate-900 dark:text-slate-100"}`}>
+            {ocrTimeouts === null ? <span className="text-slate-400 font-normal">--</span> : ocrTimeouts}
           </div>
         </div>
 
@@ -162,7 +194,7 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
             Reconnects / Err
           </span>
           <div className="mt-1 font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-            {reconnects} / {decodeErrors}
+            {reconnects === null ? "--" : reconnects} / {decodeErrors === null ? "--" : decodeErrors}
           </div>
         </div>
       </div>
@@ -172,20 +204,20 @@ function CameraHealthRow({ camera }: { camera: Camera }) {
         <div className="pt-2">
           <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 dark:text-slate-500 mb-1">
             <span>Recent Inferences (last {samples.length} cycles)</span>
-            <span>Latest: {inferenceMs.toFixed(1)}ms</span>
+            <span>Latest: {inferenceMs === null ? "--" : `${inferenceMs.toFixed(1)}ms`}</span>
           </div>
           <div className="flex items-end gap-1 h-7 bg-slate-50 dark:bg-slate-950/60 rounded-lg p-1 border border-slate-100 dark:border-slate-800/80">
             {samples.map((s, idx) => {
-              const ms = s.inference_ms ?? 10.0;
-              const heightPercent = Math.min(100, Math.max(15, (ms / 35.0) * 100));
+              const ms = s.inference_ms ?? null;
+              const heightPercent = ms === null ? 8 : Math.min(100, Math.max(15, (ms / 35.0) * 100));
               return (
                 <div
                   key={idx}
                   className={`flex-1 rounded-sm transition-all ${
-                    ms > 25 ? "bg-amber-400 dark:bg-amber-500" : "bg-slate-400 dark:bg-slate-600"
+                    ms !== null && ms > 25 ? "bg-amber-400 dark:bg-amber-500" : "bg-slate-400 dark:bg-slate-600"
                   }`}
                   style={{ height: `${heightPercent}%` }}
-                  title={`Sample ${idx + 1}: ${ms}ms latency, ${s.analysis_fps ?? 30} FPS`}
+                  title={ms === null ? `Sample ${idx + 1}: latency unknown` : `Sample ${idx + 1}: ${ms}ms latency, ${s.analysis_fps ?? "n/a"} FPS`}
                 />
               );
             })}

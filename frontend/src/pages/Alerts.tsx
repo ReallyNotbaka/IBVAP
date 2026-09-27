@@ -18,6 +18,15 @@ import { SettingsModal } from "../components/SettingsModal";
 
 type AlertTab = "all" | "watchlist" | "intrusions" | "exits" | "system";
 
+// CSV cell escape: quote every field, double embedded quotes, and guard
+// formula injection by prefixing cells starting with = + - @ (or tab/CR)
+// with a single quote so spreadsheets treat them as text.
+export function csvEscape(value: unknown): string {
+  const raw = value === null || value === undefined ? "" : String(value);
+  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  return `"${guarded.replace(/"/g, '""')}"`;
+}
+
 export function Alerts() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<AlertTab>("all");
@@ -190,21 +199,21 @@ export function Alerts() {
       const conf = ev.confidence !== undefined ? Math.round(ev.confidence * 100) : "";
 
       return [
-        latestTime,
-        `"${isoTime}"`,
-        `"${ev.camera_id}"`,
-        `"${camName}"`,
-        `"${ev.event_type}"`,
-        `"${threat}"`,
-        ev.track_id !== undefined ? ev.track_id : "",
-        `"${ev.zone_id || ""}"`,
-        `"${target.replace(/"/g, '""')}"`,
-        conf,
-        count,
+        csvEscape(latestTime),
+        csvEscape(isoTime),
+        csvEscape(ev.camera_id),
+        csvEscape(camName),
+        csvEscape(ev.event_type),
+        csvEscape(threat),
+        csvEscape(ev.track_id !== undefined ? ev.track_id : ""),
+        csvEscape(ev.zone_id || ""),
+        csvEscape(target),
+        csvEscape(conf),
+        csvEscape(count),
       ].join(",");
     });
 
-    const csvData = [headers.join(","), ...rows].join("\n");
+    const csvData = [headers.map(csvEscape).join(","), ...rows].join("\n");
     const blob = new Blob([csvData], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

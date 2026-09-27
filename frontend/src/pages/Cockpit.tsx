@@ -806,7 +806,11 @@ export const Cockpit = memo(function Cockpit({
       )}
 
       {/* Tactical Novelty Modals */}
-      <TacticalRadarModal isOpen={radarOpen} onClose={() => setRadarOpen(false)} />
+      <TacticalRadarModal
+        isOpen={radarOpen}
+        onClose={() => setRadarOpen(false)}
+        initialCameraId={selectedCameraId ?? solo ?? cameras[0]?.id}
+      />
       <MilitarySitrepModal isOpen={sitrepOpen} onClose={() => setSitrepOpen(false)} />
       <TargetDossierModal isOpen={dossierOpen} onClose={() => setDossierOpen(false)} />
 

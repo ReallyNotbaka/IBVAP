@@ -6,11 +6,13 @@ import { RadarCalibrationModal } from "./RadarCalibrationModal";
 export interface TacticalRadarModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialCameraId?: string;
 }
 
 export const TacticalRadarModal = memo(function TacticalRadarModal({
   isOpen,
   onClose,
+  initialCameraId,
 }: TacticalRadarModalProps) {
   const { data: radarData } = useTacticalRadar(isOpen);
   const [selectedBlip, setSelectedBlip] = useState<RadarBlip | null>(null);
@@ -341,6 +343,7 @@ export const TacticalRadarModal = memo(function TacticalRadarModal({
       <RadarCalibrationModal
         isOpen={calibrationOpen}
         onClose={() => setCalibrationOpen(false)}
+        initialCameraId={initialCameraId}
       />
     </div>
   );

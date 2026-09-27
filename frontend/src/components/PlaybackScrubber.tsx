@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PlaybackState } from "../lib/api";
 
 export interface PlaybackScrubberProps {
@@ -10,6 +10,9 @@ export interface PlaybackScrubberProps {
   onReconnect?: () => Promise<void>;
   onDisable?: () => Promise<void>;
 }
+
+// Trailing debounce for seek commits so rapid re-grabs collapse to one request.
+const SEEK_COMMIT_DEBOUNCE_MS = 250;
 
 export const PlaybackScrubber = memo(function PlaybackScrubber({
   isFootage,
@@ -24,21 +27,72 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
   const position = playback?.position_seconds ?? 0;
   const duration = playback?.duration_seconds ?? 0;
 
+  // Local drag draft: slider moves update the draft only; the seek request
+  // fires once on release (debounced), never per-input-event (seek flood fix).
+  const [draft, setDraft] = useState<number | null>(null);
+  const draftRef = useRef<number | null>(null);
+  const commitTimer = useRef<number | null>(null);
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+
+  const shown = draft ?? position;
+
+  const commitSeek = useCallback((value: number) => {
+    if (commitTimer.current !== null) {
+      window.clearTimeout(commitTimer.current);
+    }
+    commitTimer.current = window.setTimeout(() => {
+      commitTimer.current = null;
+      void onSeekRef.current?.(value);
+    }, SEEK_COMMIT_DEBOUNCE_MS);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (commitTimer.current !== null) {
+        window.clearTimeout(commitTimer.current);
+      }
+    };
+  }, []);
+
+  const handleSliderChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = parseFloat(e.target.value);
+      if (isNaN(val)) return;
+      draftRef.current = val;
+      setDraft(val);
+    },
+    [],
+  );
+
+  const handleRelease = useCallback(() => {
+    if (draftRef.current !== null) {
+      const val = draftRef.current;
+      draftRef.current = null;
+      setDraft(null);
+      commitSeek(val);
+    }
+  }, [commitSeek]);
+
+  const handleKeyUp = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") handleRelease();
+    },
+    [handleRelease],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") handleRelease();
+    },
+    [handleRelease],
+  );
+
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
-
-  const handleSliderChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const val = parseFloat(e.target.value);
-      if (!isNaN(val) && onSeek) {
-        void onSeek(val);
-      }
-    },
-    [onSeek],
-  );
 
   return (
     <div
@@ -53,8 +107,13 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
             min={0}
             max={duration}
             step={0.1}
-            value={position}
+            value={shown}
             onChange={handleSliderChange}
+            onMouseUp={handleRelease}
+            onTouchEnd={handleRelease}
+            onBlur={handleRelease}
+            onKeyUp={handleKeyUp}
+            onKeyDown={handleKeyDown}
             className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-emerald-500 hover:accent-emerald-400"
             aria-label="Seek footage"
           />

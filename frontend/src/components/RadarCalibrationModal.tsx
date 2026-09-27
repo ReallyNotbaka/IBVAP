@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useRef } from "react";
+import { memo, useState, useCallback, useEffect, useRef } from "react";
 import {
   useCameras,
   calibrateRadar,
@@ -31,6 +31,23 @@ export const RadarCalibrationModal = memo(function RadarCalibrationModal({
   const [selectedCameraId, setSelectedCameraId] = useState<string>(
     initialCameraId || (cameras[0]?.id ?? "")
   );
+
+  // Sync selection when cameras load async or the parent picks another camera.
+  // Manual user selection is preserved across refetches while the id is valid.
+  const prevInitialRef = useRef<string | undefined>(initialCameraId);
+  useEffect(() => {
+    if (initialCameraId && initialCameraId !== prevInitialRef.current) {
+      prevInitialRef.current = initialCameraId;
+      setSelectedCameraId(initialCameraId);
+      return;
+    }
+    if (cameras.length > 0) {
+      setSelectedCameraId((prev) => {
+        if (prev && cameras.some((c) => c.id === prev)) return prev;
+        return initialCameraId || cameras[0].id;
+      });
+    }
+  }, [cameras, initialCameraId]);
 
   // 4 image points [u, v] normalized between 0 and 1
   // Sequence: [Near Left, Near Right, Far Right, Far Left]
