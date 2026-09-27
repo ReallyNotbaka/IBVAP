@@ -80,6 +80,10 @@ pyrightconfig.json
 # Frontend typecheck
 frontend/tsbuildinfo
 
+# Worktrees (isolated implementation workspaces)
+.worktrees
+.worktrees/
+
 # Compose overrides
 compose.override.yaml
 
