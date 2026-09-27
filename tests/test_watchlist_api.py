@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
@@ -21,6 +22,8 @@ def test_client(tmp_path: Path):
 
     app = create_app()
     with TestClient(app) as client:
+        # Task 1 P0 fix-round 1: mutating routes are fail-closed; send the test token.
+        client.headers["X-API-Token"] = os.environ["IBVAP_API_TOKEN"]
         yield client
 
 

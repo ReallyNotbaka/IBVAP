@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -106,6 +107,8 @@ def test_plate_sightings_store_and_deduplication():
 def test_anpr_and_watchlist_endpoints():
     app = create_app()
     client = TestClient(app)
+    # Task 1 P0 fix-round 1: mutating routes are fail-closed; send the test token.
+    client.headers["X-API-Token"] = os.environ["IBVAP_API_TOKEN"]
 
     # Enroll a plate target
     resp = client.post(

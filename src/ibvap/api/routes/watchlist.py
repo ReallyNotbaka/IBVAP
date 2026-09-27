@@ -11,9 +11,10 @@ from typing import Any
 import cv2
 import numpy as np
 import structlog
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from ibvap.api.auth import require_api_token
 from ibvap.core.face import FaceDetector, FaceRecognizer
 from ibvap.core.watchlist import (
     TargetType,
@@ -97,7 +98,7 @@ def list_watchlist() -> WatchlistResponse:
 
 
 @router.post("/enroll-plate")
-def enroll_plate(req: PlateEnrollRequest) -> dict[str, Any]:
+def enroll_plate(req: PlateEnrollRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Target name cannot be empty")
@@ -145,6 +146,7 @@ async def enroll_suspect(
     threat_level: str = Form("HIGH"),
     notes: str = Form(""),
     photos: list[UploadFile] = File(...),  # noqa: B008 - FastAPI idiomatic dependency
+    _auth: bool = Depends(require_api_token),
 ) -> dict[str, Any]:
     if not photos:
         raise HTTPException(status_code=400, detail="At least one photo is required for biometric enrollment")
@@ -267,9 +269,8 @@ async def enroll_suspect(
 
 
 @router.delete("/{entry_id}")
-def delete_suspect(entry_id: str) -> dict[str, Any]:
-    # TODO: require authentication/authorization for mutating routes (would break tests today).
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/watchlist/{entry_id}")
+def delete_suspect(entry_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+    # Task 1 P0: mutating route now behind API-token guard.
     store = get_watchlist_store()
     removed = store.remove_entry(entry_id)
     if not removed:

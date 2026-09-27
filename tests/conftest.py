@@ -13,6 +13,7 @@ Goals:
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator, Callable, Iterator
 
 import pytest
@@ -23,6 +24,24 @@ from ibvap.config import DBConfig, Settings
 from ibvap.db import dispose_engine, get_engine, get_sessionmaker
 from ibvap.models import Base
 
+# Task 1 P0 fix-round 1: mutating routes are fail-closed, so every test runs
+# with a configured token. api_client sends it by default (tests DO exercise
+# the authenticated path); headerless clients must get 401 (see
+# test_evidence_traversal_ssrf.py parametrized 401 test).
+TEST_API_TOKEN = "ibvap-test-token-task1-p0"
+
+
+@pytest.fixture(autouse=True)
+def _test_api_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure the API token for every test (auth reads env per request)."""
+    monkeypatch.setenv("IBVAP_API_TOKEN", TEST_API_TOKEN)
+
+
+@pytest.fixture()
+def auth_headers() -> dict[str, str]:
+    """Explicit auth header for tests that build their own TestClient."""
+    return {"X-API-Token": os.environ.get("IBVAP_API_TOKEN", TEST_API_TOKEN)}
+
 
 @pytest.fixture(scope="session")
 def shared_app():
@@ -31,9 +50,11 @@ def shared_app():
 
 
 @pytest.fixture()
-def api_client(shared_app) -> Iterator[TestClient]:
-    """Fresh TestClient per test bound to the session-shared app."""
-    yield TestClient(shared_app)
+def api_client(shared_app, auth_headers: dict[str, str]) -> Iterator[TestClient]:
+    """Fresh TestClient per test bound to the session-shared app (authenticated)."""
+    client = TestClient(shared_app)
+    client.headers.update(auth_headers)
+    yield client
 
 
 @pytest.fixture(scope="module")

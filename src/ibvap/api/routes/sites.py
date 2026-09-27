@@ -5,8 +5,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+
+from ibvap.api.auth import require_api_token
 
 router = APIRouter(prefix="/api/v1/sites", tags=["sites"])
 
@@ -20,7 +22,7 @@ class SiteCreate(BaseModel):
 
 
 @router.post("", response_model=dict[str, Any])
-async def create_site(req: SiteCreate) -> dict[str, Any]:
+async def create_site(req: SiteCreate, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     sid = str(uuid.uuid4())
     data = {"id": sid, "name": req.name, "organization_id": req.organization_id, "timezone": req.timezone}
     _SITES[sid] = data

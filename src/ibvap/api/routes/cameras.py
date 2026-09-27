@@ -16,10 +16,11 @@ from typing import Any, Literal
 
 import av
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ibvap.api.auth import require_api_token
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.core.credentials import encrypt_secret, redact_url
 from ibvap.core.geometry import validate_fence
@@ -333,13 +334,13 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
 
 
 @router.post("/test", response_model=CameraTestResponse)
-async def test_unsaved(req: CameraTestRequest) -> CameraTestResponse:
+async def test_unsaved(req: CameraTestRequest, _auth: bool = Depends(require_api_token)) -> CameraTestResponse:
     """Test connection without saving - spec 8 Step 3."""
     return await asyncio.to_thread(_run_test_stages, req)
 
 
 @router.post("", response_model=dict[str, Any])
-async def create_camera(req: CameraCreate) -> dict[str, Any]:
+async def create_camera(req: CameraCreate, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     req.endpoint = req.endpoint.strip().strip('"').strip("'")
     if _is_file_endpoint(req.endpoint, req.protocol):
         req.protocol = "file"
@@ -499,7 +500,7 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
             "Expires": "0",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
+            # Task 1 P0: no explicit wildcard — rely on CORSMiddleware allowlist.
         },
     )
 
@@ -523,7 +524,7 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
 
 
 @router.put("/{camera_id}/fence", response_model=dict[str, Any])
-async def set_camera_fence(camera_id: str, req: CameraFenceRequest) -> dict[str, Any]:
+async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
 
@@ -583,8 +584,7 @@ async def set_camera_fence(camera_id: str, req: CameraFenceRequest) -> dict[str,
 
 
 @router.delete("/{camera_id}/fence", response_model=dict[str, Any])
-async def delete_camera_fence(camera_id: str) -> dict[str, Any]:
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/cameras/{camera_id}/fence")
+async def delete_camera_fence(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
     _CAMERAS[camera_id]["fence"] = None
@@ -613,7 +613,7 @@ async def playback_state(camera_id: str) -> dict[str, Any]:
 
 
 @router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
-async def playback_seek(camera_id: str, req: PlaybackSeekRequest) -> dict[str, Any]:
+async def playback_seek(camera_id: str, req: PlaybackSeekRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
     if not _is_file_camera(camera_id):
@@ -628,7 +628,7 @@ async def playback_seek(camera_id: str, req: PlaybackSeekRequest) -> dict[str, A
 
 
 @router.post("/{camera_id}/playback/{action}", response_model=dict[str, Any])
-async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"]) -> dict[str, Any]:
+async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"], _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
     if not _is_file_camera(camera_id):
@@ -674,7 +674,7 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
 
 
 @router.post("/{camera_id}/test", response_model=CameraTestResponse)
-async def test_saved(camera_id: str) -> CameraTestResponse:
+async def test_saved(camera_id: str, _auth: bool = Depends(require_api_token)) -> CameraTestResponse:
     cam = _CAMERAS.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -687,7 +687,7 @@ async def test_saved(camera_id: str) -> CameraTestResponse:
 
 
 @router.post("/{camera_id}/enable", response_model=dict[str, Any])
-async def enable_camera(camera_id: str) -> dict[str, Any]:
+async def enable_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -713,7 +713,7 @@ async def enable_camera(camera_id: str) -> dict[str, Any]:
 
 
 @router.post("/{camera_id}/disable", response_model=dict[str, Any])
-async def disable_camera(camera_id: str) -> dict[str, Any]:
+async def disable_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -733,7 +733,7 @@ async def disable_camera(camera_id: str) -> dict[str, Any]:
 
 
 @router.post("/{camera_id}/reconnect", response_model=dict[str, Any])
-async def reconnect_camera(camera_id: str) -> dict[str, Any]:
+async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -755,8 +755,7 @@ async def reconnect_camera(camera_id: str) -> dict[str, Any]:
 
 
 @router.delete("/{camera_id}", response_model=dict[str, str])
-async def delete_camera(camera_id: str) -> dict[str, str]:
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/cameras/{camera_id}")
+async def delete_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, str]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
     del _CAMERAS[camera_id]

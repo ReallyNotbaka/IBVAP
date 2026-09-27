@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +21,10 @@ from ibvap.core.evidence import get_evidence_file, save_frame_evidence
 @pytest.fixture
 def client() -> TestClient:
     app = create_app()
-    return TestClient(app)
+    c = TestClient(app)
+    # Task 1 P0 fix-round 1: mutating routes are fail-closed; send the test token.
+    c.headers["X-API-Token"] = os.environ["IBVAP_API_TOKEN"]
+    return c
 
 
 def test_save_frame_evidence_and_crop(tmp_path: Path):
@@ -90,9 +94,9 @@ def test_system_settings_api(client: TestClient):
     assert "detection_confidence_threshold" in data
     assert "c2_webhook_enabled" in data
 
-    # Update settings
+    # Update settings (public IP literal: no DNS needed, hermetic under strict save-time SSRF)
     update_payload = {
-        "c2_webhook_url": "https://example.com/webhook",
+        "c2_webhook_url": "https://8.8.8.8/webhook",
         "c2_webhook_enabled": True,
         "c2_min_severity": "CRITICAL",
         "detection_confidence_threshold": 0.55,
@@ -105,7 +109,7 @@ def test_system_settings_api(client: TestClient):
 
     # Verify update in memory
     current = get_settings()
-    assert current.c2_webhook_url == "https://example.com/webhook"
+    assert current.c2_webhook_url == "https://8.8.8.8/webhook"
     assert current.c2_webhook_enabled is True
     assert current.c2_min_severity == "CRITICAL"
     assert current.detection_confidence_threshold == 0.55

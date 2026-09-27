@@ -6,9 +6,10 @@ import asyncio
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from ibvap.api.auth import require_api_token
 from ibvap.core.detector import MockPersonDetector, ONNXDetectorProvider
 from ibvap.core.model_manager import (
     YOLO_MODELS_MANIFEST,
@@ -85,7 +86,7 @@ def list_models() -> ModelListResponse:
 
 
 @router.post("/activate")
-def activate_model(payload: ActivateModelRequest) -> dict[str, Any]:
+def activate_model(payload: ActivateModelRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     model_name = payload.model_name
     meta = YOLO_MODELS_MANIFEST.get(model_name)
     if not meta:
@@ -116,7 +117,7 @@ def activate_model(payload: ActivateModelRequest) -> dict[str, Any]:
 
 
 @router.post("/download")
-async def start_model_download(payload: DownloadModelRequest) -> dict[str, Any]:
+async def start_model_download(payload: DownloadModelRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     model_name = payload.model_name
     meta = YOLO_MODELS_MANIFEST.get(model_name)
     if not meta:
@@ -152,6 +153,7 @@ def get_download_progress(model_name: str) -> DownloadProgressResponse:
 async def upload_model_file(
     model_name: str = Form(...),
     file: UploadFile = File(...),  # noqa: B008 - FastAPI idiomatic dependency
+    _auth: bool = Depends(require_api_token),
 ) -> dict[str, Any]:
     meta = YOLO_MODELS_MANIFEST.get(model_name)
     if not meta:
@@ -188,9 +190,8 @@ async def upload_model_file(
 
 
 @router.delete("/{model_name}/weights")
-def delete_model_weights(model_name: str) -> dict[str, Any]:
-    # TODO: require authentication/authorization for mutating routes (would break tests today).
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/models/{model_name}/weights")
+def delete_model_weights(model_name: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+    # Task 1 P0: mutating route now behind API-token guard.
     if model_name == "yolo26n":
         raise HTTPException(
             status_code=400,

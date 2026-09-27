@@ -11,9 +11,10 @@ from pathlib import Path
 
 import av
 import structlog
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from ibvap.api.auth import require_api_token
 from ibvap.core.upload import (
     ALLOWED_EXTS,
     MAX_DURATION_SECS,
@@ -72,7 +73,7 @@ class UploadCreateResponse(BaseModel):
 
 
 @router.post("", response_model=UploadCreateResponse)
-async def create_upload(file: UploadFile = File(...)) -> UploadCreateResponse:  # noqa: B008
+async def create_upload(file: UploadFile = File(...), _auth: bool = Depends(require_api_token)) -> UploadCreateResponse:  # noqa: B008
     global _LAST_CLEANUP
     now = time.time()
     # Throttle expiry scans: full dir stat sweep at most once per minute.
@@ -155,9 +156,8 @@ def _public_upload_payload(data: dict[str, object]) -> dict[str, object]:
 
 
 @router.delete("/{upload_id}", response_model=dict[str, str])
-async def delete_upload(upload_id: str) -> dict[str, str]:
-    # TODO: require authentication/authorization for mutating routes (would break tests today).
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/uploads/{upload_id}")
+async def delete_upload(upload_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, str]:
+    # Task 1 P0: mutating route now behind API-token guard.
     data = _UPLOADS.pop(upload_id, None)
     if not data:
         raise HTTPException(status_code=404, detail="Upload not found")
@@ -213,7 +213,7 @@ def probe_quarantined_video(path: Path) -> None:
 
 
 @router.post("/{upload_id}/finalize", response_model=dict[str, object])
-async def finalize_upload(upload_id: str) -> dict[str, object]:
+async def finalize_upload(upload_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, object]:
     data = _UPLOADS.get(upload_id)
     if not data:
         raise HTTPException(status_code=404, detail="Upload not found")
@@ -240,6 +240,7 @@ async def finalize_upload(upload_id: str) -> dict[str, object]:
 @router.post("/{upload_id}/analyze", response_model=dict[str, object])
 async def analyze_upload(
     upload_id: str,
+    _auth: bool = Depends(require_api_token),
     max_frames: int = 30,
     sample_stride: int = 3,
     face_stride: int = 2,

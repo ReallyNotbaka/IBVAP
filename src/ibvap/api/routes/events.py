@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from ibvap.api.auth import require_api_token
 from ibvap.events.outbox import clear_events, list_events, list_outbox
 
 logger = structlog.get_logger(__name__)
@@ -82,9 +83,8 @@ async def get_events(
 
 
 @router.delete("", response_model=dict[str, Any])
-async def delete_events() -> dict[str, Any]:
-    # TODO: require authentication/authorization for mutating routes (would break tests today).
-    logger.warning("unauthenticated_delete", route="DELETE /api/v1/events")
+async def delete_events(_auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+    # Task 1 P0: mutating route now behind API-token guard.
     count = clear_events()
     return {"status": "cleared", "deleted_count": count}
 

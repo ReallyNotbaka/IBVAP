@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import re
 import threading
 import time
 from collections import deque
@@ -103,6 +104,9 @@ class PacketRingBuffer:
 MAX_EVIDENCE_FILES = 1000
 _EVIDENCE_LOCK = threading.Lock()
 
+# Task 1 P0: allowlist for event ids (used by evidence routes; Task 5 reuses).
+_EVID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 
 def save_frame_evidence(
     event_id: str,
@@ -171,9 +175,28 @@ def save_frame_evidence(
     return str(snap_path), (str(crop_path) if has_crop else None)
 
 
+def validate_event_id(event_id: str) -> str:
+    """Return event_id if safe, else raise ValueError (route maps to 422)."""
+    if not event_id or not _EVID_RE.match(event_id):
+        raise ValueError(f"Invalid event_id: {event_id!r}")
+    return event_id
+
+
 def get_evidence_file(event_id: str, kind: str = "snapshot", base_dir: str | Path = "data/evidence") -> Path | None:
     """Retrieve Path to evidence JPEG (snapshot or crop) if it exists on disk."""
+    # Task 1 P0: reject traversal ids before touching the filesystem.
+    try:
+        validate_event_id(event_id)
+    except ValueError:
+        return None
     out_dir = Path(base_dir)
     filename = f"{event_id}_crop.jpg" if kind == "crop" else f"{event_id}_snap.jpg"
-    target = out_dir / filename
+    try:
+        resolved_base = out_dir.resolve()
+        target = (resolved_base / filename).resolve()
+    except Exception:
+        return None
+    # Task 1 P0: resolved path must stay inside the evidence dir.
+    if not target.is_relative_to(resolved_base):
+        return None
     return target if target.is_file() else None

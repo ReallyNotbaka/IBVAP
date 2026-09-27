@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ibvap.api.auth import require_api_token
 from ibvap.core.handover import SubjectDossier, get_handover_engine
 from ibvap.core.homography import (
     HomographyProjector,
@@ -65,7 +66,7 @@ async def get_tactical_radar() -> RadarResponse:
 
 
 @router.post("/radar/calibrate", response_model=dict[str, Any])
-async def calibrate_radar(req: RadarCalibrationRequest) -> dict[str, Any]:
+async def calibrate_radar(req: RadarCalibrationRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     """Calibrate planar homography projection for a camera using 4 ground correspondences."""
     if req.camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")

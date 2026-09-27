@@ -80,12 +80,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = cfg
 
     # CORS - strict allowlist, not "*" (threat-model T-01 fix)
+    # Task 1 P0: X-API-Token allowed so browser clients can send the mutating-route guard.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.app.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Correlation-ID"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "X-Correlation-ID", "X-API-Token"],
     )
     # Compress JSON/MJPEG-manifest payloads >=1KB (no new deps; starlette built-in).
     # Exclude multipart streams from GZip compression to avoid buffering/latency overhead.
