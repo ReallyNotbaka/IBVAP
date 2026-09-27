@@ -346,17 +346,26 @@ def test_outbox_model_composite_indexes():
 
 
 def test_migration_0003_includes_all_three_composite_indexes():
-    """Verify migration 0003 contains create_index and drop_index for all 3 composite indexes."""
+    """Verify the three composite indexes exist exactly once across migrations.
+
+    P0 durability: 0001 owns ix_outbox_status_next_attempt (created with the
+    outbox table); 0003 must NOT duplicate it (fresh upgrades failed with
+    "index already exists"). 0003 owns only the two remaining indexes.
+    """
     mig_path = "migrations/versions/a3c1e2f4b5d6_0003_outbox_composite_indexes.py"
     with open(mig_path, encoding="utf-8") as f:
         content = f.read()
 
     assert 'op.create_index("ix_outbox_status_created_at"' in content
-    assert 'op.create_index("ix_outbox_status_next_attempt"' in content
+    assert 'op.create_index("ix_outbox_status_next_attempt"' not in content
     assert 'op.create_index("ix_outbox_status_topic"' in content
     assert 'op.drop_index("ix_outbox_status_created_at"' in content
-    assert 'op.drop_index("ix_outbox_status_next_attempt"' in content
+    assert 'op.drop_index("ix_outbox_status_next_attempt"' not in content
     assert 'op.drop_index("ix_outbox_status_topic"' in content
+
+    with open("migrations/versions/529855f7c518_0001_init.py", encoding="utf-8") as f:
+        init_content = f.read()
+    assert 'op.create_index("ix_outbox_status_next_attempt"' in init_content
 
 
 def test_stream_subscriber_closed_loop_resilience():

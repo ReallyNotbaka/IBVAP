@@ -13,34 +13,40 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # SQLite is the durable fallback store (P0 durability): keep PG DDL
+    # byte-identical while rendering portable types there.
+    is_pg = op.get_bind().dialect.name == "postgresql"
+    UUID = postgresql.UUID(as_uuid=True) if is_pg else sa.Uuid()
+    JSON = postgresql.JSONB(astext_type=sa.Text()) if is_pg else sa.JSON()
+    NOW = sa.text("now()") if is_pg else sa.text("CURRENT_TIMESTAMP")
     op.create_table(
         "credential_references",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("camera_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
+        sa.Column("camera_id", UUID, nullable=False),
         sa.Column("username_enc", sa.Text(), nullable=True),
         sa.Column("password_enc", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=NOW, nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=NOW, nullable=False),
         sa.ForeignKeyConstraint(["camera_id"], ["cameras.id"], ondelete="CASCADE"),
         sa.UniqueConstraint("camera_id", name="uq_cred_camera"),
     )
     op.create_table(
         "connection_tests",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("camera_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
+        sa.Column("camera_id", UUID, nullable=True),
         sa.Column("endpoint", sa.Text(), nullable=False),
         sa.Column("protocol", sa.String(length=32), nullable=True),
         sa.Column("result", sa.String(length=32), nullable=False),
         sa.Column("reason_code", sa.String(length=64), nullable=True),
         sa.Column("safe_message", sa.Text(), nullable=True),
-        sa.Column("probe", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("probe", JSON, nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=NOW, nullable=False),
         sa.ForeignKeyConstraint(["camera_id"], ["cameras.id"], ondelete="SET NULL"),
     )
     op.create_table(
         "camera_health_samples",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("camera_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
+        sa.Column("camera_id", UUID, nullable=False),
         sa.Column("stream_epoch", sa.Integer(), nullable=False),
         sa.Column("observed_state", sa.String(length=32), nullable=False),
         sa.Column("last_frame_age_ms", sa.Integer(), nullable=True),
@@ -49,7 +55,7 @@ def upgrade() -> None:
         sa.Column("decode_errors", sa.Integer(), server_default="0", nullable=False),
         sa.Column("reconnect_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("queue_drops", sa.Integer(), server_default="0", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=NOW, nullable=False),
         sa.ForeignKeyConstraint(["camera_id"], ["cameras.id"], ondelete="CASCADE"),
     )
     op.create_index("ix_health_camera_time", "camera_health_samples", ["camera_id", "created_at"])

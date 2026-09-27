@@ -41,8 +41,14 @@ def transactional_write(
     event: dict[str, Any],
     dedup_key: str | None = None,
     topics: tuple[str, ...] = ("event.created",),
+    entry_id: str | None = None,
 ) -> OutboxEntry:
-    """Simulate single PG transaction writing event + outbox. Idempotent via dedup_key."""
+    """Simulate single PG transaction writing event + outbox. Idempotent via dedup_key.
+
+    ``entry_id`` pins the outbox entry id (DB-backed callers pass the row id so
+    in-mem and durable ids match, e.g. for ``mark_delivered``); ``None``
+    preserves the legacy random-uuid behavior.
+    """
     with _LOCK:
         if dedup_key:
             existing = _DEDUP_OUTBOX_INDEX.get(dedup_key)
@@ -54,7 +60,12 @@ def transactional_write(
         if event.get("created_at") is None:
             event["created_at"] = time.time()
         _EVENTS.append(event)
-        entry = OutboxEntry(id=str(uuid.uuid4()), topic=topics[0], payload=event, dedup_key=dedup_key)
+        entry = OutboxEntry(
+            id=str(entry_id) if entry_id is not None else str(uuid.uuid4()),
+            topic=topics[0],
+            payload=event,
+            dedup_key=dedup_key,
+        )
         _OUTBOX.append(entry)
         _OUTBOX_ID_INDEX[entry.id] = entry
         if dedup_key:

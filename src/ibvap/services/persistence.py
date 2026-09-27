@@ -13,11 +13,20 @@ from typing import Any
 
 import structlog
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ibvap.config import Settings
 from ibvap.core.camera_state import CameraState, CameraStateMachine
 from ibvap.db import get_sessionmaker, init_db
-from ibvap.events.outbox import _EVENTS, _OUTBOX, OutboxEntry
+from ibvap.events.outbox import (
+    _DEDUP_EVENT_INDEX,
+    _DEDUP_OUTBOX_INDEX,
+    _EVENTS,
+    _OUTBOX,
+    _OUTBOX_ID_INDEX,
+    OutboxEntry,
+)
 from ibvap.events.outbox import _LOCK as OUTBOX_LOCK
 from ibvap.models import Camera as DBCamera
 from ibvap.models import Organization, Site
@@ -34,9 +43,9 @@ logger = structlog.get_logger(__name__)
 DEFAULT_SITE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
-async def ensure_default_hierarchy() -> uuid.UUID:
+async def ensure_default_hierarchy(settings: Settings | None = None) -> uuid.UUID:
     """Ensure at least one Organization and Site exists for foreign keys."""
-    sm = get_sessionmaker()
+    sm = get_sessionmaker(settings)
     async with sm() as session:
         # Check if default site exists
         res = await session.execute(select(Site).where(Site.id == DEFAULT_SITE_ID))
@@ -167,6 +176,118 @@ async def save_outbox_event_to_db(entry: OutboxEntry) -> None:
         logger.warning("save_outbox_event_error", error=str(e), event_id=entry.id)
 
 
+_PENDING_MIRRORS_KEY = "ibvap_outbox_pending_mirrors"
+_MIRROR_LISTENERS_ARMED_KEY = "ibvap_outbox_listeners_armed"
+
+
+def _drain_pending_mirrors(sync_session) -> None:
+    """after_commit hook: mirror committed DB rows into the in-mem timeline."""
+    from ibvap.events.outbox import transactional_write
+
+    pending = sync_session.info.pop(_PENDING_MIRRORS_KEY, [])
+    sync_session.info.pop(_MIRROR_LISTENERS_ARMED_KEY, None)
+    for item in pending:
+        transactional_write(item["event"], dedup_key=item["key"], topics=item["topics"], entry_id=item["entry_id"])
+
+
+def _discard_pending_mirrors(sync_session, previous_transaction) -> None:
+    """after_soft_rollback hook: drop mirrors whose transaction did not commit.
+
+    Fires for SAVEPOINT rollbacks too (e.g. our own dedup SAVEPOINT below) —
+    those must NOT discard pendings, since the outer transaction survives
+    (outermost transactions have ``parent is None``); the once-listener is
+    consumed either way, so re-arm after ignoring a savepoint rollback.
+    """
+    from sqlalchemy import event as sa_event
+
+    if getattr(previous_transaction, "parent", None) is not None:
+        sa_event.listen(sync_session, "after_soft_rollback", _discard_pending_mirrors, once=True)
+        return
+    sync_session.info.pop(_PENDING_MIRRORS_KEY, None)
+    sync_session.info.pop(_MIRROR_LISTENERS_ARMED_KEY, None)
+
+
+def _defer_mirror(session: AsyncSession, event: dict[str, Any], key: str | None, topic: str, entry_id: str) -> None:
+    """Queue the in-mem mirror until the caller's transaction commits.
+
+    A caller rollback discards the queue (no in-mem phantoms, no polluted
+    ``_DEDUP_*``). Handlers are idempotent pop-based drains, so a transient
+    duplicate once-listener (left over when the sibling event fired first) is
+    a harmless no-op.
+    """
+    from sqlalchemy import event as sa_event
+
+    sync_session = session.sync_session
+    sync_session.info.setdefault(_PENDING_MIRRORS_KEY, []).append({"event": event, "key": key, "topics": (topic,), "entry_id": entry_id})
+    if not sync_session.info.get(_MIRROR_LISTENERS_ARMED_KEY):
+        sa_event.listen(sync_session, "after_commit", _drain_pending_mirrors, once=True)
+        sa_event.listen(sync_session, "after_soft_rollback", _discard_pending_mirrors, once=True)
+        sync_session.info[_MIRROR_LISTENERS_ARMED_KEY] = True
+
+
+async def save_event_with_outbox(
+    session: AsyncSession,
+    event: dict[str, Any],
+    dedup_key: str | None = None,
+    topics: tuple[str, ...] = ("event.created",),
+) -> str:
+    """Write an event + outbox row in the caller's session/transaction.
+
+    Same-transaction guarantee: the ``DBOutbox`` row is added and flushed in
+    the PASSED-IN session with NO commit inside — the caller commits, so the
+    event write and any surrounding writes commit atomically. Returns the
+    event id (``event["id"]`` is normalized to the row UUID string), which is
+    also the in-mem outbox entry id, so ``mark_delivered(returned_id)`` works
+    and ids are stable across restores.
+
+    Ordering choice: DB-add first; the in-mem ``transactional_write`` mirror
+    is deferred to ``after_commit`` so a caller rollback leaves no in-mem
+    phantom and no polluted ``_DEDUP_*``. The flush runs in a SAVEPOINT so an
+    ``IntegrityError`` on ``dedup_key`` rolls back only this write, in which
+    case the pre-existing row's id is returned (idempotent).
+    """
+    key = dedup_key or event.get("dedup_key")
+    raw_id = event.get("id")
+    try:
+        row_uuid = uuid.UUID(str(raw_id)) if raw_id is not None else uuid.uuid4()
+    except (ValueError, TypeError, AttributeError):
+        row_uuid = uuid.uuid4()
+    event["id"] = str(row_uuid)
+    if key is not None:
+        event["dedup_key"] = key
+    event.setdefault("created_at", time.time())
+    topic = topics[0] if topics else "event.created"
+
+    if key is not None:
+        res = await session.execute(select(DBOutbox).where(DBOutbox.dedup_key == key))
+        existing = res.scalar_one_or_none()
+        if existing is not None:
+            existing_id = str(existing.id)
+            event["id"] = existing_id
+            _defer_mirror(session, event, key, topic, existing_id)
+            return existing_id
+
+    row = DBOutbox(id=row_uuid, topic=topic, payload=dict(event), status="pending", dedup_key=key)
+    session.add(row)
+    try:
+        async with session.begin_nested():
+            await session.flush()
+    except IntegrityError:
+        if key is None:
+            raise
+        # Lost a dedup race: another writer committed the same dedup_key.
+        res = await session.execute(select(DBOutbox).where(DBOutbox.dedup_key == key))
+        existing = res.scalar_one_or_none()
+        if existing is not None:
+            existing_id = str(existing.id)
+            event["id"] = existing_id
+            _defer_mirror(session, event, key, topic, existing_id)
+            return existing_id
+        raise
+    _defer_mirror(session, event, key, topic, str(row_uuid))
+    return str(row_uuid)
+
+
 async def init_persistence(settings: Settings | None = None) -> None:
     """Boot up database persistence, verify schema, and restore active entities."""
     try:
@@ -175,10 +296,10 @@ async def init_persistence(settings: Settings | None = None) -> None:
             logger.warning("persistence_init_skipped", reason="db_init_failed")
             return
 
-        await ensure_default_hierarchy()
+        await ensure_default_hierarchy(settings)
 
         # 1. Restore Cameras
-        sm = get_sessionmaker()
+        sm = get_sessionmaker(settings)
         async with sm() as session:
             res = await session.execute(select(DBCamera))
             saved_cameras = res.scalars().all()
@@ -259,7 +380,14 @@ async def init_persistence(settings: Settings | None = None) -> None:
                             created_at=se.created_at.timestamp() if se.created_at else time.time(),
                         )
                         _OUTBOX.append(outbox_ent)
+                        _OUTBOX_ID_INDEX[outbox_ent.id] = outbox_ent
+                        if se.dedup_key:
+                            _DEDUP_OUTBOX_INDEX[se.dedup_key] = outbox_ent
+                            if isinstance(se.payload, dict):
+                                _DEDUP_EVENT_INDEX[se.dedup_key] = se.payload
                         existing_ids.add(str(se.id))
+                    elif not isinstance(se.payload, dict):
+                        logger.debug("restore_skipped_non_dict_payload", outbox_id=str(se.id))
 
             logger.info("events_restored_from_db", count=len(saved_events))
 

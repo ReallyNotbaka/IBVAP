@@ -13,28 +13,35 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')
+    # SQLite is the durable fallback store (P0 durability): keep PG DDL
+    # byte-identical while rendering portable types there.
+    is_pg = op.get_bind().dialect.name == "postgresql"
+    if is_pg:
+        op.execute('CREATE EXTENSION IF NOT EXISTS "pgcrypto"')
+    UUID = postgresql.UUID(as_uuid=True) if is_pg else sa.Uuid()
+    JSON = postgresql.JSONB(astext_type=sa.Text()) if is_pg else sa.JSON()
+    NOW = sa.text("now()") if is_pg else sa.text("CURRENT_TIMESTAMP")
     op.create_table(
         "organizations",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False, unique=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=NOW,
             nullable=False,
         ),
     )
     op.create_table(
         "sites",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("organization_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
+        sa.Column("organization_id", UUID, nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("timezone", sa.String(length=64), server_default="UTC", nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=NOW,
             nullable=False,
         ),
         sa.ForeignKeyConstraint(["organization_id"], ["organizations.id"], ondelete="CASCADE"),
@@ -42,8 +49,8 @@ def upgrade() -> None:
     )
     op.create_table(
         "cameras",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("site_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
+        sa.Column("site_id", UUID, nullable=False),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column(
             "source_type",
@@ -56,17 +63,17 @@ def upgrade() -> None:
         sa.Column("stream_epoch", sa.Integer(), server_default="0", nullable=False),
         sa.Column("desired_state", sa.String(length=32), server_default="DRAFT", nullable=False),
         sa.Column("observed_state", sa.String(length=32), server_default="DRAFT", nullable=False),
-        sa.Column("meta", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column("meta", JSON, nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=NOW,
             nullable=False,
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=NOW,
             nullable=False,
         ),
         sa.ForeignKeyConstraint(["site_id"], ["sites.id"], ondelete="CASCADE"),
@@ -75,15 +82,15 @@ def upgrade() -> None:
     op.create_index("ix_cameras_site_id", "cameras", ["site_id"])
     op.create_table(
         "outbox",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column("id", UUID, primary_key=True, nullable=False),
         sa.Column("topic", sa.String(length=64), nullable=False),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("payload", JSON, nullable=False),
         sa.Column("status", sa.String(length=16), server_default="pending", nullable=False),
         sa.Column("dedup_key", sa.String(length=255), nullable=True, unique=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=NOW,
             nullable=False,
         ),
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),

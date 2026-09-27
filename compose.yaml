@@ -30,5 +30,23 @@ services:
 
   # - observability stack (Prometheus + Grafana) omitted in dev for brevity; see docs/
 
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # DATABASE_URL is read by alembic env.py; the app itself only reads
+      # IBVAP_* env (Settings env_prefix IBVAP_, nested __), so the app URL
+      # must be set explicitly or the container fail-closes to localhost.
+      DATABASE_URL: postgresql+asyncpg://ibvap:ibvap@postgres:5432/ibvap
+      IBVAP_DB__URL: postgresql+asyncpg://ibvap:ibvap@postgres:5432/ibvap
+      IBVAP_API_TOKEN: ${IBVAP_API_TOKEN:-}
+      IBVAP_DB__ALLOW_SQLITE_FALLBACK: ${IBVAP_DB__ALLOW_SQLITE_FALLBACK:-0}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
