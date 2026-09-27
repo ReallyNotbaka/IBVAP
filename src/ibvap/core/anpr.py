@@ -149,6 +149,12 @@ class OCRReader:
         self.ocr_engine = ocr_engine
         self.device = device or os.getenv("IBVAP_ANPR_DEVICE", "cpu")
         self._paddle_ocr: Any = None
+        # Task 3: instance-level lock serializing native Paddle predict calls.
+        # Deliberately NOT a global singleton: ANPRPipeline instances are
+        # per-camera workers and tests inject per-instance ``ocr_engine``
+        # fakes — a shared singleton would couple device config and break
+        # injection. Lazy construction stays under _PADDLE_INIT_LOCK.
+        self._predict_lock = threading.Lock()
         # Transient Paddle failures gate re-init for 30s, then retry. A
         # permanent latch would silently kill ANPR after one bad frame.
         self._paddle_last_error_at: float | None = None
@@ -195,7 +201,8 @@ class OCRReader:
                         use_textline_orientation=False,
                     )
 
-            results = self._paddle_ocr.predict(input=plate_crop)
+            with self._predict_lock:
+                results = self._paddle_ocr.predict(input=plate_crop)
         except Exception as e:
             logger.warning("paddle_ocr_failed", extra={"error": str(e)[:200]})
             self._paddle_ocr = None

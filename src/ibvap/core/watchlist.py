@@ -10,8 +10,10 @@ Implements multi-vector gallery matching on the SFace embedding manifold S^127:
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -106,12 +108,59 @@ class WatchlistStore:
 
     def __init__(self, storage_path: Path | str = Path("data/watchlist.json")) -> None:
         self.storage_path = Path(storage_path).resolve()
+        # Task 3: single RLock guards writers AND readers (identify/match_plate
+        # iterate _entries — torn-read risk). RLock: _save() takes the lock and
+        # is also called with the lock held. Sightings defer to a coalesced
+        # 0.5s background save; add/remove save synchronously.
+        self._lock = threading.RLock()
+        self._dirty = False
+        self._save_timer: threading.Timer | None = None
+        self._save_debounce_s = 0.5
         self._entries: dict[str, WatchlistEntry] = {}
         self._load()
 
     def flush(self, timeout: float = 2.0) -> None:
-        """Wait for any background save for this store to finish (no-op: saves are atomic)."""
-        pass
+        """Block until any pending debounced save drains, then persist if dirty.
+
+        Cancels the pending debounce timer and saves synchronously under the
+        lock (which also waits out an in-flight background save). ``timeout``
+        is kept for API compatibility.
+        """
+        del timeout
+        with self._lock:
+            self._cancel_debounce_locked()
+            if self._dirty:
+                self._save()
+                self._dirty = False
+
+    def _schedule_debounce_locked(self) -> None:
+        """(Re)arm the single coalescing save timer. Caller must hold _lock."""
+        if self._save_timer is not None and self._save_timer.is_alive():
+            return
+        timer = threading.Timer(self._save_debounce_s, self._debounced_save)
+        timer.daemon = True
+        timer.name = f"watchlist-save-{id(self):x}"
+        self._save_timer = timer
+        timer.start()
+
+    def _cancel_debounce_locked(self) -> None:
+        """Drop a not-yet-fired debounce timer. Caller must hold _lock."""
+        timer, self._save_timer = self._save_timer, None
+        if timer is not None:
+            with contextlib.suppress(Exception):
+                timer.cancel()
+
+    def _debounced_save(self) -> None:
+        """Background coalesced persist (single pending timer at a time)."""
+        try:
+            with self._lock:
+                self._save_timer = None
+                if not self._dirty:
+                    return
+                self._save()
+                self._dirty = False
+        except Exception as ex:
+            logger.error("Debounced watchlist save failed: %s", ex)
 
     def _load(self) -> None:
         if not self.storage_path.exists():
@@ -167,62 +216,80 @@ class WatchlistStore:
             logger.warning("Failed to load watchlist from %s: %s", self.storage_path, ex)
 
     def _save(self, sync: bool = True) -> None:
-        serialized = []
-        for e in list(self._entries.values()):
-            b64_gallery = [base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii") for v in e.gallery]
-            serialized.append(
-                {
-                    "id": e.id,
-                    "name": e.name,
-                    "threat_level": e.threat_level.value,
-                    "notes": e.notes,
-                    "created_at": e.created_at,
-                    "gallery": b64_gallery,
-                    "thumbnail_b64": e.thumbnail_b64,
-                    "sight_count": e.sight_count,
-                    "last_sighted": e.last_sighted,
-                    "target_type": e.target_type.value,
-                    "plate_number": e.plate_number,
-                    "normalized_plate": e.normalized_plate,
-                    "vehicle_description": e.vehicle_description,
-                }
-            )
-        try:
-            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self.storage_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump({"entries": serialized}, f, indent=2)
-            tmp_path.replace(self.storage_path)
-        except Exception as ex:
-            logger.error("Failed to persist watchlist to %s: %s", self.storage_path, ex)
+        # Whole save under the lock (RLock: callers already hold it): snapshot,
+        # serialize, AND atomic replace are one critical section so two racing
+        # saves cannot interleave tmp-write/replace and resurrect stale counts.
+        with self._lock:
+            entries_snapshot = list(self._entries.values())
+            serialized = []
+            for e in entries_snapshot:
+                b64_gallery = [base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii") for v in e.gallery]
+                serialized.append(
+                    {
+                        "id": e.id,
+                        "name": e.name,
+                        "threat_level": e.threat_level.value,
+                        "notes": e.notes,
+                        "created_at": e.created_at,
+                        "gallery": b64_gallery,
+                        "thumbnail_b64": e.thumbnail_b64,
+                        "sight_count": e.sight_count,
+                        "last_sighted": e.last_sighted,
+                        "target_type": e.target_type.value,
+                        "plate_number": e.plate_number,
+                        "normalized_plate": e.normalized_plate,
+                        "vehicle_description": e.vehicle_description,
+                    }
+                )
+            try:
+                self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = self.storage_path.with_suffix(f".{uuid.uuid4().hex[:8]}.tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump({"entries": serialized}, f, indent=2)
+                tmp_path.replace(self.storage_path)
+            except Exception as ex:
+                logger.error("Failed to persist watchlist to %s: %s", self.storage_path, ex)
 
     def add_entry(self, entry: WatchlistEntry) -> None:
-        entry.gallery = [v for v in entry.gallery if is_valid_exemplar(v)]
-        if entry.target_type == TargetType.PLATE and entry.plate_number and not entry.normalized_plate:
-            entry.normalized_plate = normalize_plate_string(entry.plate_number)
-        entry.invalidate_cache()
-        self._entries[entry.id] = entry
-        self._save()
+        with self._lock:
+            entry.gallery = [v for v in entry.gallery if is_valid_exemplar(v)]
+            if entry.target_type == TargetType.PLATE and entry.plate_number and not entry.normalized_plate:
+                entry.normalized_plate = normalize_plate_string(entry.plate_number)
+            entry.invalidate_cache()
+            self._cancel_debounce_locked()
+            self._entries[entry.id] = entry
+            self._save()
+            self._dirty = False
 
     def remove_entry(self, entry_id: str) -> bool:
-        if entry_id in self._entries:
-            del self._entries[entry_id]
-            self._save()
-            return True
-        return False
+        with self._lock:
+            if entry_id in self._entries:
+                del self._entries[entry_id]
+                self._cancel_debounce_locked()
+                self._save()
+                self._dirty = False
+                return True
+            return False
 
     def get_entry(self, entry_id: str) -> WatchlistEntry | None:
-        return self._entries.get(entry_id)
+        with self._lock:
+            return self._entries.get(entry_id)
 
     def list_entries(self) -> list[WatchlistEntry]:
-        return list(self._entries.values())
+        with self._lock:
+            return list(self._entries.values())
 
     def record_sighting(self, entry_id: str, timestamp: float) -> None:
-        entry = self._entries.get(entry_id)
-        if entry is not None:
+        with self._lock:
+            entry = self._entries.get(entry_id)
+            if entry is None:
+                return
             entry.sight_count += 1
             entry.last_sighted = timestamp
-            self._save()
+            # Hot path: mutate under lock, persist via coalesced background
+            # save (0.5s) so per-alert JSON rewrites don't stall inference.
+            self._dirty = True
+            self._schedule_debounce_locked()
 
     def match_plate(
         self,
@@ -230,7 +297,9 @@ class WatchlistStore:
         amber_threshold: float = 0.80,
     ) -> MatchResult | None:
         """Perform normalized and fuzzy matching against plate watchlist targets."""
-        if not self._entries or not plate_text:
+        with self._lock:
+            snapshot = list(self._entries.values())
+        if not snapshot or not plate_text:
             return None
 
         q = normalize_plate_string(plate_text)
@@ -238,7 +307,7 @@ class WatchlistStore:
             return None
 
         # 1. Exact match
-        for entry in self._entries.values():
+        for entry in snapshot:
             if entry.target_type == TargetType.PLATE and entry.normalized_plate == q:
                 return MatchResult(
                     entry_id=entry.id,
@@ -254,7 +323,7 @@ class WatchlistStore:
             return s.replace("O", "0").replace("I", "1").replace("B", "8").replace("Z", "2").replace("S", "5")
 
         q_canon = _canon(q)
-        for entry in self._entries.values():
+        for entry in snapshot:
             if entry.target_type == TargetType.PLATE and entry.normalized_plate and _canon(entry.normalized_plate) == q_canon:
                 return MatchResult(
                     entry_id=entry.id,
@@ -267,7 +336,7 @@ class WatchlistStore:
 
         # 3. Single-character edit distance for longer plates (len >= 8)
         if len(q) >= 8:
-            for entry in self._entries.values():
+            for entry in snapshot:
                 if entry.target_type == TargetType.PLATE and entry.normalized_plate:
                     np_str = entry.normalized_plate
                     if len(np_str) == len(q):
@@ -291,7 +360,9 @@ class WatchlistStore:
         amber_threshold: float = 0.42,
     ) -> MatchResult | None:
         """Perform Exemplar Gallery max-cosine matching for a 128-d query feature vector."""
-        if not self._entries or query_feat.size == 0:
+        with self._lock:
+            snapshot = list(self._entries.values())
+        if not snapshot or query_feat.size == 0:
             return None
 
         q = np.asarray(query_feat, dtype=np.float32).flatten()
@@ -302,7 +373,7 @@ class WatchlistStore:
         best_score = -1.0
         best_entry: WatchlistEntry | None = None
 
-        for entry in self._entries.values():
+        for entry in snapshot:
             mat = entry.matrix
             if mat.shape[0] == 0:
                 continue

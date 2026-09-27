@@ -129,9 +129,11 @@ def get_stream_context(camera_id: str) -> CameraStreamContext | None:
 
 
 def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
-    del allowlist
+    # Task 3 override semantics: a non-None per-request allowlist REPLACES the
+    # global settings (per-site isolation); None means global. An explicitly
+    # passed list that parses to empty stays empty (deny private, fail-closed).
+    configured = allowlist if allowlist is not None else Settings().media.site_cidr_allowlist
     nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    configured = Settings().media.site_cidr_allowlist
     for cidr in configured or []:
         try:
             nets.append(ipaddress.ip_network(cidr, strict=False))
@@ -143,6 +145,78 @@ def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
         allowed_ports=_DEFAULT_ALLOWED_PORTS,
         site_cidr_allowlist=tuple(nets),
     )
+
+
+def _resync_epoch_if_bumped(
+    cam_epoch: int,
+    pipeline: MiniPipeline,
+    *,
+    track_plates: dict,
+    ocr_last_submitted: dict,
+    pending_ocr: list,
+    plate_cache: dict[str, Any],
+) -> bool:
+    """Resync pipeline + worker OCR state to a bumped stream epoch.
+
+    Returns True when a bump was handled. On bump: ``pipeline.reset_epoch``
+    clears alert/track latches, worker-side plate/throttle caches are purged,
+    and in-flight old-epoch OCR futures are cancelled (callers must tolerate
+    ``CancelledError`` at ``Future.result()``) so a dead vehicle's votes can
+    never decide a new vehicle's plate.
+    """
+    if cam_epoch == pipeline.stream_epoch:
+        return False
+    pipeline.reset_epoch(cam_epoch)
+    track_plates.clear()
+    ocr_last_submitted.clear()
+    for future in pending_ocr:
+        with contextlib.suppress(Exception):
+            future.cancel()
+    pending_ocr.clear()
+    plate_cache["detections"] = []
+    plate_cache["plates"] = []
+    plate_cache["at_mono"] = 0.0
+    return True
+
+
+def _drain_ocr_futures(
+    pending_ocr: list,
+    timeout: float = 5.0,
+    now: float | None = None,
+) -> tuple[list, int]:
+    """Non-blocking drain of pending OCR futures (hot path must not stall).
+
+    Per iteration: done futures resolve in submission order (CancelledError /
+    other -> dropped); not-done futures older than ``timeout`` (by per-future
+    submit stamp) are cancelled, counted, and dropped; young-pending futures
+    are RETAINED for a later iteration. Never blocks: no ``wait()``. Retaining
+    young-pending means the list is not always emptied — the len<3 submit cap
+    still bounds it, and wedged entries cannot clog it past ``timeout``.
+    ``now`` is injectable for tests. Returns (results, timeouts).
+    """
+    results: list = []
+    timeouts = 0
+    if not pending_ocr:
+        return results, timeouts
+    now_mono = time.monotonic() if now is None else now
+    keep: list = []
+    for future in list(pending_ocr):
+        if future.done():
+            try:
+                results.append(future.result())
+            except Exception:
+                continue
+        else:
+            submitted = getattr(future, "_ocr_submitted_mono", None)
+            age = (now_mono - submitted) if submitted is not None else 0.0
+            if age >= timeout:
+                with contextlib.suppress(Exception):
+                    future.cancel()
+                timeouts += 1
+            else:
+                keep.append(future)
+    pending_ocr[:] = keep
+    return results, timeouts
 
 
 def _notify_stream_subscribers(camera_id: str) -> None:
@@ -234,10 +308,13 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     last_analysis_fps_calc = time.perf_counter()
     last_inference_ms = 0.0
     anpr_frame_number = 0
-    last_plate_detections: list[dict[str, Any]] = []
-    last_plates: list[dict[str, Any]] = []
-    last_plate_at_mono = 0.0
+    # Worker-side OCR caches, epoch-scoped (see _resync_epoch_if_bumped).
+    plate_cache: dict[str, Any] = {"detections": [], "plates": [], "at_mono": 0.0}
     ocr_last_submitted: dict[int | tuple[int, float, float], float] = {}
+    ocr_timeouts = 0
+    # Single-slot analysis handoff drops: frames overwritten before analyze()
+    # consumed them. Exposed as queue_drops in health samples (TileHealth).
+    analysis_overwrites = 0
     ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"anpr-{camera_id[:8]}")
     pending_ocr: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
     track_plates: dict[int, str] = {}
@@ -295,7 +372,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     def analyze() -> None:
         nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc
         nonlocal last_inference_ms, last_night_result, last_night_time, anpr_frame_number
-        nonlocal last_plate_detections, last_plates, last_plate_at_mono
+        nonlocal ocr_timeouts
         while not stop.is_set():
             if not analysis_ready.wait(timeout=0.5):
                 continue
@@ -307,15 +384,24 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 continue
 
             try:
-                completed: list[Future[tuple[list[dict[str, Any]], dict[str, Any] | None]]] = []
-                for future in pending_ocr:
-                    if future.done():
-                        completed.append(future)
-                for future in completed:
-                    pending_ocr.remove(future)
-                if completed:
-                    completed_results = [future.result() for future in completed]
-                    last_plate_detections = [item for detections, _ in completed_results for item in detections]
+                # Task 3 fix R1: epoch poll FIRST — a bumped first new-epoch
+                # frame must not run OCR-drain/process_frame/submit with stale
+                # latches, else old-epoch votes apply then get discarded.
+                _resync_epoch_if_bumped(
+                    cam.get("stream_epoch", 0),
+                    pipeline,
+                    track_plates=track_plates,
+                    ocr_last_submitted=ocr_last_submitted,
+                    pending_ocr=pending_ocr,
+                    plate_cache=plate_cache,
+                )
+
+                # Non-blocking drain: done resolve, wedged-by-age reaped+counted,
+                # young-pending retained. Never stalls analyze() on OCR latency.
+                completed_results, wedged = _drain_ocr_futures(pending_ocr, timeout=5.0)
+                ocr_timeouts += wedged
+                if completed_results:
+                    plate_cache["detections"] = [item for detections, _ in completed_results for item in detections]
                     unique_plates: dict[str, dict[str, Any]] = {}
                     wl_store = get_watchlist_store()
                     sightings_store = get_sightings_store()
@@ -353,8 +439,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                     wl_store.record_sighting(match.entry_id, time.time())
                             if plate_str:
                                 unique_plates[plate_str] = plate
-                    last_plates = list(unique_plates.values())
-                    last_plate_at_mono = time.monotonic()
+                    plate_cache["plates"] = list(unique_plates.values())
+                    plate_cache["at_mono"] = time.monotonic()
 
                 t_infer_start = time.perf_counter()
                 pipeline.process_frame(current)
@@ -389,8 +475,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         crop_plate_boxes: list[tuple[float, float, float, float]] = []
                         if run_ocr and id(detection) in ocr_detection_ids:
                             crop_plate_boxes = anpr.detector.detect(crop)
-                            if not crop_plate_boxes:
-                                crop_plate_boxes = [(0.05, 0.35, 0.95, 0.98)]
+                            # Task 3: no blind full-vehicle fallback. OCRing bumper/
+                            # grille texture hallucinates plates; empty boxes means
+                            # skip OCR for this vehicle this round.
                             for bx1, by1, bx2, by2 in crop_plate_boxes:
                                 vehicle_plate_detections.append(
                                     {
@@ -414,25 +501,28 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         track_ready = any(track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks)
                         if run_ocr and track_ready and ocr_due and id(detection) in ocr_detection_ids and len(pending_ocr) < 3 and crop_plate_boxes:
                             ocr_last_submitted[throttle_key] = time.monotonic()
-                            pending_ocr.append(
-                                ocr_executor.submit(
-                                    recognize_vehicle,
-                                    crop.copy(),
-                                    copy.deepcopy(vehicle_plate_detections),
-                                    vehicle_id,
-                                    x1,
-                                    y1,
-                                    x2,
-                                    y2,
-                                    detection["class_name"],
-                                    list(crop_plate_boxes),
-                                )
+                            ocr_future = ocr_executor.submit(
+                                recognize_vehicle,
+                                crop.copy(),
+                                copy.deepcopy(vehicle_plate_detections),
+                                vehicle_id,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                                detection["class_name"],
+                                list(crop_plate_boxes),
                             )
+                            # Per-future submit stamp for the age-based reaper in
+                            # _drain_ocr_futures (attribute dies with the future;
+                            # missing stamp defaults to age 0 = never reap).
+                            ocr_future._ocr_submitted_mono = time.monotonic()  # type: ignore[attr-defined]
+                            pending_ocr.append(ocr_future)
                         if vehicle_plate_detections:
                             plate_detections.extend([d for d in vehicle_plate_detections if d.get("text")])
 
                 vehicle_boxes = [d["bbox_norm"] for d in pipeline.last_detections if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}]
-                cache_reused = _select_plate_detections(plate_detections, last_plate_detections, last_plate_at_mono, time.monotonic(), vehicle_boxes)
+                cache_reused = _select_plate_detections(plate_detections, plate_cache["detections"], plate_cache["at_mono"], time.monotonic(), vehicle_boxes)
                 plate_detections = [d for d in cache_reused if d.get("text")]
                 for d in plate_detections:
                     tid = d.get("track_id")
@@ -447,9 +537,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         track_plates.pop(tid, None)
 
                 # Persist plates for active vehicle tracks across frames
-                active_plates = [p for p in last_plates if p.get("track_id") in active_tids or not p.get("track_id")]
+                active_plates = [p for p in plate_cache["plates"] if p.get("track_id") in active_tids or not p.get("track_id")]
                 plates_for_obs = [{"text": text, "confidence": 0.90, "track_id": tid} for tid, text in track_plates.items()] or (
-                    active_plates if active_plates else last_plates
+                    active_plates if active_plates else plate_cache["plates"]
                 )
 
                 now_m = time.monotonic()
@@ -638,6 +728,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             _notify_stream_subscribers(camera_id)
 
                             with analysis_lock:
+                                if analysis_frame is not None:
+                                    analysis_overwrites += 1
                                 analysis_frame = image
                             analysis_ready.set()
 
@@ -653,7 +745,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                     "source_fps": round(fps, 1),
                                     "analysis_fps": round(last_analysis_fps or fps, 1),
                                     "inference_ms": round(last_inference_ms, 1),
-                                    "queue_drops": 0,
+                                    "queue_drops": analysis_overwrites,
+                                    "ocr_timeouts": ocr_timeouts,
                                     "decode_errors": decode_errors,
                                     "reconnect_count": loop_count,
                                     "stream_epoch": cam["stream_epoch"],
@@ -831,6 +924,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         _notify_stream_subscribers(camera_id)
 
                     with analysis_lock:
+                        if analysis_frame is not None:
+                            analysis_overwrites += 1
                         analysis_frame = image
                     analysis_ready.set()
                     frame_number += 1
@@ -849,7 +944,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             "source_fps": measured_source_fps,
                             "analysis_fps": round(last_analysis_fps or measured_source_fps, 1),
                             "inference_ms": round(last_inference_ms, 1),
-                            "queue_drops": 0,
+                            "queue_drops": analysis_overwrites,
+                            "ocr_timeouts": ocr_timeouts,
                             "decode_errors": decode_errors,
                             "reconnect_count": reconnect_count,
                             "stream_epoch": cam["stream_epoch"],

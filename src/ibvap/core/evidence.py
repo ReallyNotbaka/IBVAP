@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import hashlib
 import re
 import threading
 import time
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,6 +120,26 @@ def save_frame_evidence(
 
     Returns (snapshot_path, crop_path) as relative paths, or (None, None) if frame is invalid.
     """
+    snap_path, crop_path = _write_frame_evidence(event_id, frame, bbox_norm, output_dir)
+
+    # Evict oldest files if exceeding threshold
+    out_dir = Path(output_dir)
+    try:
+        with _EVIDENCE_LOCK:
+            _evict_oldest_locked(out_dir)
+    except Exception:
+        pass
+
+    return snap_path, crop_path
+
+
+def _write_frame_evidence(
+    event_id: str,
+    frame: np.ndarray,
+    bbox_norm: tuple[float, float, float, float] | list[float] | None,
+    output_dir: str | Path,
+) -> tuple[str | None, str | None]:
+    """Encode + write snapshot/crop JPEGs. No eviction (caller amortizes)."""
     if frame is None or getattr(frame, "size", 0) == 0 or len(getattr(frame, "shape", ())) < 2:
         return None, None
 
@@ -161,18 +183,111 @@ def save_frame_evidence(
         except Exception:
             has_crop = False
 
-    # Evict oldest files if exceeding threshold
-    try:
-        with _EVIDENCE_LOCK:
-            files = sorted(out_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
-            if len(files) > MAX_EVIDENCE_FILES:
-                for old_f in files[: len(files) - MAX_EVIDENCE_FILES]:
-                    with contextlib.suppress(Exception):
-                        old_f.unlink()
-    except Exception:
-        pass
-
     return str(snap_path), (str(crop_path) if has_crop else None)
+
+
+def _evict_oldest_locked(out_dir: Path) -> None:
+    """FIFO-evict oldest JPEGs beyond MAX_EVIDENCE_FILES. Caller holds _EVIDENCE_LOCK."""
+    files = sorted(out_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime)
+    if len(files) > MAX_EVIDENCE_FILES:
+        for old_f in files[: len(files) - MAX_EVIDENCE_FILES]:
+            with contextlib.suppress(Exception):
+                old_f.unlink()
+
+
+# --- Task 3: bounded background offload -------------------------------------
+# Single-worker executor keeps encode/write off the inference hot path. The
+# pending queue is bounded (drop-oldest + counter) so an alert storm degrades
+# to dropped evidence files, never unbounded memory or hot-path stalls.
+
+_EVIDENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evidence-offload")
+# Non-daemon worker would hang interpreter exit (idle queue-get never returns).
+atexit.register(lambda: _EVIDENCE_EXECUTOR.shutdown(wait=True, cancel_futures=True))
+_EVIDENCE_MAX_PENDING = 32
+_EVIDENCE_EVICT_EVERY_N = 16
+_EVIDENCE_QUEUE_LOCK = threading.Lock()
+_EVIDENCE_PENDING: deque[Future[None]] = deque()
+_evidence_dropped = 0
+_evidence_saves_since_evict = 0  # worker-thread only
+
+
+def get_evidence_dropped() -> int:
+    """Number of offloaded evidence saves dropped under backpressure."""
+    with _EVIDENCE_QUEUE_LOCK:
+        return _evidence_dropped
+
+
+def submit_frame_evidence(
+    event_id: str,
+    frame: np.ndarray,
+    bbox_norm: tuple[float, float, float, float] | list[float] | None = None,
+    output_dir: str | Path = "data/evidence",
+) -> tuple[str | None, str | None]:
+    """Enqueue an evidence save; returns predicted paths immediately.
+
+    Optimistic URLs: callers may publish ``/api/v1/evidence/{id}/...`` before
+    the worker writes the files ms later (tiny 404 window). Returns
+    (None, None) for invalid frames. Copy-on-submit: the worker encodes a
+    private copy so caller buffer reuse cannot tear the JPEG.
+    """
+    if frame is None or getattr(frame, "size", 0) == 0 or len(getattr(frame, "shape", ())) < 2:
+        return None, None
+    out_dir = Path(output_dir)
+    snap_rel = str(out_dir / f"{event_id}_snap.jpg")
+    crop_rel = str(out_dir / f"{event_id}_crop.jpg") if (bbox_norm and len(bbox_norm) == 4) else None
+    try:
+        payload = frame.copy()
+    except Exception:
+        return None, None
+    try:
+        future: Future[None] = _EVIDENCE_EXECUTOR.submit(_evidence_worker_job, event_id, payload, bbox_norm, str(out_dir))
+    except RuntimeError:
+        # Executor shutting down (interpreter exit racing a late alert):
+        # best-effort synchronous save instead of raising on the hot path.
+        with contextlib.suppress(Exception):
+            _write_frame_evidence(event_id, payload, bbox_norm, out_dir)
+        return snap_rel, crop_rel
+    global _evidence_dropped
+    overflow: Future[None] | None = None
+    with _EVIDENCE_QUEUE_LOCK:
+        if len(_EVIDENCE_PENDING) >= _EVIDENCE_MAX_PENDING:
+            overflow = _EVIDENCE_PENDING.popleft()
+            _evidence_dropped += 1
+        _EVIDENCE_PENDING.append(future)
+    # Cancel OUTSIDE the queue lock: Future.cancel() synchronously invokes
+    # done-callbacks (_evidence_done) in the calling thread, which take the
+    # same lock — cancelling while holding it deadlocks against the worker's
+    # set_result path (faulthandler-verified). A completion racing the cancel
+    # is harmless (cancel returns False; remove tolerates ValueError).
+    if overflow is not None and not overflow.done():
+        overflow.cancel()
+    future.add_done_callback(_evidence_done)
+    return snap_rel, crop_rel
+
+
+def _evidence_done(future: Future[None]) -> None:
+    with _EVIDENCE_QUEUE_LOCK, contextlib.suppress(ValueError):
+        _EVIDENCE_PENDING.remove(future)
+
+
+def _evidence_worker_job(
+    event_id: str,
+    frame: np.ndarray,
+    bbox_norm: tuple[float, float, float, float] | list[float] | None,
+    output_dir: str,
+) -> None:
+    """Background encode+write with amortized FIFO eviction (every N saves)."""
+    global _evidence_saves_since_evict
+    with contextlib.suppress(Exception):
+        _write_frame_evidence(event_id, frame, bbox_norm, Path(output_dir))
+    _evidence_saves_since_evict += 1
+    if _evidence_saves_since_evict >= _EVIDENCE_EVICT_EVERY_N:
+        _evidence_saves_since_evict = 0
+        try:
+            with _EVIDENCE_LOCK:
+                _evict_oldest_locked(Path(output_dir))
+        except Exception:
+            pass
 
 
 def validate_event_id(event_id: str) -> str:

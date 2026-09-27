@@ -25,7 +25,7 @@ from ibvap.core.association import (
     project_person_box_from_face,
 )
 from ibvap.core.detector import DetectorProvider, MockPersonDetector, ONNXDetectorProvider
-from ibvap.core.evidence import save_frame_evidence
+from ibvap.core.evidence import submit_frame_evidence
 from ibvap.core.queue import BoundedQueue
 from ibvap.core.rules import RuleEngine
 from ibvap.core.tracker import CentroidTracker, Track
@@ -35,13 +35,19 @@ from ibvap.events.outbox import transactional_write
 
 
 def _attach_frame_evidence(event: dict[str, Any], frame: np.ndarray | None, bbox_norm: Any = None) -> None:
-    """Attach forensic JPEG snapshot and target crop evidence to an event."""
+    """Attach forensic JPEG snapshot and target crop evidence to an event.
+
+    Task 3 optimistic offload: keeps the sync signature and still sets
+    ``event["id"]`` + deterministic evidence URLs BEFORE ``transactional_write``
+    (no backfill needed). JPEG encode+write runs on the bounded evidence worker
+    and lands ms later — a tiny 404 window on the fresh URLs by design.
+    """
     if frame is None or getattr(frame, "size", 0) == 0:
         return
     try:
         eid = str(uuid.uuid4())
         event["id"] = eid
-        snap_path, crop_path = save_frame_evidence(eid, frame, bbox_norm)
+        snap_path, crop_path = submit_frame_evidence(eid, frame, bbox_norm)
         if snap_path:
             event["snapshot_url"] = f"/api/v1/evidence/{eid}/snapshot"
         if crop_path:

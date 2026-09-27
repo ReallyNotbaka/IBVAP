@@ -321,14 +321,24 @@ def get_download_manager() -> ModelDownloadManager:
     return _GLOBAL_DOWNLOAD_MANAGER
 
 
+# Guards shared-handle first-use: without it two workers racing on a cold
+# start each build a private session (per-camera model copies, GPU waste).
+_SHARED_HANDLE_LOCK = threading.Lock()
+
+
 def get_shared_detector_handle() -> ThreadSafeDetectorHandle:
     global _GLOBAL_DETECTOR_HANDLE
-    if _GLOBAL_DETECTOR_HANDLE is None:
-        # Check if default yolo26n exists, otherwise fallback to MockPersonDetector
-        p = Path("models/yolo26n.onnx")
-        initial = ONNXDetectorProvider(str(p)) if p.exists() else MockPersonDetector(model_id="yolo26n")
-        _GLOBAL_DETECTOR_HANDLE = ThreadSafeDetectorHandle(initial, active_model_name="yolo26n")
-    return _GLOBAL_DETECTOR_HANDLE
+    handle = _GLOBAL_DETECTOR_HANDLE
+    if handle is None:
+        with _SHARED_HANDLE_LOCK:
+            handle = _GLOBAL_DETECTOR_HANDLE
+            if handle is None:
+                # Check if default yolo26n exists, otherwise fallback to MockPersonDetector
+                p = Path("models/yolo26n.onnx")
+                initial = ONNXDetectorProvider(str(p)) if p.exists() else MockPersonDetector(model_id="yolo26n")
+                handle = ThreadSafeDetectorHandle(initial, active_model_name="yolo26n")
+                _GLOBAL_DETECTOR_HANDLE = handle
+    return handle
 
 
 def warmup_shared_detector() -> ThreadSafeDetectorHandle:
