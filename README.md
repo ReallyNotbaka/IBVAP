@@ -208,6 +208,7 @@ Credentials are encrypted at rest and redacted from telemetry.
 2. In the dashboard, click **Add Camera**.
 3. Input the device IP and port (`4747` for DroidCam, `8080` for IP Webcam).
 4. The system automatically configures the `/video` endpoint and checks the local subnet allowlist.
+Note: per-site `site_cidr_allowlist` values sent by API clients are accepted but not currently enforced — the server SSRF policy applies.
 
 ### Recorded Video Files
 Recorded footage (`.mp4`, `.mkv`, `.avi`) can be ingested via the **Use Footage** page for offline forensic replay, zone testing, and scrubber analysis.

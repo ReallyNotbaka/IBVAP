@@ -1,6 +1,44 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+function readViteVar(name: string): string {
+  const env = (import.meta as unknown as { env?: Record<string, unknown> }).env;
+  const val = env?.[name];
+  return typeof val === "string" ? val : "";
+}
+
+export const API_BASE = readViteVar("VITE_API_BASE") || "";
+
+// Mutating routes are fail-closed 401 without it: send X-API-Token on every
+// POST/PUT/PATCH/DELETE. Set VITE_IBVAP_API_TOKEN in frontend/.env (must match
+// backend IBVAP_API_TOKEN). Tests may inject globalThis.__IBVAP_API_TOKEN__.
+export function getApiToken(): string {
+  const override = (globalThis as unknown as { __IBVAP_API_TOKEN__?: unknown }).__IBVAP_API_TOKEN__;
+  if (typeof override === "string" && override) return override;
+  return readViteVar("VITE_IBVAP_API_TOKEN");
+}
+
+export function authHeaders(extra?: HeadersInit): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = getApiToken();
+  if (token) headers["X-API-Token"] = token;
+  if (extra) {
+    new Headers(extra).forEach((value, key) => {
+      headers[key] = value;
+    });
+  }
+  return headers;
+}
+
+// Backend error details are {code, message} objects on newer routes but plain
+// strings on others — normalize to a displayable message (no [object Object]).
+export function errorMessage(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (detail && typeof detail === "object") {
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === "string" && msg) return msg;
+  }
+  return fallback;
+}
 export const base = (p: string) => (API_BASE ? `${API_BASE}${p}` : p);
 
 export type Camera = {
@@ -199,7 +237,7 @@ export async function testCamera(payload: {
 }): Promise<TestResult> {
   const r = await fetch(base("/api/v1/cameras/test"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   const j = (await r.json()) as TestResult;
@@ -222,7 +260,7 @@ export async function createCamera(payload: {
 }): Promise<Camera> {
   const r = await fetch(base("/api/v1/cameras"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error(`create ${r.status}: ${await r.text()}`);
@@ -280,7 +318,7 @@ export async function fetchEvents(
 }
 
 export async function clearEvents(): Promise<{ status: string; deleted_count: number }> {
-  const r = await fetch(base("/api/v1/events"), { method: "DELETE" });
+  const r = await fetch(base("/api/v1/events"), { method: "DELETE", headers: authHeaders() });
   if (!r.ok) throw new Error(`clear events ${r.status}`);
   return await r.json();
 }
@@ -290,6 +328,7 @@ export async function uploadFootage(file: File): Promise<{ upload_id: string; fi
   form.append("file", file, file.name);
   const r = await fetch(base("/api/v1/uploads"), {
     method: "POST",
+    headers: authHeaders(),
     body: form,
   });
   if (!r.ok) throw new Error(`upload ${r.status}: ${await r.text()}`);
@@ -297,7 +336,10 @@ export async function uploadFootage(file: File): Promise<{ upload_id: string; fi
 }
 
 export async function finalizeUpload(uploadId: string): Promise<{ upload_id: string; filename: string; status: string; path: string }> {
-  const r = await fetch(base(`/api/v1/uploads/${uploadId}/finalize`), { method: "POST" });
+  const r = await fetch(base(`/api/v1/uploads/${uploadId}/finalize`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!r.ok) throw new Error(`finalize ${r.status}: ${await r.text()}`);
   return (await r.json()) as { upload_id: string; filename: string; status: string; path: string };
 }
@@ -323,7 +365,10 @@ export async function analyzeUpload(
     face_stride: String(opts.face_stride ?? 2),
     enable_face: String(opts.enable_face ?? true),
   });
-  const r = await fetch(base(`/api/v1/uploads/${uploadId}/analyze?${params.toString()}`), { method: "POST" });
+  const r = await fetch(base(`/api/v1/uploads/${uploadId}/analyze?${params.toString()}`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!r.ok) throw new Error(`analyze ${r.status}: ${await r.text()}`);
   return (await r.json()) as never;
 }
@@ -370,19 +415,26 @@ export async function fetchCameraHealth(id: string): Promise<CameraHealthData> {
 export async function reconnectCamera(id: string): Promise<Camera> {
   const r = await fetch(base(`/api/v1/cameras/${id}/reconnect`), {
     method: "POST",
+    headers: authHeaders(),
   });
   if (!r.ok) throw new Error(`reconnect ${r.status}`);
   return (await r.json()) as Camera;
 }
 
 export async function disableCamera(id: string): Promise<Camera> {
-  const r = await fetch(base(`/api/v1/cameras/${id}/disable`), { method: "POST" });
+  const r = await fetch(base(`/api/v1/cameras/${id}/disable`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!r.ok) throw new Error(`disable ${r.status}`);
   return (await r.json()) as Camera;
 }
 
 export async function enableCamera(id: string): Promise<Camera> {
-  const r = await fetch(base(`/api/v1/cameras/${id}/enable`), { method: "POST" });
+  const r = await fetch(base(`/api/v1/cameras/${id}/enable`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!r.ok) throw new Error(`enable ${r.status}`);
   return (await r.json()) as Camera;
 }
@@ -394,7 +446,10 @@ export async function fetchPlayback(id: string): Promise<PlaybackState> {
 }
 
 export async function controlPlayback(id: string, action: "pause" | "resume" | "stop" | "restart"): Promise<PlaybackState> {
-  const r = await fetch(base(`/api/v1/cameras/${id}/playback/${action}`), { method: "POST" });
+  const r = await fetch(base(`/api/v1/cameras/${id}/playback/${action}`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
   if (!r.ok) throw new Error(`playback ${r.status}`);
   return (await r.json()) as PlaybackState;
 }
@@ -408,7 +463,7 @@ export async function setCameraFence(
   const type = fenceType ?? (polygon.length === 2 ? "line" : "polygon");
   const r = await fetch(base(`/api/v1/cameras/${id}/fence`), {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ polygon, fence_type: type, enabled }),
   });
   if (!r.ok) throw new Error(`fence ${r.status}`);
@@ -418,6 +473,7 @@ export async function setCameraFence(
 export async function deleteCameraFence(id: string): Promise<Camera> {
   const r = await fetch(base(`/api/v1/cameras/${id}/fence`), {
     method: "DELETE",
+    headers: authHeaders(),
   });
   if (!r.ok) throw new Error(`delete fence ${r.status}`);
   return (await r.json()) as Camera;
@@ -426,7 +482,7 @@ export async function deleteCameraFence(id: string): Promise<Camera> {
 export async function seekPlayback(id: string, positionSeconds: number): Promise<PlaybackState> {
   const r = await fetch(base(`/api/v1/cameras/${id}/playback/seek`), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ position_seconds: positionSeconds }),
   });
   if (!r.ok) throw new Error(`seek ${r.status}`);
@@ -498,10 +554,11 @@ export async function fetchWatchlist(): Promise<WatchlistEntry[]> {
 export async function enrollSuspect(formData: FormData): Promise<{ status: string; entry: unknown }> {
   const r = await fetch(base("/api/v1/watchlist/enroll"), {
     method: "POST",
+    headers: authHeaders(),
     body: formData,
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.detail || `Enrollment failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(data.detail, `Enrollment failed (${r.status})`));
   return data;
 }
 
@@ -515,11 +572,11 @@ export async function enrollPlateTarget(data: {
 }): Promise<{ status: string; entry_id: string; name: string; plate_number: string }> {
   const r = await fetch(base("/api/v1/watchlist/enroll-plate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(data),
   });
   const res = await r.json();
-  if (!r.ok) throw new Error(res.detail || `Plate enrollment failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(res.detail, `Plate enrollment failed (${r.status})`));
   return res;
 }
 
@@ -543,6 +600,7 @@ export async function fetchPlateSightings(params?: {
 export async function deleteSuspect(id: string): Promise<void> {
   const r = await fetch(base(`/api/v1/watchlist/${id}`), {
     method: "DELETE",
+    headers: authHeaders(),
   });
   if (!r.ok) throw new Error(`Delete failed (${r.status})`);
 }
@@ -569,18 +627,18 @@ export async function fetchModels(): Promise<ModelListResponse> {
 export async function activateModel(modelName: string): Promise<{ status: string; active_model: string }> {
   const r = await fetch(base("/api/v1/models/activate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ model_name: modelName }),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.detail || `Activation failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(data.detail, `Activation failed (${r.status})`));
   return data;
 }
 
 export async function startModelDownload(modelName: string): Promise<void> {
   const r = await fetch(base("/api/v1/models/download"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ model_name: modelName }),
   });
   if (!r.ok) throw new Error(`Download start failed (${r.status})`);
@@ -598,11 +656,12 @@ export async function uploadModel(modelName: string, file: File): Promise<void> 
   form.append("file", file, file.name);
   const r = await fetch(base("/api/v1/models/upload"), {
     method: "POST",
+    headers: authHeaders(),
     body: form,
   });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
-    throw new Error(data.detail || `Model upload failed (${r.status})`);
+    throw new Error(errorMessage((data as { detail?: unknown }).detail, `Model upload failed (${r.status})`));
   }
 }
 
@@ -622,9 +681,10 @@ export function useModels(enabled = true) {
 export async function deleteModelWeights(modelName: string): Promise<{ status: string; model_name: string }> {
   const r = await fetch(base(`/api/v1/models/${modelName}/weights`), {
     method: "DELETE",
+    headers: authHeaders(),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.detail || `Delete weights failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(data.detail, `Delete weights failed (${r.status})`));
   return data;
 }
 
@@ -720,11 +780,11 @@ export async function calibrateRadar(
 ): Promise<{ status: string; camera_id: string }> {
   const r = await fetch(base("/api/v1/tactical/radar/calibrate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.detail || `Calibration failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(data.detail, `Calibration failed (${r.status})`));
   return data;
 }
 
@@ -787,7 +847,7 @@ export async function updateSystemSettings(
 ): Promise<{ status: string; settings: SystemSettings }> {
   const r = await fetch(base("/api/v1/system/settings"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(data),
   });
   if (!r.ok) throw new Error(`update settings ${r.status}`);
@@ -799,11 +859,11 @@ export async function testC2Webhook(
 ): Promise<{ success: boolean; status_code: number; elapsed_ms: number; message: string }> {
   const r = await fetch(base("/api/v1/system/webhook/test"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ url }),
   });
   const res = await r.json();
-  if (!r.ok) throw new Error(res.detail || `Webhook test failed (${r.status})`);
+  if (!r.ok) throw new Error(errorMessage(res.detail, `Webhook test failed (${r.status})`));
   return res;
 }
 

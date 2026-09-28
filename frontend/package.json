@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
+    "test:unit": "node --test tests/api-auth-headers.unit.mjs",
     "test:e2e": "playwright test"
   },
   "dependencies": {

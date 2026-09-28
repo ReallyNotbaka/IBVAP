@@ -18,7 +18,7 @@ import av
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import UUID4, BaseModel, Field
+from pydantic import BaseModel, Field
 
 from ibvap.api.auth import require_api_token
 from ibvap.core.camera_state import CameraState, CameraStateMachine
@@ -84,7 +84,8 @@ logger = structlog.get_logger(__name__)
 
 class CameraCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    site_id: UUID4
+    # DB-owned id (uuid7 / nil-adjacent default): accept any UUID version.
+    site_id: uuid.UUID
     source_type: Literal["smartphone_ip_webcam", "ip_camera", "video_footage"] = "smartphone_ip_webcam"
     endpoint: str = Field(
         min_length=1, max_length=2048, description="Stream URL without credentials, or a local video path"
@@ -92,7 +93,10 @@ class CameraCreate(BaseModel):
     protocol: Literal["rtsp", "rtsps", "http", "https", "mjpeg", "hls", "whip", "file"] = "http"
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=1024)
-    site_cidr_allowlist: list[str] | None = None
+    site_cidr_allowlist: list[str] | None = Field(
+        default=None,
+        description="Accepted but not currently enforced: per-site allowlists are ignored, server policy applies.",
+    )
     temporary: bool = False
 
 
@@ -101,7 +105,10 @@ class CameraTestRequest(BaseModel):
     protocol: Literal["rtsp", "rtsps", "http", "https", "mjpeg", "hls", "whip", "file"] | None = None
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=1024)
-    site_cidr_allowlist: list[str] | None = None
+    site_cidr_allowlist: list[str] | None = Field(
+        default=None,
+        description="Accepted but not currently enforced: per-site allowlists are ignored, server policy applies.",
+    )
 
 
 class PlaybackSeekRequest(BaseModel):
@@ -360,6 +367,11 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
 @router.post("/test", response_model=CameraTestResponse)
 async def test_unsaved(req: CameraTestRequest, _auth: bool = Depends(require_api_token)) -> CameraTestResponse:
     """Test connection without saving - spec 8 Step 3."""
+    if req.site_cidr_allowlist:
+        logger.warning(
+            "per_site_allowlist_ignored",
+            detail="per-site site_cidr_allowlist is ignored; server SSRF policy applies",
+        )
     return await asyncio.to_thread(_run_test_stages, req)
 
 
@@ -367,6 +379,11 @@ async def test_unsaved(req: CameraTestRequest, _auth: bool = Depends(require_api
 async def create_camera(
     req: CameraCreate, response: Response, _auth: bool = Depends(require_api_token)
 ) -> dict[str, Any]:
+    if req.site_cidr_allowlist:
+        logger.warning(
+            "per_site_allowlist_ignored",
+            detail="per-site site_cidr_allowlist is ignored; server SSRF policy applies",
+        )
     req.endpoint = req.endpoint.strip().strip('"').strip("'")
     if _is_file_endpoint(req.endpoint, req.protocol):
         req.protocol = "file"

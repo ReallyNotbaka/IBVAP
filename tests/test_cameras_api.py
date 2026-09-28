@@ -539,3 +539,24 @@ def test_create_camera_rejects_non_uuid_site_id(api_client: TestClient) -> None:
         },
     )
     assert r.status_code == 422
+
+
+def test_create_camera_accepts_default_and_v7_site_ids(api_client: TestClient) -> None:
+    """Site ids are DB-owned (uuid7 / nil-adjacent default): any UUID version must 201."""
+    c = api_client
+    for tag, site_id in [
+        ("default", "00000000-0000-0000-0000-000000000001"),
+        ("v7", "0193a5f2-7b1e-7c3d-9e4f-1234567890ab"),
+    ]:
+        r = c.post(
+            "/api/v1/cameras",
+            json={
+                "name": f"Site {tag} camera",
+                "site_id": site_id,
+                "source_type": "smartphone_ip_webcam",
+                "endpoint": f"synthetic://site-{tag}",
+                "protocol": "http",
+            },
+        )
+        assert r.status_code == 201, r.text
+        c.delete(f"/api/v1/cameras/{r.json()['id']}")
