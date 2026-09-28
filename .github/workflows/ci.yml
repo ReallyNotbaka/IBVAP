@@ -54,7 +54,16 @@ jobs:
           # Fixed hash seed: reproducible GC/teardown order across runs, so a
           # teardown abort is either deterministic (bisectable) or gone.
           PYTHONHASHSEED: "0"
-        run: uv run pytest -q -m "not slow and not soak and not benchmark and not live and not gpu" --cov=src --cov-report=term-missing --durations=20
+        # DIAGNOSTIC (CI teardown-abort triage — collapse back to one line
+        # once green): surface the pytest exit code plus the phase markers
+        # written by tests/conftest.py, then propagate the real exit code.
+        run: |
+          set +e
+          uv run pytest -q -m "not slow and not soak and not benchmark and not live and not gpu" --cov=src --cov-report=term-missing --durations=20
+          CODE=$?
+          echo "PYTEST_EXIT=$CODE"
+          cat /tmp/pytest-phase.log || true
+          exit $CODE
       - name: Alembic upgrade head (empty→latest)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap

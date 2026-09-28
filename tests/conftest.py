@@ -13,6 +13,7 @@ Goals:
 
 from __future__ import annotations
 
+import atexit as _atexit_for_phase
 import os
 from collections.abc import AsyncIterator, Callable, Iterator
 
@@ -29,6 +30,21 @@ from ibvap.models import Base
 # the authenticated path); headerless clients must get 401 (see
 # test_evidence_traversal_ssrf.py parametrized 401 test).
 TEST_API_TOKEN = "ibvap-test-token-task1-p0"
+
+
+def _phase_mark(msg: str) -> None:
+    """DIAGNOSTIC (CI teardown-abort triage — remove once green): append a
+    phase marker to a file (pytest captures stdout/stderr, a file survives)."""
+    try:
+        import tempfile
+
+        with open(f"{tempfile.gettempdir()}/pytest-phase.log", "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass
+
+
+_atexit_for_phase.register(_phase_mark, "ATEXIT")
 
 
 @pytest.fixture(autouse=True)
@@ -121,15 +137,20 @@ def _orderly_native_teardown() -> Iterator[None]:
     purpose: the asyncio runner is function-scoped, so a session async
     fixture is a ScopeMismatch.
     """
+    _phase_mark("SESSION READY")
     yield
+    _phase_mark("TEARDOWN START")
     from ibvap.core import evidence as _evidence
 
     _evidence.shutdown_evidence_executor()
+    _phase_mark("EVIDENCE SHUTDOWN DONE")
     import asyncio
     import gc
 
     asyncio.run(dispose_engine())
+    _phase_mark("ENGINE DISPOSED")
     gc.collect()
+    _phase_mark("TEARDOWN DONE")
 
 
 @pytest.fixture(scope="session")
