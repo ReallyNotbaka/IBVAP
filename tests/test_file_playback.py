@@ -278,13 +278,13 @@ def test_seek_while_paused_is_preserved(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "Seek camera",
-            "site_id": "00000000-0000-0000-0000-000000000009",
+            "site_id": "00000000-0000-4000-8000-000000000009",
             "source_type": "video_footage",
             "endpoint": "tests/fixtures/test_upload_face.mp4",
             "protocol": "file",
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 201, resp.text
     cam_id = resp.json()["id"]
     try:
         assert wait_until(lambda: C._PLAYBACK.get(cam_id, {}).get("position_seconds", 0) > 0.5, timeout_s=5.0)

@@ -169,7 +169,7 @@ cd ..
 
 ```bash
 # Terminal 1: Start Backend API (port 8000)
-uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000 --reload
+uv run uvicorn ibvap.api.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
 
 # Terminal 2: Start Frontend Dev Server (port 5173)
 cd frontend
@@ -189,7 +189,7 @@ npm run build
 cd ..
 
 # Run the unified server (FastAPI serves static frontend from dist/)
-uv run uvicorn ibvap.api.app:app --host 0.0.0.0 --port 8000
+uv run uvicorn ibvap.api.app:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
 ---

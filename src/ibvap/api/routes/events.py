@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ibvap.api.auth import require_api_token
 from ibvap.events.outbox import clear_events, list_events, list_outbox
@@ -37,19 +37,27 @@ _WATCHLIST_TABS = {"watchlist", "watchlist_matches", "watchlist matches"}
 _INTRUSION_TABS = {"intrusions", "intrusion"}
 _EXIT_TABS = {"exits", "exit"}
 _SYSTEM_TABS = {"system", "sys"}
+# Task 5: every accepted tab value (422 on anything else — never silently dump).
+_VALID_TABS = _WATCHLIST_TABS | _INTRUSION_TABS | _EXIT_TABS | _SYSTEM_TABS | {"all"}
 
 
-@router.get("", response_model=list[dict[str, Any]])
+@router.get("", response_model=dict[str, Any])
 async def get_events(
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     tab: str | None = Query(None, description="Category tab: all, watchlist, intrusions, exits, system"),
     camera_id: str | None = Query(None),
     event_type: str | None = Query(None),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
+    tab_clean = tab.lower().strip() if tab else None
+    if tab_clean and tab_clean not in _VALID_TABS:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_tab", "message": f"Unknown events tab: {tab!r}"},
+        )
     raw = list_events()
     # Hoist filter keys out of the loop (avoids per-event lower()/strip()).
     event_type_lower = event_type.lower() if event_type else None
-    tab_clean = tab.lower().strip() if tab else None
     want_watchlist = tab_clean in _WATCHLIST_TABS if tab_clean else False
     want_intrusion = tab_clean in _INTRUSION_TABS if tab_clean else False
     want_exit = tab_clean in _EXIT_TABS if tab_clean else False
@@ -79,7 +87,9 @@ async def get_events(
         matches.append(ev)
 
     matches.sort(key=lambda ev: _parse_timestamp(ev.get("created_at")), reverse=True)
-    return matches[:limit]
+    total = len(matches)
+    # Task 5: bounded page (OOM-safe on large fleets) + total for UI paging.
+    return {"items": matches[offset : offset + limit], "total": total, "limit": limit, "offset": offset}
 
 
 @router.delete("", response_model=dict[str, Any])

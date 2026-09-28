@@ -121,21 +121,24 @@ def test_anpr_and_watchlist_endpoints():
             "vehicle_description": "White Mahindra Scorpio",
         },
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     data = resp.json()
     assert data["status"] == "enrolled"
     assert data["target_type"] == "plate"
     assert data["plate_number"] == "HR26DK8888"
+    assert resp.headers["location"] == f"/api/v1/watchlist/{data['entry_id']}"
 
     # Check that GET /api/v1/watchlist lists this entry
     wl_resp = client.get("/api/v1/watchlist")
     assert wl_resp.status_code == 200
-    entries = wl_resp.json()["entries"]
+    entries = wl_resp.json()["items"]
     plate_entries = [e for e in entries if e.get("target_type") == "plate"]
     assert len(plate_entries) >= 1
     assert any(e["name"] == "BOLO White Scorpio" for e in plate_entries)
 
-    # Check GET /api/v1/anpr/sightings
+    # Check GET /api/v1/anpr/sightings (uniform paginated envelope)
     sightings_resp = client.get("/api/v1/anpr/sightings")
     assert sightings_resp.status_code == 200
-    assert isinstance(sightings_resp.json(), list)
+    body = sightings_resp.json()
+    assert set(body) >= {"items", "total", "limit", "offset"}
+    assert isinstance(body["items"], list)

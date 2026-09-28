@@ -11,7 +11,7 @@ from typing import Any
 import cv2
 import numpy as np
 import structlog
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel
 
 from ibvap.api.auth import require_api_token
@@ -61,7 +61,11 @@ class WatchlistSummaryItem(BaseModel):
 
 
 class WatchlistResponse(BaseModel):
-    entries: list[WatchlistSummaryItem]
+    # Task 5 fix-round 1: uniform paginated envelope key `items` (was `entries`).
+    items: list[WatchlistSummaryItem]
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
 
 
 class PlateEnrollRequest(BaseModel):
@@ -74,7 +78,10 @@ class PlateEnrollRequest(BaseModel):
 
 
 @router.get("", response_model=WatchlistResponse)
-def list_watchlist() -> WatchlistResponse:
+def list_watchlist(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> WatchlistResponse:
     store = get_watchlist_store()
     items = []
     for e in store.list_entries():
@@ -94,21 +101,23 @@ def list_watchlist() -> WatchlistResponse:
                 vehicle_description=e.vehicle_description,
             )
         )
-    return WatchlistResponse(entries=items)
+    # Task 5: bounded page (OOM-safe) + total; uniform `items` envelope key.
+    total = len(items)
+    return WatchlistResponse(items=items[offset : offset + limit], total=total, limit=limit, offset=offset)
 
 
-@router.post("/enroll-plate")
-def enroll_plate(req: PlateEnrollRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+@router.post("/enroll-plate", status_code=201)
+def enroll_plate(req: PlateEnrollRequest, response: Response, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     name = req.name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Target name cannot be empty")
+        raise HTTPException(status_code=400, detail={"code": "empty_name", "message": "Target name cannot be empty"})
     raw_plate = req.plate_number.strip()
     if not raw_plate:
-        raise HTTPException(status_code=400, detail="License plate cannot be empty")
+        raise HTTPException(status_code=400, detail={"code": "empty_plate", "message": "License plate cannot be empty"})
 
     norm_plate = normalize_plate_string(raw_plate)
     if len(norm_plate) < 3:
-        raise HTTPException(status_code=400, detail="Plate must have at least 3 alphanumeric characters")
+        raise HTTPException(status_code=400, detail={"code": "plate_too_short", "message": "Plate must have at least 3 alphanumeric characters"})
 
     try:
         threat = ThreatLevel(req.threat_level.upper())
@@ -130,6 +139,7 @@ def enroll_plate(req: PlateEnrollRequest, _auth: bool = Depends(require_api_toke
     )
     store.add_entry(entry)
     logger.info("enrolled_plate_target", entry_id=entry_id, plate=norm_plate, name=name)
+    response.headers["Location"] = f"/api/v1/watchlist/{entry_id}"
     return {
         "status": "enrolled",
         "entry_id": entry_id,
@@ -140,8 +150,9 @@ def enroll_plate(req: PlateEnrollRequest, _auth: bool = Depends(require_api_toke
     }
 
 
-@router.post("/enroll")
+@router.post("/enroll", status_code=201)
 async def enroll_suspect(
+    response: Response,
     name: str = Form(...),
     threat_level: str = Form("HIGH"),
     notes: str = Form(""),
@@ -149,13 +160,13 @@ async def enroll_suspect(
     _auth: bool = Depends(require_api_token),
 ) -> dict[str, Any]:
     if not photos:
-        raise HTTPException(status_code=400, detail="At least one photo is required for biometric enrollment")
+        raise HTTPException(status_code=400, detail={"code": "photo_required", "message": "At least one photo is required for biometric enrollment"})
     if len(photos) > 5:
-        raise HTTPException(status_code=400, detail="Maximum 5 photos allowed per suspect")
+        raise HTTPException(status_code=400, detail={"code": "too_many_photos", "message": "Maximum 5 photos allowed per suspect"})
 
     name = name.strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Name cannot be empty")
+        raise HTTPException(status_code=400, detail={"code": "empty_name", "message": "Name cannot be empty"})
 
     try:
         level = ThreatLevel(threat_level.upper())
@@ -241,7 +252,7 @@ async def enroll_suspect(
 
     if not gallery:
         msg = "No suitable faces found for enrollment. " + "; ".join(rejection_reasons)
-        raise HTTPException(status_code=400, detail=msg)
+        raise HTTPException(status_code=400, detail={"code": "no_face_detected", "message": msg})
 
     suspect_id = f"suspect-{uuid.uuid4().hex[:8]}"
     entry = WatchlistEntry(
@@ -255,6 +266,7 @@ async def enroll_suspect(
     )
     get_watchlist_store().add_entry(entry)
 
+    response.headers["Location"] = f"/api/v1/watchlist/{suspect_id}"
     return {
         "status": "enrolled",
         "entry": {
@@ -274,5 +286,5 @@ def delete_suspect(entry_id: str, _auth: bool = Depends(require_api_token)) -> d
     store = get_watchlist_store()
     removed = store.remove_entry(entry_id)
     if not removed:
-        raise HTTPException(status_code=404, detail=f"Suspect with ID '{entry_id}' not found")
+        raise HTTPException(status_code=404, detail={"code": "suspect_not_found", "message": f"Suspect with ID '{entry_id}' not found"})
     return {"status": "removed", "id": entry_id}

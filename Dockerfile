@@ -34,4 +34,4 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src" PYTHONDONTWRITEBYTECODE=1 
 USER ibvap
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --retries=10 CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=2).read() else 1)"
-CMD ["uvicorn", "ibvap.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "ibvap.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

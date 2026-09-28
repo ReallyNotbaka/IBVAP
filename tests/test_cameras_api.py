@@ -116,14 +116,14 @@ def test_create_and_list_cameras(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "Entrance phone",
-            "site_id": "00000000-0000-0000-0000-000000000001",
+            "site_id": "00000000-0000-4000-8000-000000000001",
             "source_type": "smartphone_ip_webcam",
             "endpoint": "synthetic://entrance",
             "protocol": "http",
             "site_cidr_allowlist": ["10.0.0.0/8"],
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 201, resp.text
     cam = resp.json()
     assert cam["name"] == "Entrance phone"
     assert cam["observed_state"] == "STREAMING"
@@ -131,11 +131,12 @@ def test_create_and_list_cameras(api_client: TestClient) -> None:
     assert "password" not in str(cam).lower()
     assert cam["endpoint"] == "synthetic://entrance"
 
-    # list
+    # list (Task 5 paginated envelope)
     resp = c.get("/api/v1/cameras")
     assert resp.status_code == 200
-    lst = resp.json()
-    assert any(x["id"] == cam["id"] for x in lst)
+    body = resp.json()
+    assert set(body) >= {"items", "total"}
+    assert any(x["id"] == cam["id"] for x in body["items"])
 
 
 def test_camera_fence_is_validated_and_saved(api_client: TestClient) -> None:
@@ -144,7 +145,7 @@ def test_camera_fence_is_validated_and_saved(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "Fence camera",
-            "site_id": "00000000-0000-0000-0000-000000000001",
+            "site_id": "00000000-0000-4000-8000-000000000001",
             "source_type": "smartphone_ip_webcam",
             "endpoint": "synthetic://fence",
             "protocol": "http",
@@ -166,7 +167,7 @@ def test_camera_line_fence_and_deletion(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "Line tripwire camera",
-            "site_id": "00000000-0000-0000-0000-000000000001",
+            "site_id": "00000000-0000-4000-8000-000000000001",
             "source_type": "smartphone_ip_webcam",
             "endpoint": "synthetic://tripwire",
             "protocol": "http",
@@ -224,7 +225,7 @@ def test_disable_and_reconnect(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "Road-facing phone",
-            "site_id": "00000000-0000-0000-0000-000000000002",
+            "site_id": "00000000-0000-4000-8000-000000000002",
             "source_type": "smartphone_ip_webcam",
             "endpoint": "synthetic://road",
             "protocol": "http",
@@ -253,7 +254,7 @@ def test_create_rejects_credential_in_url(api_client: TestClient) -> None:
         "/api/v1/cameras",
         json={
             "name": "bad",
-            "site_id": "00000000-0000-0000-0000-000000000003",
+            "site_id": "00000000-0000-4000-8000-000000000003",
             "endpoint": "http://user:pass@192.168.1.10/video",
             "protocol": "http",
             "username": "user",
@@ -269,7 +270,7 @@ def test_create_rejects_private_endpoint_without_allowlist(api_client: TestClien
         "/api/v1/cameras",
         json={
             "name": "private-no-allowlist",
-            "site_id": "00000000-0000-0000-0000-000000000004",
+            "site_id": "00000000-0000-4000-8000-000000000004",
             "endpoint": "http://192.168.1.10:8080/video",
             "protocol": "http",
         },
@@ -355,7 +356,7 @@ def test_create_with_credentials_but_no_key_rejected(api_client: TestClient, mon
         "/api/v1/cameras",
         json={
             "name": "authed",
-            "site_id": "00000000-0000-0000-0000-000000000006",
+            "site_id": "00000000-0000-4000-8000-000000000006",
             "endpoint": "synthetic://authed",
             "protocol": "http",
             "username": "admin",
@@ -371,13 +372,13 @@ def _create_file_camera(c: TestClient, name: str) -> str:
         "/api/v1/cameras",
         json={
             "name": name,
-            "site_id": "00000000-0000-0000-0000-000000000007",
+            "site_id": "00000000-0000-4000-8000-000000000007",
             "source_type": "video_footage",
             "endpoint": "tests/fixtures/test_upload_face.mp4",
             "protocol": "file",
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 201, resp.text
     return resp.json()["id"]
 
 
@@ -490,3 +491,49 @@ def test_clean_file_path_edge_cases() -> None:
     assert _clean_file_path("file://localhost/C:/video.mp4") == "C:/video.mp4"
     assert _clean_file_path("file://C:/video.mp4") == "C:/video.mp4"
     assert _clean_file_path("file:\\\\\\C:\\video.mp4") == "C:\\video.mp4"
+
+
+def test_cameras_list_paginated_envelope(api_client: TestClient) -> None:
+    """Task 5 contract: paginated envelope {items, total, limit, offset}."""
+    r = api_client.get("/api/v1/cameras?limit=10&offset=0")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) >= {"items", "total"}
+    assert body["limit"] == 10
+    assert body["offset"] == 0
+    assert isinstance(body["items"], list)
+    assert body["total"] >= len(body["items"])
+
+
+def test_create_camera_returns_201_with_location(api_client: TestClient) -> None:
+    """Task 5 contract: creates return 201 + Location."""
+    r = api_client.post(
+        "/api/v1/cameras",
+        json={
+            "name": "Contract 201 camera",
+            "site_id": "00000000-0000-4000-8000-000000000021",
+            "source_type": "smartphone_ip_webcam",
+            "endpoint": "synthetic://contract-201",
+            "protocol": "http",
+        },
+    )
+    assert r.status_code == 201, r.text
+    cam = r.json()
+    assert cam["name"] == "Contract 201 camera"
+    assert r.headers["location"] == f"/api/v1/cameras/{cam['id']}"
+    api_client.delete(f"/api/v1/cameras/{cam['id']}")
+
+
+def test_create_camera_rejects_non_uuid_site_id(api_client: TestClient) -> None:
+    """Task 5 contract: site_id is a UUID4 — garbage gets a 422."""
+    r = api_client.post(
+        "/api/v1/cameras",
+        json={
+            "name": "Bad site camera",
+            "site_id": "not-a-uuid",
+            "source_type": "smartphone_ip_webcam",
+            "endpoint": "synthetic://bad-site",
+            "protocol": "http",
+        },
+    )
+    assert r.status_code == 422

@@ -52,11 +52,15 @@ class HomographyProjector:
         if len(image_points) < 4 or len(ground_points) < 4:
             raise ValueError("At least 4 correspondence points are required for planar homography")
 
-        src = np.array(image_points[:4], dtype=np.float32)
-        dst = np.array(ground_points[:4], dtype=np.float32)
-        h_matrix, _ = cv2.findHomography(src, dst)
+        src = np.array(image_points, dtype=np.float32)
+        dst = np.array(ground_points, dtype=np.float32)
+        # Task 5 (RANSAC-side): robust estimation over all 4-8 correspondences.
+        # With exactly 4 points RANSAC coincides with the direct solution.
+        h_matrix, mask = cv2.findHomography(src, dst, cv2.RANSAC, 5.0)
         if h_matrix is None:
             raise ValueError("Failed to compute valid homography matrix from points")
+        if mask is not None and int(mask.sum()) < 4:
+            raise ValueError("Calibration points are degenerate: fewer than 4 inliers")
 
         return cls(camera_id=camera_id, homography_matrix=h_matrix, azimuth_deg=azimuth_deg)
 

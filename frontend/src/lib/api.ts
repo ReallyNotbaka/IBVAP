@@ -490,6 +490,8 @@ export async function fetchWatchlist(): Promise<WatchlistEntry[]> {
   if (!r.ok) throw new Error(`watchlist ${r.status}`);
   const data = await r.json();
   if (Array.isArray(data)) return data;
+  // Uniform Task 5 envelope uses `items`; accept legacy `entries` too.
+  if (Array.isArray(data?.items)) return data.items;
   return Array.isArray(data?.entries) ? data.entries : [];
 }
 
@@ -532,7 +534,10 @@ export async function fetchPlateSightings(params?: {
   if (params?.limit) q.set("limit", String(params.limit));
   const r = await fetch(base(`/api/v1/anpr/sightings?${q.toString()}`));
   if (!r.ok) throw new Error(`sightings ${r.status}`);
-  return await r.json();
+  const data = await r.json();
+  // Uniform Task 5 envelope {items, total, limit, offset}; accept bare list too.
+  if (Array.isArray(data)) return data;
+  return Array.isArray(data?.items) ? data.items : [];
 }
 
 export async function deleteSuspect(id: string): Promise<void> {

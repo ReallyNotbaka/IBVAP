@@ -122,11 +122,11 @@ def test_video_footage_can_be_tested_and_saved(api_client: TestClient, tmp_path)
         "/api/v1/cameras",
         json={
             "name": "Uploaded footage",
-            "site_id": "00000000-0000-0000-0000-000000000005",
+            "site_id": "00000000-0000-4000-8000-000000000005",
             "source_type": "video_footage",
             "endpoint": str(video_path),
             "protocol": "file",
         },
     )
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 201, resp.text
     assert resp.json()["source_type"] == "video_footage"

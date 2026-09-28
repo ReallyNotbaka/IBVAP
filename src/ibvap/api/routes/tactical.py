@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
 
 from ibvap.api.auth import require_api_token
 from ibvap.core.handover import SubjectDossier, get_handover_engine
@@ -23,9 +23,21 @@ router = APIRouter(prefix="/api/v1/tactical", tags=["tactical"])
 
 class RadarCalibrationRequest(BaseModel):
     camera_id: str
-    image_points: list[list[float]] = Field(description="4 normalized [u, v] coordinates", min_length=4)
-    ground_points: list[list[float]] = Field(description="4 ground [X, Y] coordinates in meters", min_length=4)
-    azimuth_deg: float = 0.0
+    image_points: list[list[FiniteFloat]] = Field(description="4-8 normalized [u, v] coordinates", min_length=4, max_length=8)
+    ground_points: list[list[FiniteFloat]] = Field(description="4-8 ground [X, Y] coordinates in meters", min_length=4, max_length=8)
+    azimuth_deg: FiniteFloat = 0.0
+
+    @model_validator(mode="after")
+    def _check_point_counts(self) -> RadarCalibrationRequest:
+        # Task 5 (RANSAC-side): reject mismatched/degenerate correspondence
+        # sets with a 422 before they reach the estimator.
+        if len(self.image_points) != len(self.ground_points):
+            raise ValueError("image_points and ground_points must have the same length")
+        for pts in (self.image_points, self.ground_points):
+            for pt in pts:
+                if len(pt) != 2:
+                    raise ValueError("each calibration point must be an [x, y] pair")
+        return self
 
 
 class RadarResponse(BaseModel):
@@ -69,7 +81,7 @@ async def get_tactical_radar() -> RadarResponse:
 async def calibrate_radar(req: RadarCalibrationRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     """Calibrate planar homography projection for a camera using 4 ground correspondences."""
     if req.camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
 
     try:
         projector = HomographyProjector.from_calibration_points(
@@ -81,7 +93,7 @@ async def calibrate_radar(req: RadarCalibrationRequest, _auth: bool = Depends(re
         set_camera_projector(projector)
         return {"status": "calibrated", "camera_id": req.camera_id}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail={"code": "calibration_failed", "message": str(exc)}) from exc
 
 
 @router.get("/sitrep", response_model=MilitarySitrep)
@@ -109,5 +121,5 @@ async def get_target_dossier(dossier_id: str) -> SubjectDossier:
     engine = get_handover_engine()
     dossier = engine.dossiers.get(dossier_id)
     if not dossier:
-        raise HTTPException(status_code=404, detail="Dossier not found")
+        raise HTTPException(status_code=404, detail={"code": "dossier_not_found", "message": "Dossier not found"})
     return dossier

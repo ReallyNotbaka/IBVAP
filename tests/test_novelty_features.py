@@ -265,6 +265,43 @@ def test_tactical_api_endpoints(api_client: TestClient):
     assert single_dos.json()["dossier_id"] == dos_id
 
 
+def test_radar_calibration_validators_reject_bad_payloads(api_client: TestClient):
+    """Task 5 contract: radar validators 422 (mismatched counts, >8 points,
+    non-finite floats) before anything reaches the estimator."""
+    base = {
+        "camera_id": "cam-radar-1",
+        "image_points": [[0.1, 0.9], [0.9, 0.9], [0.2, 0.3], [0.8, 0.3]],
+        "ground_points": [[-10.0, 2.0], [10.0, 2.0], [-10.0, 30.0], [10.0, 30.0]],
+        "azimuth_deg": 180.0,
+    }
+
+    # mismatched correspondence counts
+    bad_counts = dict(base, ground_points=base["ground_points"][:3])
+    r = api_client.post("/api/v1/tactical/radar/calibrate", json=bad_counts)
+    assert r.status_code == 422, r.text
+
+    # more than 8 correspondences
+    many = [[0.1 * i, 0.1 * i] for i in range(9)]
+    bad_many = dict(base, image_points=many, ground_points=[[float(i), float(i)] for i in range(9)])
+    r = api_client.post("/api/v1/tactical/radar/calibrate", json=bad_many)
+    assert r.status_code == 422, r.text
+
+    # non-finite coordinate (FiniteFloat) — sent as raw JSON since the
+    # client-side encoder rejects inf before it reaches the server.
+    # Task 5 fix-round 1: must be a 422 with {code,message}, never a 500.
+    import json as _json
+
+    raw = _json.dumps(base, allow_nan=True)
+    raw = raw.replace("0.1, 0.9", "Infinity, 0.9", 1)
+    r = api_client.post(
+        "/api/v1/tactical/radar/calibrate",
+        content=raw,
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "validation_error"
+
+
 def test_handover_engine_eviction_without_key_error():
     """Verify that HandoverEngine cleans up reverse mappings when evicting stale dossiers."""
     engine = HandoverEngine(max_dossiers=5)

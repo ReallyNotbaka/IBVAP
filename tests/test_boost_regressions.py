@@ -186,7 +186,7 @@ def test_bug_6_outside_jail_file_endpoint_rejected_by_api(api_client: object) ->
             "/api/v1/cameras",
             json={
                 "name": "Outside jail cam",
-                "site_id": "00000000-0000-0000-0000-000000000001",
+                "site_id": "00000000-0000-4000-8000-000000000001",
                 "source_type": "video_footage",
                 "endpoint": str(p),
                 "protocol": "file",

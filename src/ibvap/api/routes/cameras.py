@@ -16,13 +16,13 @@ from typing import Any, Literal
 
 import av
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, UUID4
 
 from ibvap.api.auth import require_api_token
 from ibvap.core.camera_state import CameraState, CameraStateMachine
-from ibvap.core.credentials import encrypt_secret, redact_url
+from ibvap.core.credentials import decrypt_secret, encrypt_secret, redact_url
 from ibvap.core.geometry import validate_fence
 from ibvap.core.jail import (
     _cached_jail_roots,  # noqa: F401
@@ -84,21 +84,21 @@ logger = structlog.get_logger(__name__)
 
 class CameraCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    site_id: str
+    site_id: UUID4
     source_type: Literal["smartphone_ip_webcam", "ip_camera", "video_footage"] = "smartphone_ip_webcam"
-    endpoint: str = Field(description="Stream URL without credentials, or a local video path")
+    endpoint: str = Field(min_length=1, max_length=2048, description="Stream URL without credentials, or a local video path")
     protocol: Literal["rtsp", "rtsps", "http", "https", "mjpeg", "hls", "whip", "file"] = "http"
-    username: str | None = None
-    password: str | None = None
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=1024)
     site_cidr_allowlist: list[str] | None = None
     temporary: bool = False
 
 
 class CameraTestRequest(BaseModel):
-    endpoint: str
+    endpoint: str = Field(min_length=1, max_length=2048)
     protocol: Literal["rtsp", "rtsps", "http", "https", "mjpeg", "hls", "whip", "file"] | None = None
-    username: str | None = None
-    password: str | None = None
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=1024)
     site_cidr_allowlist: list[str] | None = None
 
 
@@ -339,8 +339,8 @@ async def test_unsaved(req: CameraTestRequest, _auth: bool = Depends(require_api
     return await asyncio.to_thread(_run_test_stages, req)
 
 
-@router.post("", response_model=dict[str, Any])
-async def create_camera(req: CameraCreate, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+@router.post("", response_model=dict[str, Any], status_code=201)
+async def create_camera(req: CameraCreate, response: Response, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     req.endpoint = req.endpoint.strip().strip('"').strip("'")
     if _is_file_endpoint(req.endpoint, req.protocol):
         req.protocol = "file"
@@ -369,7 +369,7 @@ async def create_camera(req: CameraCreate, _auth: bool = Depends(require_api_tok
             if not is_synthetic:
                 parsed = validate_endpoint(req.endpoint, policy)
                 if (req.username or req.password) and "@" in req.endpoint:
-                    raise HTTPException(status_code=400, detail="Credentials must not be in URL")
+                    raise HTTPException(status_code=400, detail={"code": "credential_in_url", "message": "Credentials must not be in URL"})
                 if parsed.hostname:
                     await asyncio.to_thread(resolve_and_validate, parsed.hostname, policy, 3.0)
         except SSRFError as e:
@@ -393,7 +393,7 @@ async def create_camera(req: CameraCreate, _auth: bool = Depends(require_api_tok
     data = {
         "id": cam_id,
         "name": req.name,
-        "site_id": req.site_id,
+        "site_id": str(req.site_id),
         "source_type": req.source_type,
         "endpoint": str(endpoint_value) if file_endpoint else endpoint_redacted,
         "protocol": req.protocol,
@@ -423,26 +423,34 @@ async def create_camera(req: CameraCreate, _auth: bool = Depends(require_api_tok
         asyncio.create_task(save_camera_to_db(data))
     except Exception as e:
         logger.debug("save_camera_db_trigger_error", error=str(e))
+    # Task 5: creates return 201 + Location of the new resource.
+    response.headers["Location"] = f"/api/v1/cameras/{cam_id}"
     return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
-@router.get("", response_model=list[dict[str, Any]])
-async def list_cameras() -> list[dict[str, Any]]:
-    return [{k: v for k, v in cam.items() if not k.startswith("_")} for cam in _CAMERAS.values()]
+@router.get("", response_model=dict[str, Any])
+async def list_cameras(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    cams = [{k: v for k, v in cam.items() if not k.startswith("_")} for cam in _CAMERAS.values()]
+    total = len(cams)
+    # Task 5: bounded page (OOM-safe on large fleets) + total for UI paging.
+    return {"items": cams[offset : offset + limit], "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/{camera_id}", response_model=dict[str, Any])
 async def get_camera(camera_id: str) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     return {k: v for k, v in cam.items() if not k.startswith("_")}
 
 
 @router.get("/{camera_id}/stream")
 async def camera_stream(camera_id: str) -> StreamingResponse:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
 
     loop = asyncio.get_running_loop()
     frame_event = asyncio.Event()
@@ -508,7 +516,7 @@ async def camera_stream(camera_id: str) -> StreamingResponse:
 @router.get("/{camera_id}/observations", response_model=dict[str, Any])
 async def camera_observations(camera_id: str) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     return _OBSERVATIONS.get(
         camera_id,
         {
@@ -526,7 +534,7 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
 @router.put("/{camera_id}/fence", response_model=dict[str, Any])
 async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
 
     if not req.polygon and not req.line:
         _CAMERAS[camera_id]["fence"] = None
@@ -550,10 +558,10 @@ async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool 
 
     error = validate_fence(points, fence_type=effective_type)
     if error:
-        raise HTTPException(status_code=422, detail=error)
+        raise HTTPException(status_code=422, detail={"code": "invalid_fence", "message": error})
 
     if any(not (0.0 <= point[0] <= 1.0 and 0.0 <= point[1] <= 1.0) for point in points):
-        raise HTTPException(status_code=422, detail="Fence points must be normalized between 0 and 1")
+        raise HTTPException(status_code=422, detail={"code": "invalid_fence", "message": "Fence points must be normalized between 0 and 1"})
 
     zone_name = "User line tripwire" if effective_type == "line" else "User fence"
     zone = Zone(
@@ -586,7 +594,7 @@ async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool 
 @router.delete("/{camera_id}/fence", response_model=dict[str, Any])
 async def delete_camera_fence(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     _CAMERAS[camera_id]["fence"] = None
     pipeline = _ACTIVE_PIPELINES.get(camera_id)
     if pipeline is not None:
@@ -605,9 +613,9 @@ async def delete_camera_fence(camera_id: str, _auth: bool = Depends(require_api_
 @router.get("/{camera_id}/playback", response_model=dict[str, Any])
 async def playback_state(camera_id: str) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
     with _PLAYBACK_LOCK:
         return dict(_PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}))
 
@@ -615,9 +623,9 @@ async def playback_state(camera_id: str) -> dict[str, Any]:
 @router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
 async def playback_seek(camera_id: str, req: PlaybackSeekRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
     with _PLAYBACK_LOCK:
         playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
         duration = playback.get("duration_seconds")
@@ -630,9 +638,9 @@ async def playback_seek(camera_id: str, req: PlaybackSeekRequest, _auth: bool = 
 @router.post("/{camera_id}/playback/{action}", response_model=dict[str, Any])
 async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"], _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail="Playback controls are only available for video footage")
+        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
     with _PLAYBACK_LOCK:
         playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
         if action == "pause":
@@ -677,10 +685,25 @@ async def playback_action(camera_id: str, action: Literal["pause", "resume", "st
 async def test_saved(camera_id: str, _auth: bool = Depends(require_api_token)) -> CameraTestResponse:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
+    # Task 5: probe with the stored canonical endpoint PLUS the persisted
+    # _enc credentials — the stored endpoint is redacted (no userinfo/query
+    # secrets), so probing it bare would fail auth on guarded cameras.
+    username: str | None = None
+    password: str | None = None
+    enc = cam.get("_enc") or {}
+    try:
+        if enc.get("username"):
+            username = decrypt_secret(enc["username"])
+        if enc.get("password"):
+            password = decrypt_secret(enc["password"])
+    except Exception as e:
+        logger.warning("test_saved_credential_decrypt_failed", camera_id=camera_id, error=str(e))
     req = CameraTestRequest(
         endpoint=cam["endpoint"],
         protocol=cam.get("protocol"),
+        username=username,
+        password=password,
         site_cidr_allowlist=cam.get("_site_cidr_allowlist"),
     )
     return await asyncio.to_thread(_run_test_stages, req)
@@ -690,7 +713,7 @@ async def test_saved(camera_id: str, _auth: bool = Depends(require_api_token)) -
 async def enable_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     sm = _STATE_MACHINES.get(camera_id)
     if sm and sm.is_disabled():
         sm.transition(CameraState.DRAFT, reason="enable", safe_message="Enabled")
@@ -716,7 +739,7 @@ async def enable_camera(camera_id: str, _auth: bool = Depends(require_api_token)
 async def disable_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     sm = _STATE_MACHINES.get(camera_id)
     if sm:
         sm.disable()
@@ -736,11 +759,11 @@ async def disable_camera(camera_id: str, _auth: bool = Depends(require_api_token
 async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     sm = _STATE_MACHINES.get(camera_id)
     if sm:
         if sm.is_disabled():
-            raise HTTPException(status_code=400, detail="Disabled camera cannot be reconnected")
+            raise HTTPException(status_code=400, detail={"code": "camera_disabled", "message": "Disabled camera cannot be reconnected"})
         try:
             sm.transition(CameraState.RECONNECTING, reason="reconnect", safe_message="Reconnecting")
             sm.transition(CameraState.CONNECTING, reason="connect", safe_message="Connecting")
@@ -748,7 +771,7 @@ async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_tok
             cam["stream_epoch"] = sm.stream_epoch
             cam["observed_state"] = sm.state.value
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            raise HTTPException(status_code=400, detail={"code": "invalid_transition", "message": str(e)}) from e
     _stop_worker(camera_id)
     _start_camera_worker(camera_id)
     return {k: v for k, v in cam.items() if not k.startswith("_")}
@@ -757,7 +780,7 @@ async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_tok
 @router.delete("/{camera_id}", response_model=dict[str, str])
 async def delete_camera(camera_id: str, _auth: bool = Depends(require_api_token)) -> dict[str, str]:
     if camera_id not in _CAMERAS:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     del _CAMERAS[camera_id]
     _stop_worker(camera_id)
     _STATE_MACHINES.pop(camera_id, None)
@@ -788,7 +811,7 @@ async def delete_camera(camera_id: str, _auth: bool = Depends(require_api_token)
 async def camera_health(camera_id: str) -> dict[str, Any]:
     cam = _CAMERAS.get(camera_id)
     if not cam:
-        raise HTTPException(status_code=404, detail="Camera not found")
+        raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     sm = _STATE_MACHINES.get(camera_id)
     samples = _HEALTH.get(camera_id, [])
     now = time.time()

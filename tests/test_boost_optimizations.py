@@ -329,7 +329,7 @@ def test_events_api_early_exit_and_ordering(api_client: TestClient):
 
     resp = api_client.get("/api/v1/events?limit=10")
     assert resp.status_code == 200
-    events = resp.json()
+    events = resp.json()["items"]
     assert len(events) == 10
     # Must be sorted newest-first (index 99 down to 90)
     assert events[0]["dedup_key"] == "opt_99"
@@ -533,7 +533,7 @@ def test_events_api_delayed_buffered_events_do_not_displace_live(api_client: Tes
 
     resp = api_client.get("/api/v1/events?limit=5")
     assert resp.status_code == 200
-    events = resp.json()
+    events = resp.json()["items"]
     assert len(events) == 5
 
     # Top 5 newest MUST be live_9, live_8, live_7, live_6, live_5.

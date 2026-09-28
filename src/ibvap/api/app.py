@@ -6,8 +6,10 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -53,20 +55,42 @@ _TITLE_MAP: dict[int, str] = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    settings = Settings()
-    setup_logging(settings.app.log_level, settings.app.log_dir)
+    # Task 5: honor the injected cfg (placed on app.state by create_app) so
+    # operator/test overrides are respected instead of rebuilt from env.
+    settings = getattr(app.state, "settings", None) or Settings()
     app.state.settings = settings
+    setup_logging(settings.app.log_level, settings.app.log_dir)
     # Warm the shared YOLO session now (~1s model load + first GPU
     # inference): the first camera then connects fast instead of stalling
     # its worker. Blocking IO stays off the event loop.
-    from ibvap.core.dispatcher import load_settings
-    from ibvap.core.model_manager import warmup_shared_detector
-    from ibvap.services.persistence import init_persistence
+    # Task 5: warmup must never take the API down — try/log-continue.
+    try:
+        from ibvap.core.dispatcher import load_settings
+        from ibvap.core.model_manager import warmup_shared_detector
+        from ibvap.services.persistence import init_persistence
 
-    load_settings()
-    await asyncio.to_thread(warmup_shared_detector)
-    await init_persistence(settings)
+        load_settings()
+        await asyncio.to_thread(warmup_shared_detector)
+        await init_persistence(settings)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "startup warmup incomplete; continuing without preloaded state",
+            exc_info=True,
+        )
     yield
+    # Task 5: shutdown cleanup — stop camera workers, then release the DB engine.
+    try:
+        from ibvap.db import dispose_engine
+        from ibvap.services.stream_worker import _CAMERAS, _stop_worker
+
+        for cam_id in list(_CAMERAS):
+            try:
+                _stop_worker(cam_id)
+            except Exception:
+                logging.getLogger(__name__).warning("worker stop failed", extra={"camera_id": cam_id}, exc_info=True)
+        await dispose_engine()
+    except Exception:
+        logging.getLogger(__name__).warning("shutdown cleanup incomplete", exc_info=True)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -99,6 +123,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     # problem-details error envelope
+    # Canonical wire shape for failures: HTTP status + body
+    # {"detail": {"code": "<machine_code>", "message": "<human message>"}}
+    # wrapped in RFC 7807 problem-details (type/title/status/code/correlation_id).
+    def _sanitize_for_json(value: Any) -> Any:
+        # Task 5 fix-round 1: validation errors can carry non-finite floats
+        # (inf/nan inputs) in `input`/`ctx` — stdlib json cannot serialize
+        # those, which turned 422s into 500s. Stringify them instead.
+        if isinstance(value, float):
+            if value != value:
+                return "NaN"
+            if value == float("inf"):
+                return "Infinity"
+            if value == float("-inf"):
+                return "-Infinity"
+            return value
+        if isinstance(value, dict):
+            return {k: _sanitize_for_json(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_sanitize_for_json(v) for v in value]
+        return value
+
     def _http_exception_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail  # type: ignore[attr-defined]
         # derive machine-readable code
@@ -119,6 +164,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:  # type: ignore[no-untyped-def]
         return _http_exception_envelope(request, exc)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_exception(request: Request, exc: RequestValidationError) -> JSONResponse:  # type: ignore[no-untyped-def]
+        # Task 5 fix-round 1: body/query/path validation failures are 422s with
+        # the canonical {"code","message"} detail — never a 500 from unserializable input.
+        raw_errors = exc.errors()
+        errors = _sanitize_for_json(raw_errors)
+        first = raw_errors[0] if raw_errors else {}
+        loc = ".".join(str(p) for p in first.get("loc", ())) if isinstance(first, dict) else ""
+        msg = first.get("msg", "Validation failed") if isinstance(first, dict) else "Validation failed"
+        message = f"{loc}: {msg}" if loc else str(msg)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "type": "about:blank",
+                "title": "Unprocessable Entity",
+                "status": 422,
+                "detail": {"code": "validation_error", "message": message},
+                "code": "validation_error",
+                "errors": errors,
+                "correlation_id": request.headers.get("x-correlation-id", ""),
+            },
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:  # type: ignore[no-untyped-def]
@@ -187,4 +255,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+# Task 5: no import-time create_app() — serve via the factory
+# (uvicorn ibvap.api.app:create_app --factory) so Settings/lang/env are read
+# at serve time, not import time.
