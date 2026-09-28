@@ -82,6 +82,9 @@ jobs:
         # while preserving the real exit code for gating.
         run: |
           set +e
+          # Pytest ran against this database first, so recreate it empty: the
+          # gate must prove empty→latest, not polluted→latest.
+          uv run python -c 'import psycopg; admin = psycopg.connect("host=localhost dbname=postgres user=ibvap password=ibvap", autocommit=True); admin.execute("DROP DATABASE ibvap WITH (FORCE)"); admin.execute("CREATE DATABASE ibvap OWNER ibvap")'
           uv run alembic upgrade head > /tmp/alembic-upgrade.log 2>&1
           CODE=$?
           tail -25 /tmp/alembic-upgrade.log
