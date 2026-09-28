@@ -82,7 +82,9 @@ class Settings(BaseSettings):
             config_path = os.getenv("IBVAP_CONFIG", "config/default.yaml")
         path = Path(config_path)
         if not path.exists():
-            logging.getLogger(__name__).warning("Configuration file not found; using built-in defaults.", extra={"config_path": str(path)})
+            logging.getLogger(__name__).warning(
+                "Configuration file not found; using built-in defaults.", extra={"config_path": str(path)}
+            )
             return cls()
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         return cls.model_validate(data)

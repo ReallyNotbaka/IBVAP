@@ -57,7 +57,9 @@ def test_watchlist_concurrent_no_lost_updates(tmp_path: Path) -> None:
     assert got.sight_count == n_threads * per_thread
 
     reloaded = WatchlistStore(storage_path=tmp_path / "watchlist.json")
-    assert reloaded.get_entry("ABC123").sight_count == n_threads * per_thread
+    reloaded_entry = reloaded.get_entry("ABC123")
+    assert reloaded_entry is not None
+    assert reloaded_entry.sight_count == n_threads * per_thread
 
 
 def test_watchlist_sighting_save_debounced_until_flush(tmp_path: Path) -> None:
@@ -68,14 +70,20 @@ def test_watchlist_sighting_save_debounced_until_flush(tmp_path: Path) -> None:
     """
     store = _contention_store(tmp_path)
     store.flush()
-    assert WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123").sight_count == 0
+    pre = WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123")
+    assert pre is not None
+    assert pre.sight_count == 0
 
     store.record_sighting("ABC123", time.time())
 
-    assert WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123").sight_count == 0
+    mid = WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123")
+    assert mid is not None
+    assert mid.sight_count == 0
 
     store.flush()
-    assert WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123").sight_count == 1
+    debounced = WatchlistStore(storage_path=tmp_path / "watchlist.json").get_entry("ABC123")
+    assert debounced is not None
+    assert debounced.sight_count == 1
 
 
 def test_epoch_bump_clears_latch() -> None:

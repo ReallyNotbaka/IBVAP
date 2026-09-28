@@ -37,6 +37,48 @@ def _test_api_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("IBVAP_API_TOKEN", TEST_API_TOKEN)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_route_state() -> Iterator[None]:
+    """Snapshot/restore shared route globals around each test.
+
+    ``shared_app`` is session-scoped, so the module-global camera registries
+    (``SW._CAMERAS``/``SW._STATE_MACHINES``) and the in-memory outbox globals
+    leak between tests without this guard. Snapshot before, restore after —
+    every test observes the pre-test state and leaves no residue behind.
+    """
+    import copy
+
+    from ibvap.events import outbox as _outbox
+    from ibvap.services import stream_worker as SW
+
+    cameras_snapshot = copy.deepcopy(SW._CAMERAS)
+    machines_snapshot = copy.deepcopy(SW._STATE_MACHINES)
+    with _outbox._LOCK:
+        events_snapshot = copy.deepcopy(_outbox._EVENTS)
+        outbox_snapshot = copy.deepcopy(_outbox._OUTBOX)
+        dedup_event_snapshot = dict(_outbox._DEDUP_EVENT_INDEX)
+        dedup_outbox_snapshot = dict(_outbox._DEDUP_OUTBOX_INDEX)
+        outbox_id_snapshot = dict(_outbox._OUTBOX_ID_INDEX)
+    try:
+        yield
+    finally:
+        SW._CAMERAS.clear()
+        SW._CAMERAS.update(cameras_snapshot)
+        SW._STATE_MACHINES.clear()
+        SW._STATE_MACHINES.update(machines_snapshot)
+        with _outbox._LOCK:
+            _outbox._EVENTS.clear()
+            _outbox._EVENTS.extend(events_snapshot)
+            _outbox._OUTBOX.clear()
+            _outbox._OUTBOX.extend(outbox_snapshot)
+            _outbox._DEDUP_EVENT_INDEX.clear()
+            _outbox._DEDUP_EVENT_INDEX.update(dedup_event_snapshot)
+            _outbox._DEDUP_OUTBOX_INDEX.clear()
+            _outbox._DEDUP_OUTBOX_INDEX.update(dedup_outbox_snapshot)
+            _outbox._OUTBOX_ID_INDEX.clear()
+            _outbox._OUTBOX_ID_INDEX.update(outbox_id_snapshot)
+
+
 @pytest.fixture()
 def auth_headers() -> dict[str, str]:
     """Explicit auth header for tests that build their own TestClient."""

@@ -129,9 +129,14 @@ def get_stream_context(camera_id: str) -> CameraStreamContext | None:
 
 
 def _policy_from_request(allowlist: list[str] | None) -> SSRFPolicy:
-    # Task 3 override semantics: a non-None per-request allowlist REPLACES the
-    # global settings (per-site isolation); None means global. An explicitly
-    # passed list that parses to empty stays empty (deny private, fail-closed).
+    # Trust boundary: an explicitly passed allowlist REPLACES the global
+    # settings (server-trusted per-site isolation; see
+    # test_policy_allowlist_override_isolates_sites). API routes must NEVER pass
+    # caller-supplied CIDRs here — they pass None so only
+    # Settings().media.site_cidr_allowlist can permit private ranges (see
+    # test_private_endpoint_blocked_despite_request_allowlist). None means
+    # global; an explicitly passed list that parses to empty stays empty
+    # (deny private, fail-closed).
     configured = allowlist if allowlist is not None else Settings().media.site_cidr_allowlist
     nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for cidr in configured or []:
@@ -246,12 +251,17 @@ def _notify_stream_subscribers(camera_id: str) -> None:
 
 def _connect_endpoint(cam: dict[str, Any]) -> str:
     endpoint = str(cam["endpoint"])
-    enc = cam.get("_enc") or {}
+    enc: dict[str, Any] = cam.get("_enc") or {}
     if not enc.get("username") and not enc.get("password"):
         return endpoint
     try:
         user = decrypt_secret(enc["username"]) if enc.get("username") else None
-        pw = decrypt_secret(enc.get("password")) if enc.get("password") else None
+        # dict.get types as Any|None; _enc tokens are str — assert to narrow.
+        # A non-str token raises here exactly as decrypt_secret would, into the
+        # same handler below (endpoint without credentials).
+        raw_pw = enc.get("password")
+        assert raw_pw is None or isinstance(raw_pw, str)
+        pw = decrypt_secret(raw_pw) if raw_pw else None
     except Exception as e:
         logger.warning("camera_credential_unavailable", camera_id=cam.get("id"), error=str(e)[:120])
         return endpoint
@@ -453,13 +463,16 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                 plate_detections: list[dict[str, Any]] = []
                 if pipeline.last_detections:
                     vehicle_detections = [
-                        detection for detection in pipeline.last_detections if detection["class_name"] in {"car", "truck", "bus", "motorcycle"}
+                        detection
+                        for detection in pipeline.last_detections
+                        if detection["class_name"] in {"car", "truck", "bus", "motorcycle"}
                     ]
                     ocr_detection_ids = {
                         id(detection)
                         for detection in sorted(
                             vehicle_detections,
-                            key=lambda item: (item["bbox_norm"][2] - item["bbox_norm"][0]) * (item["bbox_norm"][3] - item["bbox_norm"][1]),
+                            key=lambda item: (item["bbox_norm"][2] - item["bbox_norm"][0])
+                            * (item["bbox_norm"][3] - item["bbox_norm"][1]),
                             reverse=True,
                         )[:3]
                     }
@@ -498,8 +511,17 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         else:
                             throttle_key = (0, round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2))
                         ocr_due = time.monotonic() - ocr_last_submitted.get(throttle_key, 0.0) >= 0.6
-                        track_ready = any(track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks)
-                        if run_ocr and track_ready and ocr_due and id(detection) in ocr_detection_ids and len(pending_ocr) < 3 and crop_plate_boxes:
+                        track_ready = any(
+                            track.track_id == vehicle_id and track.hits >= 3 for track in pipeline.last_tracks
+                        )
+                        if (
+                            run_ocr
+                            and track_ready
+                            and ocr_due
+                            and id(detection) in ocr_detection_ids
+                            and len(pending_ocr) < 3
+                            and crop_plate_boxes
+                        ):
                             ocr_last_submitted[throttle_key] = time.monotonic()
                             ocr_future = ocr_executor.submit(
                                 recognize_vehicle,
@@ -521,8 +543,14 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         if vehicle_plate_detections:
                             plate_detections.extend([d for d in vehicle_plate_detections if d.get("text")])
 
-                vehicle_boxes = [d["bbox_norm"] for d in pipeline.last_detections if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}]
-                cache_reused = _select_plate_detections(plate_detections, plate_cache["detections"], plate_cache["at_mono"], time.monotonic(), vehicle_boxes)
+                vehicle_boxes = [
+                    d["bbox_norm"]
+                    for d in pipeline.last_detections
+                    if d.get("class_name") in {"car", "truck", "bus", "motorcycle"}
+                ]
+                cache_reused = _select_plate_detections(
+                    plate_detections, plate_cache["detections"], plate_cache["at_mono"], time.monotonic(), vehicle_boxes
+                )
                 plate_detections = [d for d in cache_reused if d.get("text")]
                 for d in plate_detections:
                     tid = d.get("track_id")
@@ -537,23 +565,28 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         track_plates.pop(tid, None)
 
                 # Persist plates for active vehicle tracks across frames
-                active_plates = [p for p in plate_cache["plates"] if p.get("track_id") in active_tids or not p.get("track_id")]
-                plates_for_obs = [{"text": text, "confidence": 0.90, "track_id": tid} for tid, text in track_plates.items()] or (
-                    active_plates if active_plates else plate_cache["plates"]
-                )
+                active_plates = [
+                    p for p in plate_cache["plates"] if p.get("track_id") in active_tids or not p.get("track_id")
+                ]
+                plates_for_obs = [
+                    {"text": text, "confidence": 0.90, "track_id": tid} for tid, text in track_plates.items()
+                ] or (active_plates if active_plates else plate_cache["plates"])
 
                 now_m = time.monotonic()
                 stale_ocr = [
                     k
                     for k, ts in ocr_last_submitted.items()
-                    if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0) or (not isinstance(k, int) and (now_m - ts) > 5.0)
+                    if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0)
+                    or (not isinstance(k, int) and (now_m - ts) > 5.0)
                 ]
                 for k in stale_ocr:
                     ocr_last_submitted.pop(k, None)
 
                 # Safeguard max capacity on ocr_last_submitted (LRU)
                 if len(ocr_last_submitted) > 512:
-                    oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[: len(ocr_last_submitted) - 512]
+                    oldest_ocr = sorted(ocr_last_submitted.items(), key=lambda item: item[1])[
+                        : len(ocr_last_submitted) - 512
+                    ]
                     for k, _ in oldest_ocr:
                         ocr_last_submitted.pop(k, None)
 
@@ -584,7 +617,10 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                                 bool(getattr(pipeline.zone, "enabled", True))
                                 and pipeline.zone.id != DEFAULT_ZONE.id
                                 and track.class_name in {"person", "car", "truck", "bus", "motorcycle"}
-                                and (track.track_id in getattr(pipeline, "_active_line_intruders", set()) or getattr(track, "is_intrusion", False))
+                                and (
+                                    track.track_id in getattr(pipeline, "_active_line_intruders", set())
+                                    or getattr(track, "is_intrusion", False)
+                                )
                             ),
                         }
                         for track in pipeline.last_tracks
@@ -690,7 +726,11 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                         while not stop.is_set():
                             with _PLAYBACK_LOCK:
                                 playback_state = playback["state"]
-                                seek_to = playback.pop("seek_to", None) if playback_state == "playing" else playback.get("seek_to")
+                                seek_to = (
+                                    playback.pop("seek_to", None)
+                                    if playback_state == "playing"
+                                    else playback.get("seek_to")
+                                )
                             if playback_state == "stopped":
                                 break
                             if playback_state == "paused":
@@ -710,13 +750,21 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                             try:
                                 frame = next(frame_iter)
-                            except (StopIteration, av.error.EOFError):
+                            except (StopIteration, av.error.EOFError):  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
                                 break
+                            # decode() of the video-only stream yields VideoFrames;
+                            # the guard narrows the stub union (Video|Audio|Subtitle).
+                            if not isinstance(frame, av.VideoFrame):
+                                continue
 
                             image = frame.to_ndarray(format="bgr24")
                             h, w = image.shape[:2]
                             if _STREAM_CLIENT_COUNT.get(camera_id, 0) > 0:
-                                preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+                                preview = (
+                                    cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR)
+                                    if w > 1280
+                                    else image
+                                )
                                 ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
                                 if ok:
                                     frame_bytes = encoded.tobytes()
@@ -764,7 +812,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                             elif sleep_time < -0.2:
                                 next_frame_time = now
 
-                    except (av.error.EOFError, av.error.InvalidDataError):
+                    except (av.error.EOFError, av.error.InvalidDataError):  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
                         pass
                     except Exception:
                         decode_errors += 1
@@ -841,8 +889,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     if parsed_endpoint.scheme in ("rtsp", "rtsps"):
         stream_opts["rtsp_transport"] = "tcp"
 
-    cam_allowlist = cam.get("_site_cidr_allowlist")
-    stream_policy = _policy_from_request(cam_allowlist)
+    # Server-owned policy only: the stored per-camera allowlist is
+    # request-originated and must never authorize private ranges.
+    stream_policy = _policy_from_request(None)
     if parsed_endpoint.scheme in ("http", "https") and not stream_policy.allow_redirects:
         stream_opts["follow_redirects"] = "0"
 
@@ -897,7 +946,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                 try:
                     frames = packet.decode()
-                except (av.error.InvalidDataError, av.error.CorruptDataError):
+                except (av.error.InvalidDataError, av.error.CorruptDataError):  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
                     decode_errors += 1
                     continue
                 except Exception:
@@ -912,7 +961,11 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                     if not is_valid_jpeg:
                         if _STREAM_CLIENT_COUNT.get(camera_id, 0) > 0:
-                            preview = cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR) if w > 1280 else image
+                            preview = (
+                                cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR)
+                                if w > 1280
+                                else image
+                            )
                             ok, encoded = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                             if ok:
                                 frame_bytes = encoded.tobytes()
@@ -1027,7 +1080,9 @@ def _start_camera_worker(camera_id: str) -> None:
         _STOPPING_WORKERS.pop(camera_id, None)
 
         stop = threading.Event()
-        worker = threading.Thread(target=_camera_worker, args=(camera_id, stop), daemon=True, name=f"camera-{camera_id[:8]}")
+        worker = threading.Thread(
+            target=_camera_worker, args=(camera_id, stop), daemon=True, name=f"camera-{camera_id[:8]}"
+        )
         _WORKERS[camera_id] = (stop, worker)
         worker.start()
 

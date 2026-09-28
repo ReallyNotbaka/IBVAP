@@ -7,11 +7,25 @@ sends the test token; separate headerless clients prove 401 enforcement.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ibvap.api.app import create_app
+
+# Ledger (Task 6 fix-round 1): when frontend/dist is built in the working tree,
+# the app mounts the SPA fallback at "/" AFTER the API routes, so a request whose
+# path cannot match any single-segment API route (e.g. httpx-decoded "%2F"
+# traversal probes) is served index.html with 200 instead of falling through to
+# Starlette's 404. CI's backend job never builds frontend/dist, so the guard is
+# exercised there. The guard itself is covered by the single-segment 422 tests
+# and unit tests below, which run unconditionally.
+_SPA_FALLBACK_MOUNTED = Path("frontend/dist/index.html").exists()
+_requires_no_spa_fallback = pytest.mark.skipif(
+    _SPA_FALLBACK_MOUNTED,
+    reason="frontend/dist present: SPA fallback serves 200 for unmatched paths; CI (no dist) exercises the guard",
+)
 
 
 @pytest.fixture
@@ -29,6 +43,7 @@ def anon_client() -> TestClient:
     return TestClient(create_app())
 
 
+@_requires_no_spa_fallback
 def test_evidence_traversal_blocked(client: TestClient):
     r = client.get("/api/v1/evidence/..%2F..%2Fetc%2Fpasswd/snapshot")
     assert r.status_code in (404, 422)
@@ -39,16 +54,18 @@ def test_webhook_ssrf_blocked(client: TestClient):
     assert r.status_code == 400
 
 
+@_requires_no_spa_fallback
 def test_evidence_bad_id_rejected_with_422(client: TestClient):
     # Characters outside [A-Za-z0-9_-] must be rejected by validation (422),
     # not treated as a missing file (404-from-missing-file hides the guard).
+    # (Multi-segment probe; single-segment guards run unconditionally below.)
     r = client.get("/api/v1/evidence/..%2Fevil/snapshot")
     assert r.status_code in (404, 422)
     r2 = client.get("/api/v1/evidence/evil!id$/snapshot")
     assert r2.status_code == 422
 
 
-@pytest.mark.parametrize("bad_id", ["evil!id", "a" * 65, "has space", "semi;colon", "evil%21id"])
+@pytest.mark.parametrize("bad_id", ["evil!id", "evil!id$", "a" * 65, "has space", "semi;colon", "evil%21id"])
 def test_evidence_single_segment_bad_id_is_422(client: TestClient, bad_id: str):
     """Fix-round 1: single-segment invalid ids must reach the guard → strict 422."""
     r = client.get(f"/api/v1/evidence/{bad_id}/snapshot")
@@ -100,7 +117,9 @@ def test_mutating_route_requires_token_when_configured(monkeypatch):
     r2 = c.post("/api/v1/system/settings", json={"c2_webhook_enabled": False}, headers={"X-API-Token": "wrong"})
     assert r2.status_code == 401
     # Correct token -> allowed (200; validation of empty URL passes when disabled)
-    r3 = c.post("/api/v1/system/settings", json={"c2_webhook_enabled": False}, headers={"X-API-Token": "test-secret-token"})
+    r3 = c.post(
+        "/api/v1/system/settings", json={"c2_webhook_enabled": False}, headers={"X-API-Token": "test-secret-token"}
+    )
     assert r3.status_code == 200
     # Bearer form also accepted
     r4 = c.post(

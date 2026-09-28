@@ -257,7 +257,10 @@ class ModelDownloadManager:
         last_calc_bytes = 0
 
         try:
-            async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client, client.stream("GET", download_url) as response:
+            async with (
+                httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client,
+                client.stream("GET", download_url) as response,
+            ):
                 if response.status_code != 200:
                     raise RuntimeError(f"HTTP {response.status_code} from download server")
 

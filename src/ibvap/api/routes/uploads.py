@@ -8,6 +8,7 @@ import hashlib
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import av
 import structlog
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/api/v1/uploads", tags=["uploads"])
 
 logger = structlog.get_logger(__name__)
 
-_UPLOADS: dict[str, dict[str, object]] = {}
+_UPLOADS: dict[str, dict[str, Any]] = {}
 UPLOAD_RETENTION_SECONDS = 24 * 60 * 60
 UPLOAD_ROOTS = (Path("data/uploads"), Path("data/quarantine"))
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB streaming chunks (no unbounded read)
@@ -143,7 +144,9 @@ async def create_upload(file: UploadFile = File(...), _auth: bool = Depends(requ
         "path": str(qpath),
         "created_at": time.time(),
     }
-    return UploadCreateResponse(upload_id=upload_id, filename=file.filename, size=total, sha256=sha, status="quarantined")
+    return UploadCreateResponse(
+        upload_id=upload_id, filename=file.filename, size=total, sha256=sha, status="quarantined"
+    )
 
 
 def _public_upload_payload(data: dict[str, object]) -> dict[str, object]:
@@ -299,7 +302,13 @@ async def analyze_upload(
                 "frames_skipped": pipeline.frames_skipped,
                 "last_detections": pipeline.last_detections,
                 "last_tracks": [
-                    {"track_id": t.track_id, "class_name": t.class_name, "confidence": t.confidence, "bbox_norm": t.bbox_norm} for t in pipeline.last_tracks
+                    {
+                        "track_id": t.track_id,
+                        "class_name": t.class_name,
+                        "confidence": t.confidence,
+                        "bbox_norm": t.bbox_norm,
+                    }
+                    for t in pipeline.last_tracks
                 ],
                 "last_faces": pipeline.last_faces,
                 "events": events[:20],

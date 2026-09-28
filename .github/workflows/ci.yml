@@ -3,6 +3,9 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  schedule:
+    - cron: "0 2 * * *" # nightly slow suite (UTC)
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref — faster CI queue, less runner waste.
 concurrency:
@@ -40,23 +43,51 @@ jobs:
         run: uv run ruff format --check .
       - name: Ruff lint
         run: uv run ruff check .
-      - name: Pyright strict
+      - name: Pyright (basic gate)
         run: uv run pyright
-      - name: Pytest
+      - name: Pytest (fast gate)
         env:
           IBVAP_DB__URL: postgresql+asyncpg://ibvap:ibvap@localhost:5432/ibvap
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
-        run: uv run pytest -q --cov=src --cov-report=term-missing --durations=20
+        run: uv run pytest -q -m "not slow and not soak and not benchmark and not live and not gpu" --cov=src --cov-report=term-missing --durations=20
       - name: Alembic upgrade head (empty→latest)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
         run: uv run alembic upgrade head
-      - name: Alembic downgrade → upgrade
+      - name: Alembic downgrade → upgrade (strict)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
         run: |
-          uv run alembic downgrade -1 || uv run alembic downgrade base
+          uv run alembic downgrade -1
           uv run alembic upgrade head
+
+  slow:
+    name: slow (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Fast gate stays green on every push/PR; the heavy suite runs nightly or
+    # on manual dispatch only. No postgres service: the slow/live/gpu
+    # selection uses sqlite, mock servers, and cached model weights.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Sync (frozen)
+        run: uv sync --frozen --group dev
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: models/
+          key: models-${{ hashFiles('models/*.onnx') }}
+          restore-keys: |
+            models-
+      - name: Pytest (slow/live/gpu suite)
+        run: uv run pytest -q -m "slow or soak or benchmark or live or gpu" --durations=20
 
   frontend:
     runs-on: ubuntu-latest

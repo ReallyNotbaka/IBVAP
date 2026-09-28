@@ -58,7 +58,9 @@ def test_ip_webcam_uses_mjpeg_demuxer(monkeypatch: Any) -> None:
         ("http://192.168.1.10:8080/video", {"blocked"}, "blocked_private"),
     ],
 )
-def test_unsaved_test_blocks_unsafe_endpoints(api_client: TestClient, endpoint: str, expected_result: set[str], expected_reason: str) -> None:
+def test_unsaved_test_blocks_unsafe_endpoints(
+    api_client: TestClient, endpoint: str, expected_result: set[str], expected_reason: str
+) -> None:
     resp = api_client.post(
         "/api/v1/cameras/test",
         json={"endpoint": endpoint, "protocol": "http"},
@@ -423,7 +425,7 @@ def test_release_pipeline_only_pops_own() -> None:
     """A dying worker must never pull the pipeline out from under its replacement."""
     from ibvap.api.routes import cameras as C
 
-    sentinel = object()
+    sentinel: Any = object()
     C._ACTIVE_PIPELINES["cid-x"] = sentinel
     try:
         C._release_pipeline("cid-x", object())

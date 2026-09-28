@@ -1,5 +1,14 @@
+"""ONNX detector tests — split mock (fast) vs real (slow).
+
+Fast tests use ``mock_session_detector`` (no weights on disk, mocked session)
+for parsing/NMS/geometry logic. Tests marked ``slow`` use the session-scoped
+``shared_onnx_detector`` and run real inference against models/yolo26n.onnx;
+they run in the nightly slow job, not the fast gate.
+"""
+
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -15,6 +24,28 @@ from ibvap.core.pipeline import MiniPipeline
 from ibvap.events.outbox import clear_all, list_events
 
 
+@pytest.fixture()
+def mock_session_detector() -> ONNXDetectorProvider:
+    """ONNXDetectorProvider with a mocked session — loads no model weights.
+
+    Parsing/NMS/geometry unit tests use this and stay in the fast gate; only
+    ``slow``-marked tests touch the real models/yolo26n.onnx weights.
+    """
+    detector = object.__new__(ONNXDetectorProvider)
+    detector._model_path = "models/yolo26n.onnx"
+    detector._conf_threshold = 0.48
+    detector._iou_threshold = 0.45
+    detector._input_size = 640
+    detector._model_id = "yolo26n"
+    detector._local = threading.local()
+    detector._inference_lock = threading.Lock()
+    detector._session = MagicMock()
+    detector._runtime = "cpu"
+    detector._input_name = "images"
+    detector._output_name = "output0"
+    return detector
+
+
 @pytest.mark.slow
 def test_onnx_detector_initialization_and_properties(shared_onnx_detector: ONNXDetectorProvider) -> None:
     detector = shared_onnx_detector
@@ -23,6 +54,7 @@ def test_onnx_detector_initialization_and_properties(shared_onnx_detector: ONNXD
     assert detector.runtime in ("directml", "cpu")
 
 
+@pytest.mark.slow
 def test_onnx_detector_blank_frame_returns_empty(shared_onnx_detector: ONNXDetectorProvider) -> None:
     detector = shared_onnx_detector
     blank = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -31,6 +63,7 @@ def test_onnx_detector_blank_frame_returns_empty(shared_onnx_detector: ONNXDetec
     assert len(dets) == 0
 
 
+@pytest.mark.slow
 def test_onnx_detector_empty_frame_handling(shared_onnx_detector: ONNXDetectorProvider) -> None:
     detector = shared_onnx_detector
     empty = np.zeros((0, 0, 3), dtype=np.uint8)
@@ -38,8 +71,8 @@ def test_onnx_detector_empty_frame_handling(shared_onnx_detector: ONNXDetectorPr
     assert dets == []
 
 
-def test_onnx_detector_preprocessing_letterbox(shared_onnx_detector: ONNXDetectorProvider) -> None:
-    detector = shared_onnx_detector
+def test_onnx_detector_preprocessing_letterbox(mock_session_detector: ONNXDetectorProvider) -> None:
+    detector = mock_session_detector
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     blob, scale, pad_x, pad_y = detector._preprocess(frame)
 
@@ -53,9 +86,9 @@ def test_onnx_detector_preprocessing_letterbox(shared_onnx_detector: ONNXDetecto
 
 
 def test_onnx_detector_simulated_detections_and_coordinate_bounds(
-    shared_onnx_detector: ONNXDetectorProvider,
+    mock_session_detector: ONNXDetectorProvider,
 ) -> None:
-    detector = shared_onnx_detector
+    detector = mock_session_detector
 
     # Create mock session output to verify parsing, NMS, and coordinate normalization
     # Shape: (1, 84, 8400)
@@ -107,6 +140,7 @@ def test_onnx_detector_simulated_detections_and_coordinate_bounds(
         detector._session.run = orig_run
 
 
+@pytest.mark.slow
 def test_pipeline_with_onnx_detector() -> None:
     clear_all()
     # MiniPipeline should default to ONNXDetectorProvider when models/yolo26n.onnx exists
@@ -136,10 +170,10 @@ def test_pipeline_explicit_detector_injection() -> None:
 
 
 def test_onnx_detector_class_aware_nms_preserves_colocated_classes(
-    shared_onnx_detector: ONNXDetectorProvider,
+    mock_session_detector: ONNXDetectorProvider,
 ) -> None:
     """Class-aware NMS must preserve co-located person and vehicle without inter-class suppression."""
-    detector = shared_onnx_detector
+    detector = mock_session_detector
 
     # Mock output with:
     # 1. Person at cx=320, cy=320, w=100, h=200, conf=0.92
@@ -175,10 +209,10 @@ def test_onnx_detector_class_aware_nms_preserves_colocated_classes(
 
 
 def test_onnx_detector_preprocessing_aspect_ratios_buffer_reuse(
-    shared_onnx_detector: ONNXDetectorProvider,
+    mock_session_detector: ONNXDetectorProvider,
 ) -> None:
     """Reusable canvas buffer must handle dynamic aspect ratios and frame sizes seamlessly."""
-    detector = shared_onnx_detector
+    detector = mock_session_detector
 
     # 1. 1080p landscape
     frame_1080 = np.ones((1080, 1920, 3), dtype=np.uint8) * 50

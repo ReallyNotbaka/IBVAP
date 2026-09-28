@@ -13,7 +13,7 @@ import contextlib
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -32,6 +32,9 @@ from ibvap.core.tracker import CentroidTracker, Track
 from ibvap.core.watchlist import get_watchlist_store
 from ibvap.core.zone_engine import DEFAULT_ZONE, Zone, is_intrusion
 from ibvap.events.outbox import transactional_write
+
+if TYPE_CHECKING:
+    from ibvap.core.model_manager import ThreadSafeDetectorHandle
 
 
 def _attach_frame_evidence(event: dict[str, Any], frame: np.ndarray | None, bbox_norm: Any = None) -> None:
@@ -73,7 +76,7 @@ class MiniPipeline:
         camera_id: str,
         stream_epoch: int = 0,
         detector: DetectorProvider | None = None,
-        detector_handle: object | None = None,
+        detector_handle: ThreadSafeDetectorHandle | None = None,
         face_detector: object | None = None,
         face_recognizer: object | None = None,
         enable_face: bool = True,
@@ -112,7 +115,9 @@ class MiniPipeline:
         self._unseen_streak: dict[int, int] = {}
         self._line_miss_count: dict[int, int] = {}
         self._last_intrusion_alert_time: dict[tuple[str, int], float] = {}
-        self._last_exit_alert_time: dict[int, float] = {}
+        # Keys are (zone_id, track_id); zone_id is str, except the global-FOV
+        # slot which uses -1 (hence str | int first element).
+        self._last_exit_alert_time: dict[tuple[str | int, int], float] = {}
         self.last_detections: list[dict] = []
         self.last_tracks: list = []
         # --- face optimisation ---
@@ -135,7 +140,11 @@ class MiniPipeline:
 
     def _ensure_face_models(self) -> None:
         """Construct YuNet/SFace on first use. Reuses Zoo weights, no downloads."""
-        if self.face_detector is None and _FaceDetectorType is not None and Path("models/face_detection_yunet_2023mar.onnx").exists():
+        if (
+            self.face_detector is None
+            and _FaceDetectorType is not None
+            and Path("models/face_detection_yunet_2023mar.onnx").exists()
+        ):
             try:
                 self.face_detector = _FaceDetectorType()  # type: ignore[operator]
             except Exception:
@@ -242,7 +251,11 @@ class MiniPipeline:
         }
         if last_outside:
             rule_name = "tripwire_line_exit" if is_line_zone else "restricted_zone_exit"
-            observed = f"track {track_id} exited line perimeter" if is_line_zone else f"track {track_id} exited restricted zone"
+            observed = (
+                f"track {track_id} exited line perimeter"
+                if is_line_zone
+                else f"track {track_id} exited restricted zone"
+            )
             threshold = "outside line perimeter" if is_line_zone else "outside restricted zone"
             return {
                 **base,
@@ -306,7 +319,9 @@ class MiniPipeline:
         # Retain previous faces across stride-skipped frames to avoid flicker; only update on sampled face frames
         new_faces_detected = False
         # Check if persons are in scene (either freshly detected or actively tracked)
-        has_persons = any(d.get("class_name") == "person" for d in det_dicts) or any(t.class_name == "person" for t in self.last_tracks)
+        has_persons = any(d.get("class_name") == "person" for d in det_dicts) or any(
+            t.class_name == "person" for t in self.last_tracks
+        )
         if self.enable_face and (self.face_detector is None or self.face_recognizer is None):
             self._ensure_face_models()
         if self.enable_face and self.face_detector is not None:
@@ -419,8 +434,9 @@ class MiniPipeline:
                     raw_f = face_info.get("_raw")
                     if raw_f is not None and getattr(getattr(raw_f, "quality", None), "passed", True):
                         target_track.last_bio_frame = self.frame_idx
-                        aligned = self.face_recognizer.align_crop(crop_frame, raw_f)
-                        feat = self.face_recognizer.extract_feature(aligned).flatten()
+                        # Duck-typed recognizer (FaceRecognizer or test double sharing its protocol).
+                        aligned = self.face_recognizer.align_crop(crop_frame, raw_f)  # pyright: ignore[reportAttributeAccessIssue]
+                        feat = self.face_recognizer.extract_feature(aligned).flatten()  # pyright: ignore[reportAttributeAccessIssue]
                         match = wl_store.identify(feat)
                         if match is not None:
                             confirmed = target_track.record_biometric_match(
@@ -432,7 +448,11 @@ class MiniPipeline:
                             )
                             # Only credit the sighting if the track is locked
                             # to this entry_id (protects against A-locked/B-match).
-                            if confirmed and target_track.identity and target_track.identity.get("entry_id") == match.entry_id:
+                            if (
+                                confirmed
+                                and target_track.identity
+                                and target_track.identity.get("entry_id") == match.entry_id
+                            ):
                                 wl_store.record_sighting(match.entry_id, time.time())
             except Exception:
                 pass
@@ -446,11 +466,16 @@ class MiniPipeline:
                     prev = seen_wl[eid]
                     prev_locked = getattr(prev, "identity_locked", False)
                     curr_locked = getattr(trk, "identity_locked", False)
-                    prev_crit = (getattr(prev, "identity", None) or {}).get("threat_level") == "CRITICAL"
-                    curr_crit = (getattr(trk, "identity", None) or {}).get("threat_level") == "CRITICAL"
-                    prev_score = float(prev.identity.get("score", 0.0))
+                    prev_ident = getattr(prev, "identity", None) or {}
+                    curr_ident = getattr(trk, "identity", None) or {}
+                    prev_crit = prev_ident.get("threat_level") == "CRITICAL"
+                    curr_crit = curr_ident.get("threat_level") == "CRITICAL"
+                    # prev may have been nulled by an earlier pair resolution (see below).
+                    prev_score = float((prev.identity or {}).get("score", 0.0))
                     curr_score = float(trk.identity.get("score", 0.0))
-                    if (curr_locked and not prev_locked) or (curr_locked == prev_locked and (curr_crit and not prev_crit or curr_score > prev_score)):
+                    if (curr_locked and not prev_locked) or (
+                        curr_locked == prev_locked and (curr_crit and not prev_crit or curr_score > prev_score)
+                    ):
                         prev.identity = None
                         prev.identity_locked = False
                         self.watchlist_alerted_tracks.discard(prev.track_id)
@@ -501,7 +526,10 @@ class MiniPipeline:
                         "model_id": model_id,
                     }
                     _attach_frame_evidence(event, frame, trk.bbox_norm)
-                    transactional_write(event, dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}")
+                    transactional_write(
+                        event,
+                        dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}",
+                    )
                     self.events_created += 1
                     if primary_event is None:
                         primary_event = event
@@ -539,7 +567,11 @@ class MiniPipeline:
                     self._last_intrusion_alert_time[(zone_id, trk.track_id)] = now_ts
                     dedup = f"{camera_id}:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}"
                     rule_name = "tripwire_line_crossing" if is_line else "restricted_zone_intrusion"
-                    observed_desc = f"track {trk.track_id} crossed perimeter line" if is_line else f"track {trk.track_id} footpoint inside polygon"
+                    observed_desc = (
+                        f"track {trk.track_id} crossed perimeter line"
+                        if is_line
+                        else f"track {trk.track_id} footpoint inside polygon"
+                    )
                     threshold_desc = "perimeter line crossed" if is_line else "inside restricted zone"
                     event = {
                         "camera_id": camera_id,
@@ -577,7 +609,11 @@ class MiniPipeline:
                             dedup = f"{camera_id}:{zone_id}:exit:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}"
                             is_line = is_line_zone
                             rule_name = "tripwire_line_exit" if is_line else "restricted_zone_exit"
-                            observed_desc = f"track {trk.track_id} exited line perimeter" if is_line else f"track {trk.track_id} exited restricted zone"
+                            observed_desc = (
+                                f"track {trk.track_id} exited line perimeter"
+                                if is_line
+                                else f"track {trk.track_id} exited restricted zone"
+                            )
                             threshold_desc = "outside line perimeter" if is_line else "outside restricted zone"
                             ev_exit = {
                                 "camera_id": camera_id,
@@ -637,14 +673,20 @@ class MiniPipeline:
             )
             if ev_end is None:
                 continue
-            transactional_write(ev_end, dedup_key=f"{camera_id}:{zone_id}:exit:{tid}:{stream_epoch}:{int(now_ts // 10)}")
+            transactional_write(
+                ev_end, dedup_key=f"{camera_id}:{zone_id}:exit:{tid}:{stream_epoch}:{int(now_ts // 10)}"
+            )
             self.events_created += 1
             if primary_event is None:
                 primary_event = ev_end
 
         # 2. Target entered FOV (only for tracks with confidence >= 0.48 not already reported as zone intrusions)
         for entry in new_entries:
-            if entry.class_name in intrusion_classes and entry.track_id not in intrusion_track_ids and entry.confidence >= 0.48:
+            if (
+                entry.class_name in intrusion_classes
+                and entry.track_id not in intrusion_track_ids
+                and entry.confidence >= 0.48
+            ):
                 dedup = f"{camera_id}:entered:{entry.track_id}:{stream_epoch}"
                 ev_enter = {
                     "camera_id": camera_id,
@@ -664,7 +706,8 @@ class MiniPipeline:
                 }
                 transactional_write(ev_enter, dedup_key=dedup)
                 self.events_created += 1
-        # 3. Watchlist Suspect Identified (tactical alert when track is locked to a suspect or critical target identified)
+        # 3. Watchlist Suspect Identified (tactical alert when track is locked
+        # to a suspect or a critical target is identified)
         for trk in tracks:
             _ident = trk.identity
             _tier = _ident.get("tier") if _ident else None
@@ -675,6 +718,8 @@ class MiniPipeline:
             should_alert = (is_locked or (is_critical and _tier == "RED")) and _ident
             if should_alert and trk.track_id not in self.watchlist_alerted_tracks:
                 self.watchlist_alerted_tracks.add(trk.track_id)
+                # should_alert is truthy only when trk.identity is truthy (see above).
+                assert trk.identity is not None
                 ident = trk.identity
                 dedup = f"{camera_id}:watchlist:{ident['entry_id']}:{trk.track_id}:{stream_epoch}"
                 ev_watchlist = {
@@ -728,7 +773,10 @@ class MiniPipeline:
                     now_ts=now_ts,
                 )
                 if ev_end is not None:
-                    transactional_write(ev_end, dedup_key=f"{camera_id}:{zone_id}:exit:{term.track_id}:{stream_epoch}:{int(now_ts // 10)}")
+                    transactional_write(
+                        ev_end,
+                        dedup_key=f"{camera_id}:{zone_id}:exit:{term.track_id}:{stream_epoch}:{int(now_ts // 10)}",
+                    )
                     self.events_created += 1
                     if primary_event is None:
                         primary_event = ev_end
@@ -776,14 +824,16 @@ class MiniPipeline:
 
         Optimisations applied:
         - PyAV demux/decode with time_base provenance (ADR-0002) instead of sole VideoCapture
-        - sample_stride: analyse every Nth decoded frame (default instance sample_stride, e.g. 3 => 10 FPS from 30 FPS source)
+        - sample_stride: analyse every Nth decoded frame (default instance sample_stride,
+          e.g. 3 => 10 FPS from 30 FPS source)
           Saves YOLO ~13ms + tracking per skipped frame. For uploads 5 FPS cadence recommended (stride 6).
         - face_stride: run YuNet only every M analysed frames (default 3 => face 3.3 FPS when sample_stride=3)
           Saves ~8ms per non-face frame. Total uploaded pipeline ~22ms -> ~8ms on skipped-face frames.
         - max_face_size downscale keeps YuNet bounded (docs/benchmarks 7.88ms @640x480).
         - bounded queues still enforced so memory-bound under flood.
 
-        Returns list of events; side-effects: self.last_detections / last_tracks / last_faces are set to last analysed frame.
+        Returns list of events; side-effects: self.last_detections / last_tracks /
+        last_faces are set to last analysed frame.
         """
         # Allow per-call override without mutating permanently? We mutate for simplicity but restore after.
         orig_sample_stride = self.sample_stride
@@ -826,7 +876,9 @@ class MiniPipeline:
                                 break
                             decoded += 1
                             try:
-                                arr = frame.to_ndarray(format="bgr24")
+                                # decode() of the video-only stream yields VideoFrames;
+                                # the stub union (Video|Audio|Subtitle) needs narrowing help.
+                                arr = frame.to_ndarray(format="bgr24")  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue]
                             except Exception:
                                 continue
                             before_idx = self.frame_idx
@@ -856,7 +908,8 @@ class MiniPipeline:
                     decoded += 1
                     ev = self.process_frame(frame)
                     # process_frame increments frame_idx internally; we count analysed only when not skipped
-                    # If sample_stride>1, some frames are early-returned and n should not advance? We advance n only for analysed frames.
+                    # If sample_stride>1, some frames are early-returned and n should not advance?
+                    # We advance n only for analysed frames.
                     # Use frame_idx stride to decide: only count if detector ran
                     if self.sample_stride == 1 or ((self.frame_idx - 1) % self.sample_stride == 0):
                         n += 1

@@ -72,7 +72,7 @@ class Track:
         - Sets identity immediately so UI displays target name and red box from frame 1.
         Returns True if identity is confirmed and locked.
         """
-        tl_str = threat_level.value if hasattr(threat_level, "value") else str(threat_level).upper()
+        tl_str = threat_level.value if isinstance(threat_level, ThreatLevel) else str(threat_level).upper()
         match_info = {
             "entry_id": entry_id,
             "name": name,
@@ -158,7 +158,9 @@ class Track:
         # Non-critical suspect confirmed on 2 of 3 RED matches
         if red_count >= 2:
             self.identity_locked = True
-            prev_score = self.identity["score"] if (self.identity and self.identity.get("entry_id") == entry_id) else score
+            prev_score = (
+                self.identity["score"] if (self.identity and self.identity.get("entry_id") == entry_id) else score
+            )
             self.identity = {
                 "entry_id": entry_id,
                 "name": name,
@@ -265,7 +267,9 @@ class CentroidTracker:
         self.tracks.clear()
         self._next_id = 1
 
-    def update(self, detections: list[dict[str, Any]], timestamp: float) -> tuple[list[Track], list[Track], list[Track]]:
+    def update(
+        self, detections: list[dict[str, Any]], timestamp: float
+    ) -> tuple[list[Track], list[Track], list[Track]]:
         """Update with detections. Returns (all_tracks, new_entries, terminated).
 
         detections: list of {bbox_norm, class_name, class_id, confidence, synthetic?}
@@ -285,7 +289,8 @@ class CentroidTracker:
             trk.is_intrusion = False
         track_items = list(self.tracks.items())
         track_centers: list[tuple[int, Track, float, float]] = [
-            (tid, trk, (trk.bbox_norm[0] + trk.bbox_norm[2]) / 2.0, (trk.bbox_norm[1] + trk.bbox_norm[3]) / 2.0) for tid, trk in track_items
+            (tid, trk, (trk.bbox_norm[0] + trk.bbox_norm[2]) / 2.0, (trk.bbox_norm[1] + trk.bbox_norm[3]) / 2.0)
+            for tid, trk in track_items
         ]
 
         # Sanitize incoming detection bounding boxes
@@ -444,7 +449,9 @@ class CentroidTracker:
                 containment = inter / min(area_b, area_t)
 
                 if tid in matched:
-                    if (trk.class_name == det_class and (iou > 0.85 or containment > 0.90)) or (trk.class_name != det_class and iou > 0.60):
+                    if (trk.class_name == det_class and (iou > 0.85 or containment > 0.90)) or (
+                        trk.class_name != det_class and iou > 0.60
+                    ):
                         is_dup = True
                         break
                 else:
@@ -457,7 +464,9 @@ class CentroidTracker:
 
             if overlapping_unmatched_tid is not None:
                 trk = self.tracks[overlapping_unmatched_tid]
-                has_person_identity = trk.class_name == "person" and (getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False))
+                has_person_identity = trk.class_name == "person" and (
+                    getattr(trk, "identity", None) is not None or getattr(trk, "identity_locked", False)
+                )
                 if conf > trk.confidence and not (has_person_identity and det["class_name"] != "person"):
                     trk.class_name = det["class_name"]
                     trk.class_id = int(det["class_id"])
@@ -504,7 +513,9 @@ class CentroidTracker:
                     ix2, iy2 = min(bbox[2], t.bbox_norm[2]), min(bbox[3], t.bbox_norm[3])
                     inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
                     containment = inter / min(area_b, area_t)
-                    if (t.class_name == det_class and (iou > 0.85 or containment > 0.90)) or (t.class_name != det_class and iou > 0.60):
+                    if (t.class_name == det_class and (iou > 0.85 or containment > 0.90)) or (
+                        t.class_name != det_class and iou > 0.60
+                    ):
                         duplicate_active = True
                         break
             if duplicate_active:
@@ -550,9 +561,12 @@ class CentroidTracker:
                     curr_active = trk.age == 0
                     prev_locked = getattr(prev, "identity_locked", False)
                     curr_locked = getattr(trk, "identity_locked", False)
-                    prev_crit = (getattr(prev, "identity", None) or {}).get("threat_level") == "CRITICAL"
-                    curr_crit = (getattr(trk, "identity", None) or {}).get("threat_level") == "CRITICAL"
-                    prev_score = float(prev.identity.get("score", 0.0))
+                    prev_ident = getattr(prev, "identity", None) or {}
+                    curr_ident = getattr(trk, "identity", None) or {}
+                    prev_crit = prev_ident.get("threat_level") == "CRITICAL"
+                    curr_crit = curr_ident.get("threat_level") == "CRITICAL"
+                    # prev may have been nulled by an earlier pair resolution (see below).
+                    prev_score = float((prev.identity or {}).get("score", 0.0))
                     curr_score = float(trk.identity.get("score", 0.0))
 
                     if curr_locked and not prev_locked:

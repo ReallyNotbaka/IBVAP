@@ -23,8 +23,12 @@ router = APIRouter(prefix="/api/v1/tactical", tags=["tactical"])
 
 class RadarCalibrationRequest(BaseModel):
     camera_id: str
-    image_points: list[list[FiniteFloat]] = Field(description="4-8 normalized [u, v] coordinates", min_length=4, max_length=8)
-    ground_points: list[list[FiniteFloat]] = Field(description="4-8 ground [X, Y] coordinates in meters", min_length=4, max_length=8)
+    image_points: list[list[FiniteFloat]] = Field(
+        description="4-8 normalized [u, v] coordinates", min_length=4, max_length=8
+    )
+    ground_points: list[list[FiniteFloat]] = Field(
+        description="4-8 ground [X, Y] coordinates in meters", min_length=4, max_length=8
+    )
     azimuth_deg: FiniteFloat = 0.0
 
     @model_validator(mode="after")

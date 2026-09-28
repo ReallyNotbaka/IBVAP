@@ -84,7 +84,9 @@ def test_file_playback_native_fps_and_continuous_looping() -> None:
     worker.join(timeout=2.0)
 
     total_decoded = _FRAME_VERSIONS.get(cam_id, 0)
-    assert total_decoded >= baseline + 21, f"Expected full 20-frame pass + loop post-warmup, got {total_decoded - baseline}"
+    assert total_decoded >= baseline + 21, (
+        f"Expected full 20-frame pass + loop post-warmup, got {total_decoded - baseline}"
+    )
     assert _CAMERAS[cam_id]["observed_state"] == "STREAMING"
 
     obs = _OBSERVATIONS.get(cam_id, {})
@@ -129,7 +131,9 @@ def test_decoupled_analysis_does_not_block_decode_loop() -> None:
 
     total_decoded = _FRAME_VERSIONS.get(cam_id, 0)
     # At 10 FPS, 2 seconds should yield ~14-20 frames
-    assert total_decoded >= baseline + 14, f"Decode loop fell behind: got {total_decoded - baseline} frames in 2s post-warmup"
+    assert total_decoded >= baseline + 14, (
+        f"Decode loop fell behind: got {total_decoded - baseline} frames in 2s post-warmup"
+    )
     assert _CAMERAS[cam_id]["observed_state"] == "STREAMING"
 
 
@@ -206,7 +210,9 @@ def test_critical_target_in_file_footage_observations() -> None:
         worker.start()
 
         # Wait for observations to populate (was a fixed 1.0s sleep).
-        wait_until(lambda: all(k in _OBSERVATIONS.get(cam_id, {}) for k in ("tracks", "detections", "faces")), timeout_s=2.0)
+        wait_until(
+            lambda: all(k in _OBSERVATIONS.get(cam_id, {}) for k in ("tracks", "detections", "faces")), timeout_s=2.0
+        )
         stop.set()
         worker.join(timeout=2.0)
 

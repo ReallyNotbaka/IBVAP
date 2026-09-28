@@ -117,7 +117,9 @@ def activate_model(payload: ActivateModelRequest, _auth: bool = Depends(require_
 
 
 @router.post("/download")
-async def start_model_download(payload: DownloadModelRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+async def start_model_download(
+    payload: DownloadModelRequest, _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     model_name = payload.model_name
     meta = YOLO_MODELS_MANIFEST.get(model_name)
     if not meta:

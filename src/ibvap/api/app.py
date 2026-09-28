@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -146,8 +146,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _http_exception_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail  # type: ignore[attr-defined]
-        # derive machine-readable code
-        code = str(detail["code"]) if isinstance(detail, dict) and "code" in detail else _CODE_MAP.get(exc.status_code, f"http_{exc.status_code}")  # type: ignore[attr-defined]
+        # derive machine-readable code (detail is typed str|None upstream but
+        # routes raise dicts; cast after the isinstance check, no runtime effect)
+        code = (
+            str(cast("dict[str, Any]", detail)["code"])
+            if isinstance(detail, dict) and "code" in detail
+            else _CODE_MAP.get(exc.status_code, f"http_{exc.status_code}")
+        )  # type: ignore[attr-defined]
         title = _TITLE_MAP.get(exc.status_code, f"HTTP {exc.status_code}")  # type: ignore[attr-defined]
         return JSONResponse(
             status_code=exc.status_code,  # type: ignore[attr-defined]
@@ -220,7 +225,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # optional frontend mount - existence checked at runtime (Phase 7 will always mount)
     try:
         from pathlib import Path
-        from typing import Any
 
         from fastapi.staticfiles import StaticFiles
         from starlette.exceptions import HTTPException
@@ -250,7 +254,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # mount after API routes so /api/* takes precedence
             app.mount("/", SPAStaticFiles(directory=str(dist), html=True), name="frontend")
     except Exception:
-        logging.getLogger(__name__).warning("Frontend assets were not mounted; build output is missing or invalid.", exc_info=True)
+        logging.getLogger(__name__).warning(
+            "Frontend assets were not mounted; build output is missing or invalid.", exc_info=True
+        )
 
     return app
 

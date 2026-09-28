@@ -19,7 +19,7 @@ def _real_mp4_bytes() -> bytes:
 
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "clip.mp4"
-        writer = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
+        writer = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))  # pyright: ignore[reportAttributeAccessIssue] # absent from cv2 stubs
         frame = np.zeros((64, 64, 3), dtype=np.uint8)
         writer.write(frame)
         writer.write(frame)
@@ -106,7 +106,7 @@ def test_upload_rejects_html_masquerading_as_mp4(api_client: TestClient) -> None
 def test_video_footage_can_be_tested_and_saved(api_client: TestClient, tmp_path) -> None:
     c = api_client
     video_path = tmp_path / "test-footage.mp4"
-    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
+    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))  # pyright: ignore[reportAttributeAccessIssue] # absent from cv2 stubs
     assert writer.isOpened()
     frame = 255 * __import__("numpy").ones((64, 64, 3), dtype="uint8")
     writer.write(frame)

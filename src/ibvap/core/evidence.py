@@ -240,7 +240,9 @@ def submit_frame_evidence(
     except Exception:
         return None, None
     try:
-        future: Future[None] = _EVIDENCE_EXECUTOR.submit(_evidence_worker_job, event_id, payload, bbox_norm, str(out_dir))
+        future: Future[None] = _EVIDENCE_EXECUTOR.submit(
+            _evidence_worker_job, event_id, payload, bbox_norm, str(out_dir)
+        )
     except RuntimeError:
         # Executor shutting down (interpreter exit racing a late alert):
         # best-effort synchronous save instead of raising on the hot path.

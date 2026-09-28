@@ -218,7 +218,9 @@ def _defer_mirror(session: AsyncSession, event: dict[str, Any], key: str | None,
     from sqlalchemy import event as sa_event
 
     sync_session = session.sync_session
-    sync_session.info.setdefault(_PENDING_MIRRORS_KEY, []).append({"event": event, "key": key, "topics": (topic,), "entry_id": entry_id})
+    sync_session.info.setdefault(_PENDING_MIRRORS_KEY, []).append(
+        {"event": event, "key": key, "topics": (topic,), "entry_id": entry_id}
+    )
     if not sync_session.info.get(_MIRROR_LISTENERS_ARMED_KEY):
         sa_event.listen(sync_session, "after_commit", _drain_pending_mirrors, once=True)
         sa_event.listen(sync_session, "after_soft_rollback", _discard_pending_mirrors, once=True)

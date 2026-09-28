@@ -51,7 +51,9 @@ def _orient(a: tuple[float, float], b: tuple[float, float], c: tuple[float, floa
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
 
-def intersect(p1: tuple[float, float], p2: tuple[float, float], q1: tuple[float, float], q2: tuple[float, float]) -> bool:
+def intersect(
+    p1: tuple[float, float], p2: tuple[float, float], q1: tuple[float, float], q2: tuple[float, float]
+) -> bool:
     # Module-level _orient avoids allocating a nested closure on every call
     # (hot: line-tripwire checks run per track per frame, plus trajectory scan).
     o1 = _orient(p1, p2, q1)
@@ -82,7 +84,9 @@ def point_to_segment_distance(px: float, py: float, ax: float, ay: float, bx: fl
     return math.hypot(px - proj_x, py - proj_y)
 
 
-def segment_intersects_bbox(ax: float, ay: float, bx: float, by: float, bbox: tuple[float, float, float, float]) -> bool:
+def segment_intersects_bbox(
+    ax: float, ay: float, bx: float, by: float, bbox: tuple[float, float, float, float]
+) -> bool:
     """True if segment AB touches or crosses the normalized bounding box (x1, y1, x2, y2)."""
     x1, y1, x2, y2 = bbox
     # Check if either endpoint is inside bbox

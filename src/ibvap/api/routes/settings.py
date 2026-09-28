@@ -96,5 +96,10 @@ async def test_c2_webhook(body: WebhookTestRequest, _auth: bool = Depends(requir
         return await test_webhook_connection(body.url)
     except SSRFError as e:
         if e.code in ("dns_failed", "unreachable"):
-            return {"success": False, "status_code": 0, "elapsed_ms": 0.0, "message": f"Connection failed: {e.safe_message}"}
+            return {
+                "success": False,
+                "status_code": 0,
+                "elapsed_ms": 0.0,
+                "message": f"Connection failed: {e.safe_message}",
+            }
         raise HTTPException(status_code=400, detail=f"Webhook URL blocked ({e.code}): {e.safe_message}") from e

@@ -38,7 +38,9 @@ _CONTROL_PLANE_NETS = [
 ]
 
 # Camera-relevant ports allowed by default; override via SSRFPolicy.allowed_ports.
-_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset({80, 443, 554, 8554, 4747, 8080, 8000, 8081, 8082, 8008, 8888, 5544, 7070, 7447, 9997, 1935})
+_DEFAULT_ALLOWED_PORTS: frozenset[int] = frozenset(
+    {80, 443, 554, 8554, 4747, 8080, 8000, 8081, 8082, 8008, 8888, 5544, 7070, 7447, 9997, 1935}
+)
 
 
 @dataclass(frozen=True)
@@ -109,7 +111,13 @@ def _check_host_and_port(parsed: urllib.parse.ParseResult, policy: SSRFPolicy) -
     if literal_ip is not None:
         if is_metadata_endpoint(host, str(literal_ip)):
             raise SSRFError("blocked_address", "Resolved address is blocked (metadata endpoint)")
-        if literal_ip.is_unspecified or literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_multicast or literal_ip.is_reserved:
+        if (
+            literal_ip.is_unspecified
+            or literal_ip.is_loopback
+            or literal_ip.is_link_local
+            or literal_ip.is_multicast
+            or literal_ip.is_reserved
+        ):
             raise SSRFError("blocked_address", f"Resolved address {literal_ip} is blocked (reserved range)")
         blocked = _ip_blocked(literal_ip, policy)
         if blocked:
@@ -137,7 +145,8 @@ def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, policy: SSRFP
 
 def _ip_allowed_by_site(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, policy: SSRFPolicy) -> bool:
     # If no allowlist, private nets are blocked by default EXCEPT we already blocked loopback/link-local/multicast.
-    # But per spec, legitimate cameras use private nets, so if allowlist empty we DENY private otherwise would be too permissive.
+    # But per spec, legitimate cameras use private nets, so if allowlist empty we DENY private
+    # otherwise would be too permissive.
     # Caller must provide site_cidr_allowlist to permit private ranges.
     if ip.is_private:
         if not policy.site_cidr_allowlist:
@@ -181,7 +190,9 @@ def validate_resolved_ips(ips: list[str], policy: SSRFPolicy = DEFAULT_POLICY) -
             )
 
 
-def resolve_and_validate(host: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0, bypass_cache: bool = False) -> list[str]:
+def resolve_and_validate(
+    host: str, policy: SSRFPolicy = DEFAULT_POLICY, timeout: float = 3.0, bypass_cache: bool = False
+) -> list[str]:
     """Resolve host and validate all returned IPs. Returns list of IP strings.
 
     Avoid mutating the process-wide socket timeout. DNS resolution itself has no per-call timeout

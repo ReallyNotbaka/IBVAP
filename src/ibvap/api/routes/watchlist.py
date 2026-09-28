@@ -107,7 +107,9 @@ def list_watchlist(
 
 
 @router.post("/enroll-plate", status_code=201)
-def enroll_plate(req: PlateEnrollRequest, response: Response, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+def enroll_plate(
+    req: PlateEnrollRequest, response: Response, _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail={"code": "empty_name", "message": "Target name cannot be empty"})
@@ -117,7 +119,10 @@ def enroll_plate(req: PlateEnrollRequest, response: Response, _auth: bool = Depe
 
     norm_plate = normalize_plate_string(raw_plate)
     if len(norm_plate) < 3:
-        raise HTTPException(status_code=400, detail={"code": "plate_too_short", "message": "Plate must have at least 3 alphanumeric characters"})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "plate_too_short", "message": "Plate must have at least 3 alphanumeric characters"},
+        )
 
     try:
         threat = ThreatLevel(req.threat_level.upper())
@@ -160,9 +165,14 @@ async def enroll_suspect(
     _auth: bool = Depends(require_api_token),
 ) -> dict[str, Any]:
     if not photos:
-        raise HTTPException(status_code=400, detail={"code": "photo_required", "message": "At least one photo is required for biometric enrollment"})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "photo_required", "message": "At least one photo is required for biometric enrollment"},
+        )
     if len(photos) > 5:
-        raise HTTPException(status_code=400, detail={"code": "too_many_photos", "message": "Maximum 5 photos allowed per suspect"})
+        raise HTTPException(
+            status_code=400, detail={"code": "too_many_photos", "message": "Maximum 5 photos allowed per suspect"}
+        )
 
     name = name.strip()
     if not name:
@@ -286,5 +296,7 @@ def delete_suspect(entry_id: str, _auth: bool = Depends(require_api_token)) -> d
     store = get_watchlist_store()
     removed = store.remove_entry(entry_id)
     if not removed:
-        raise HTTPException(status_code=404, detail={"code": "suspect_not_found", "message": f"Suspect with ID '{entry_id}' not found"})
+        raise HTTPException(
+            status_code=404, detail={"code": "suspect_not_found", "message": f"Suspect with ID '{entry_id}' not found"}
+        )
     return {"status": "removed", "id": entry_id}

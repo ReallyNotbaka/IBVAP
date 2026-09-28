@@ -128,7 +128,7 @@ def test_pipeline_line_tripwire_crossing() -> None:
 
 
 def test_pipeline_line_tripwire_exit_and_intruder_cleanup() -> None:
-    """Verify that when a line intruder terminates, zone_exit is emitted with rule tripwire_line_exit and tracked set is cleaned up."""
+    """Line intruder termination emits zone_exit (tripwire_line_exit) and cleans up tracked set."""
     clear_all()
     pipe = MiniPipeline(camera_id="cam-cleanup-test", stream_epoch=1, detector=MockPersonDetector())
     pipe.zone = Zone(
@@ -153,7 +153,9 @@ def test_pipeline_line_tripwire_exit_and_intruder_cleanup() -> None:
         pipe.process_frame(empty)
 
     # _active_line_intruders MUST be empty after track termination (no leak)
-    assert len(pipe._active_line_intruders) == 0, f"Expected active line intruders to be empty, got {pipe._active_line_intruders}"
+    assert len(pipe._active_line_intruders) == 0, (
+        f"Expected active line intruders to be empty, got {pipe._active_line_intruders}"
+    )
 
     events = list_events()
     exits = [e for e in events if e["event_type"] == "zone_exit"]
@@ -166,6 +168,7 @@ class _EmptyDetector:
 
     model_id = "yolo26n-stub"
     runtime = "cpu"
+    input_size = 640
 
     def detect(self, frame: np.ndarray, frame_id: int) -> list:
         return []
@@ -430,6 +433,7 @@ class _ScriptedDetector:
 
     model_id = "stub"
     runtime = "cpu"
+    input_size = 640
 
     def __init__(self, script: list) -> None:
         self.script = script
@@ -497,8 +501,16 @@ def test_return_after_gap_realerts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipe_module.time, "time", clock.time)
     monkeypatch.setattr(pipe_module.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(pipe_module.time, "perf_counter", clock.perf_counter)
-    seq = [(0.3, 0.4, 0.5, 0.8)] * 6 + [None] * 4 + [(0.3, 0.05, 0.5, 0.15)] * 2 + [None] * 4 + [(0.3, 0.4, 0.5, 0.8)] * 8
-    pipe = MiniPipeline(camera_id="cam-regap-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False)
+    seq = (
+        [(0.3, 0.4, 0.5, 0.8)] * 6 + [None] * 4 + [(0.3, 0.05, 0.5, 0.15)] * 2 + [None] * 4 + [(0.3, 0.4, 0.5, 0.8)] * 8
+    )
+    pipe = MiniPipeline(
+        camera_id="cam-regap-test",
+        stream_epoch=1,
+        detector=_ScriptedDetector(seq),
+        face_detector=None,
+        enable_face=False,
+    )
     for n in range(len(seq)):
         if n == 6:
             clock.now += 10.0  # real gaps take seconds; debounce must be satisfied
@@ -517,9 +529,17 @@ def test_loiter_realerts_new_epoch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipe_module.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(pipe_module.time, "perf_counter", clock.perf_counter)
     seq = [(0.3, 0.4, 0.5, 0.8)] * 26
-    pipe = MiniPipeline(camera_id="cam-loiter-test", stream_epoch=1, detector=_ScriptedDetector(seq), face_detector=None, enable_face=False)
+    pipe = MiniPipeline(
+        camera_id="cam-loiter-test",
+        stream_epoch=1,
+        detector=_ScriptedDetector(seq),
+        face_detector=None,
+        enable_face=False,
+    )
     # Custom zone id: the rule-engine mirror only runs for non-default zones.
-    pipe.zone = Zone(id="zone-loiter-1", name="Loiter Zone", polygon=[[0.05, 0.2], [0.95, 0.2], [0.95, 1.0], [0.05, 1.0]])
+    pipe.zone = Zone(
+        id="zone-loiter-1", name="Loiter Zone", polygon=[[0.05, 0.2], [0.95, 0.2], [0.95, 1.0], [0.05, 1.0]]
+    )
     for _ in range(12):
         pipe.process_frame(_blank())
         clock.now += 1.0
@@ -578,7 +598,9 @@ def test_pipeline_warmup_never_raises() -> None:
     face_detector.model_path = "stub"
     face_detector.conf_threshold = 0.45
     face_detector._detector = stub  # type: ignore[assignment]
-    pipe = MiniPipeline(camera_id="cam-warmup-broken", stream_epoch=1, detector=_EmptyDetector(), face_detector=face_detector)
+    pipe = MiniPipeline(
+        camera_id="cam-warmup-broken", stream_epoch=1, detector=_EmptyDetector(), face_detector=face_detector
+    )
     pipe.warmup()  # must not raise
 
 
@@ -670,7 +692,9 @@ def test_bystander_near_critical_target_never_marked_critical() -> None:
             pipe.process_frame(_textured_frame(step))
             # At EVERY step, verify that at most ONE track is marked as critical:
             crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
-            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 
@@ -776,7 +800,9 @@ def test_bystander_near_critical_with_occlusion_and_miss_never_causes_two_critic
             pipe.process_frame(_textured_frame(step))
             crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
             # INVARIANT: At NO step can more than 1 track be marked as critical!
-            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 
@@ -896,7 +922,9 @@ def test_bystander_walks_in_front_crossover_never_marks_bystander_critical() -> 
             pipe.process_frame(_textured_frame(step))
             crit_tracks = [t for t in pipe.last_tracks if t.identity and t.identity.get("threat_level") == "CRITICAL"]
             # INVARIANT: At NO frame can multiple tracks be marked as critical!
-            assert len(crit_tracks) <= 1, f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            assert len(crit_tracks) <= 1, (
+                f"Step {step}: Multiple critical tracks detected: {[(t.track_id, t.identity) for t in crit_tracks]}"
+            )
             if crit_tracks:
                 assert crit_tracks[0].identity["entry_id"] == "crit-target-A"
 

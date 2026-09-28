@@ -82,7 +82,9 @@ class ONNXDetectorProvider:
         try:
             if providers is not None:
                 dml_active = "DmlExecutionProvider" in providers
-                prov_options = [{"device_id": 0} if p == "DmlExecutionProvider" else {} for p in providers] if dml_active else None
+                prov_options = (
+                    [{"device_id": 0} if p == "DmlExecutionProvider" else {} for p in providers] if dml_active else None
+                )
                 self._session = ort.InferenceSession(
                     self._model_path,
                     sess_options=sess_options,
@@ -244,7 +246,7 @@ class ONNXDetectorProvider:
         # classes (e.g., person near a car or riding a bicycle) do not falsely suppress each other.
         class_offsets = (valid_class_ids * 10000.0).astype(np.float32)
         boxes_for_nms = np.column_stack((x1_lb + class_offsets, y1_lb, w, h))
-        indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, self._conf_threshold, self._iou_threshold)
+        indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, self._conf_threshold, self._iou_threshold)  # pyright: ignore[reportArgumentType] # cv2 stubs type bboxes as Sequence[Rect2d]; ndarray accepted at runtime
         if len(indices) == 0:
             return []
 
@@ -382,7 +384,10 @@ class YOLO26DetectorStub:
     """Stub for YOLO26 - raises until gate passes. Documents expected interface."""
 
     def __init__(self) -> None:
-        raise RuntimeError("YOLO26 is BLOCKED pending Enterprise grant (ADR-0004). Use MockPersonDetector for Phase 3 slice or RF-DETR alternative.")
+        raise RuntimeError(
+            "YOLO26 is BLOCKED pending Enterprise grant (ADR-0004). "
+            "Use MockPersonDetector for Phase 3 slice or RF-DETR alternative."
+        )
 
     def detect(self, frame: np.ndarray, frame_id: int) -> list[Detection]:  # type: ignore[no-untyped-def]
         raise NotImplementedError

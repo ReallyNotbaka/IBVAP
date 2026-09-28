@@ -44,7 +44,9 @@ def test_benchmark_onnx_detector_cpu() -> None:
     assert res["fps"] > 0.0
 
 
+@pytest.mark.gpu
 def test_benchmark_onnx_detector_dml() -> None:
+    """Requires a GPU execution provider; skips on CPU-only hosts."""
     info = get_system_info()
     if "DmlExecutionProvider" in info["ort_providers"]:
         res = benchmark_onnx_detector(model_path="models/yolo26n.onnx", runs=3, provider="DmlExecutionProvider")

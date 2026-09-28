@@ -11,15 +11,13 @@ import math
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cv2
 import numpy as np
 
+from ibvap.config import AppConfig, Settings
 from ibvap.models import Base  # noqa: F401 - ensure DB import side-effect
-
-if TYPE_CHECKING:
-    from ibvap.config import AppConfig, Settings
 
 
 @dataclass(frozen=True)
@@ -203,10 +201,17 @@ def validate_facial_geometry(
 
 def check_identity_gate_passed(settings: Settings | AppConfig | Any | None = None) -> bool:
     """Verify whether face identity recognition is legally and administratively authorized."""
-    if settings is not None:
-        if hasattr(settings, "enable_face_identity") and settings.enable_face_identity:
+    if isinstance(settings, AppConfig):
+        if settings.enable_face_identity:
             return True
-        if hasattr(settings, "app") and getattr(settings.app, "enable_face_identity", False):
+    elif isinstance(settings, Settings):
+        if settings.app.enable_face_identity:
+            return True
+    elif settings is not None:
+        # Duck-typed config carrier: same outcome as the legacy hasattr chain.
+        if getattr(settings, "enable_face_identity", False):
+            return True
+        if getattr(getattr(settings, "app", None), "enable_face_identity", False):
             return True
 
     for env_key in ("IBVAP_ENABLE_FACE_IDENTITY", "IBVAP_APP__ENABLE_FACE_IDENTITY"):
@@ -236,7 +241,7 @@ class FaceDetector:
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceDetectorYN"):
             if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
-                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # pyright: ignore[reportAttributeAccessIssue] # cv2.utils.logging exists at runtime; missing from pyright stubs
             try:
                 backend = cv2.dnn.DNN_BACKEND_OPENCV
                 target = cv2.dnn.DNN_TARGET_OPENCL if cv2.ocl.haveOpenCL() else cv2.dnn.DNN_TARGET_CPU
@@ -348,7 +353,7 @@ class FaceRecognizer:
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceRecognizerSF"):
             if hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
-                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+                cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # pyright: ignore[reportAttributeAccessIssue] # cv2.utils.logging exists at runtime; missing from pyright stubs
             try:
                 self._recognizer = cv2.FaceRecognizerSF.create(str(p), "")
             except Exception:

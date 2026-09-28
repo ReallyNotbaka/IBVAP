@@ -26,7 +26,8 @@ def _get_fernet() -> Fernet:
     raw = os.getenv(_ENV_KEY)
     if not raw:
         raise RuntimeError(
-            "IBVAP_CREDENTIAL_KEY is required for credential encryption. Set a valid Fernet key or 32-byte secret before storing camera credentials."
+            "IBVAP_CREDENTIAL_KEY is required for credential encryption. "
+            "Set a valid Fernet key or 32-byte secret before storing camera credentials."
         )
 
     candidate = raw.strip()

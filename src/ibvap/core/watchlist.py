@@ -74,16 +74,19 @@ class WatchlistEntry:
     @property
     def matrix(self) -> np.ndarray:
         """Return (K, 128) exemplar gallery matrix normalized to unit hypersphere (cached)."""
-        if getattr(self, "_cached_matrix", None) is not None:
-            return self._cached_matrix
+        cached = getattr(self, "_cached_matrix", None)
+        if cached is not None:
+            return cached
         if not self.gallery:
-            self._cached_matrix = np.zeros((0, 128), dtype=np.float32)
-            return self._cached_matrix
+            empty = np.zeros((0, 128), dtype=np.float32)
+            self._cached_matrix = empty
+            return empty
         m = np.vstack([np.asarray(v, dtype=np.float32).reshape(1, -1) for v in self.gallery])
         norms = np.linalg.norm(m, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
-        self._cached_matrix = (m / norms).astype(np.float32)
-        return self._cached_matrix
+        mat = (m / norms).astype(np.float32)
+        self._cached_matrix = mat
+        return mat
 
     def invalidate_cache(self) -> None:
         self._cached_matrix = None
@@ -192,7 +195,9 @@ class WatchlistStore:
                 target_type_str = str(item.get("target_type", "face")).lower()
                 target_type = TargetType.PLATE if target_type_str == "plate" else TargetType.FACE
                 plate_number = item.get("plate_number")
-                normalized_plate = item.get("normalized_plate") or (normalize_plate_string(plate_number) if plate_number else None)
+                normalized_plate = item.get("normalized_plate") or (
+                    normalize_plate_string(plate_number) if plate_number else None
+                )
 
                 entry = WatchlistEntry(
                     id=item["id"],
@@ -223,7 +228,9 @@ class WatchlistStore:
             entries_snapshot = list(self._entries.values())
             serialized = []
             for e in entries_snapshot:
-                b64_gallery = [base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii") for v in e.gallery]
+                b64_gallery = [
+                    base64.b64encode(np.asarray(v, dtype=np.float32).tobytes()).decode("ascii") for v in e.gallery
+                ]
                 serialized.append(
                     {
                         "id": e.id,
@@ -324,7 +331,11 @@ class WatchlistStore:
 
         q_canon = _canon(q)
         for entry in snapshot:
-            if entry.target_type == TargetType.PLATE and entry.normalized_plate and _canon(entry.normalized_plate) == q_canon:
+            if (
+                entry.target_type == TargetType.PLATE
+                and entry.normalized_plate
+                and _canon(entry.normalized_plate) == q_canon
+            ):
                 return MatchResult(
                     entry_id=entry.id,
                     name=entry.name,

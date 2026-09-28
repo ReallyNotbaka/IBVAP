@@ -39,7 +39,7 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
     stream = next((s for s in container.streams if s.type == "video"), None)
     for frame in container.decode(stream):
         t0 = time.perf_counter()
-        img = frame.to_ndarray(format="bgr24")
+        img = frame.to_ndarray(format="bgr24")  # pyright: ignore[reportAttributeAccessIssue, reportCallIssue] # video-stream decode yields VideoFrame; stub union needs narrowing help
         t1 = time.perf_counter()
         decode_times.append((t1 - t0) * 1000.0)
         frames.append(img)
@@ -63,7 +63,10 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
         t1 = time.perf_counter()
         if ok:
             jpeg_times.append((t1 - t0) * 1000.0)
-    print(f"JPEG encode (quality 65): mean={np.mean(jpeg_times):.2f}ms, min={np.min(jpeg_times):.2f}ms, max={np.max(jpeg_times):.2f}ms")
+    print(
+        f"JPEG encode (quality 65): mean={np.mean(jpeg_times):.2f}ms, "
+        f"min={np.min(jpeg_times):.2f}ms, max={np.max(jpeg_times):.2f}ms"
+    )
 
     # 3. ONNX Detector Breakdown
     detector = ONNXDetectorProvider("models/yolo26n.onnx")
@@ -133,7 +136,7 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
 
             # Stage D: NMS
             t0 = time.perf_counter()
-            _ = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, detector._conf_threshold, detector._iou_threshold)
+            _ = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, detector._conf_threshold, detector._iou_threshold)  # pyright: ignore[reportArgumentType] # cv2 stubs type bboxes as Sequence[Rect2d]; ndarray accepted at runtime
             t1 = time.perf_counter()
             nms_times.append((t1 - t0) * 1000.0)
 
@@ -144,14 +147,21 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
         f"Preprocessing:        mean={np.mean(preprocess_times):.2f}ms "
         f"(p50={np.median(preprocess_times):.2f}ms, p95={np.percentile(preprocess_times, 95):.2f}ms)"
     )
-    print(f"Inference:            mean={np.mean(infer_times):.2f}ms (p50={np.median(infer_times):.2f}ms, p95={np.percentile(infer_times, 95):.2f}ms)")
+    print(
+        f"Inference:            mean={np.mean(infer_times):.2f}ms "
+        f"(p50={np.median(infer_times):.2f}ms, p95={np.percentile(infer_times, 95):.2f}ms)"
+    )
     print(
         f"Postprocessing:       mean={np.mean(postprocess_times):.2f}ms "
         f"(p50={np.median(postprocess_times):.2f}ms, p95={np.percentile(postprocess_times, 95):.2f}ms)"
     )
-    print(f"NMS (cv2.dnn):        mean={np.mean(nms_times):.2f}ms (p50={np.median(nms_times):.2f}ms, p95={np.percentile(nms_times, 95):.2f}ms)")
     print(
-        f"Total Detect Call:    mean={np.mean(total_det_times):.2f}ms (p50={np.median(total_det_times):.2f}ms, p95={np.percentile(total_det_times, 95):.2f}ms)"
+        f"NMS (cv2.dnn):        mean={np.mean(nms_times):.2f}ms "
+        f"(p50={np.median(nms_times):.2f}ms, p95={np.percentile(nms_times, 95):.2f}ms)"
+    )
+    print(
+        f"Total Detect Call:    mean={np.mean(total_det_times):.2f}ms "
+        f"(p50={np.median(total_det_times):.2f}ms, p95={np.percentile(total_det_times, 95):.2f}ms)"
     )
     print(f"Detector Standalone FPS: {1000.0 / np.mean(total_det_times):.1f} FPS")
 
@@ -167,7 +177,10 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
                 _ = yunet.detect(img)
                 t1 = time.perf_counter()
                 yunet_times.append((t1 - t0) * 1000.0)
-        print(f"\nYuNet Face Detect:    mean={np.mean(yunet_times):.2f}ms (p50={np.median(yunet_times):.2f}ms, p95={np.percentile(yunet_times, 95):.2f}ms)")
+        print(
+            f"\nYuNet Face Detect:    mean={np.mean(yunet_times):.2f}ms "
+            f"(p50={np.median(yunet_times):.2f}ms, p95={np.percentile(yunet_times, 95):.2f}ms)"
+        )
 
     sface = FaceRecognizer()
     sface_times = []
@@ -180,7 +193,10 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
             _ = sface.extract_feature(real_crop)
             t1 = time.perf_counter()
             sface_times.append((t1 - t0) * 1000.0)
-        print(f"SFace Feature Extract: mean={np.mean(sface_times):.2f}ms (p50={np.median(sface_times):.2f}ms, p95={np.percentile(sface_times, 95):.2f}ms)")
+        print(
+            f"SFace Feature Extract: mean={np.mean(sface_times):.2f}ms "
+            f"(p50={np.median(sface_times):.2f}ms, p95={np.percentile(sface_times, 95):.2f}ms)"
+        )
 
     # 5. MiniPipeline End-to-End Timing
     pipeline = MiniPipeline(
@@ -203,7 +219,10 @@ def profile_real_video(video_path: str = "tests/fixtures/test_upload_face.mp4", 
             pipe_times.append((t1 - t0) * 1000.0)
 
     print("\n--- End-to-End Pipeline Timing (Per Frame) ---")
-    print(f"Pipeline process_frame: mean={np.mean(pipe_times):.2f}ms (p50={np.median(pipe_times):.2f}ms, p95={np.percentile(pipe_times, 95):.2f}ms)")
+    print(
+        f"Pipeline process_frame: mean={np.mean(pipe_times):.2f}ms "
+        f"(p50={np.median(pipe_times):.2f}ms, p95={np.percentile(pipe_times, 95):.2f}ms)"
+    )
     print(f"End-to-End Pipeline FPS: {1000.0 / np.mean(pipe_times):.1f} FPS")
 
 

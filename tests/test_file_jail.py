@@ -12,7 +12,7 @@ from fastapi import HTTPException
 
 
 def _write_mp4(path: Path) -> Path:
-    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))
+    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))  # pyright: ignore[reportAttributeAccessIssue] # absent from cv2 stubs
     w.write(np.zeros((64, 64, 3), np.uint8))
     w.release()
     return path

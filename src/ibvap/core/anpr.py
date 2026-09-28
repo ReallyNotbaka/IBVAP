@@ -184,7 +184,10 @@ class OCRReader:
         if self.ocr_engine is not None:
             return self.ocr_engine(plate_crop)
 
-        if self._paddle_last_error_at is not None and (time.monotonic() - self._paddle_last_error_at) < self._paddle_retry_after_s:
+        if (
+            self._paddle_last_error_at is not None
+            and (time.monotonic() - self._paddle_last_error_at) < self._paddle_retry_after_s
+        ):
             return []
 
         try:

@@ -20,7 +20,8 @@ def apply_white_hot_flir(image: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 and image.shape[2] == 3 else image.copy()
 
     # Contrast stretch with thermal curve emphasis
-    norm = cv2.normalize(gray, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
+    # (preallocated dst: identical output to dst=None; satisfies cv2 stubs)
+    norm = cv2.normalize(gray, np.empty_like(gray), alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
     # Apply non-linear gamma curve to simulate radiometric temperature distribution
     lookup_table = np.array([((i / 255.0) ** 1.35) * 255 for i in np.arange(0, 256)]).astype("uint8")
     stretched = cv2.LUT(norm, lookup_table)
@@ -52,7 +53,14 @@ def apply_ironbow_flir(image: np.ndarray) -> np.ndarray:
 
 def apply_tactical_defog(image: np.ndarray) -> np.ndarray:
     """Apply tactical defog / haze penetration using LAB CLAHE and unsharp masking."""
-    if image is None or image.size == 0 or len(image.shape) != 3 or image.shape[2] != 3 or image.shape[0] < 2 or image.shape[1] < 2:
+    if (
+        image is None
+        or image.size == 0
+        or len(image.shape) != 3
+        or image.shape[2] != 3
+        or image.shape[0] < 2
+        or image.shape[1] < 2
+    ):
         return image if image is None else image.copy()
 
     # Convert to LAB color space

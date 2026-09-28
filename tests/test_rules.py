@@ -74,15 +74,23 @@ def test_loiter_survives_single_outside_frame() -> None:
 
 def test_tripwire_bypass_around_end_does_not_fire() -> None:
     """Walking around a short segment's end is not a crossing."""
-    eng = RuleEngine(tripwires=[Tripwire(id="tw", name="d", p1=(0.4, 0.5), p2=(0.6, 0.5), direction="both")], cooldown_seconds=0.0)
+    eng = RuleEngine(
+        tripwires=[Tripwire(id="tw", name="d", p1=(0.4, 0.5), p2=(0.6, 0.5), direction="both")], cooldown_seconds=0.0
+    )
     assert eng.check_tripwire(1, (0.75, 0.48), 0.0) == []
     assert eng.check_tripwire(1, (0.75, 0.52), 0.1) == []
 
 
 def test_tripwire_direction_survives_endpoint_swap() -> None:
     """Redraw order must not invert directional filtering."""
-    a = RuleEngine(tripwires=[Tripwire(id="t", name="t", p1=(0.5, 0.0), p2=(0.5, 1.0), direction="outside_to_inside")], cooldown_seconds=0.0)
-    b = RuleEngine(tripwires=[Tripwire(id="t", name="t", p1=(0.5, 1.0), p2=(0.5, 0.0), direction="outside_to_inside")], cooldown_seconds=0.0)
+    a = RuleEngine(
+        tripwires=[Tripwire(id="t", name="t", p1=(0.5, 0.0), p2=(0.5, 1.0), direction="outside_to_inside")],
+        cooldown_seconds=0.0,
+    )
+    b = RuleEngine(
+        tripwires=[Tripwire(id="t", name="t", p1=(0.5, 1.0), p2=(0.5, 0.0), direction="outside_to_inside")],
+        cooldown_seconds=0.0,
+    )
     ra = [a.check_tripwire(1, p, t) for p, t in [((0.4, 0.5), 0.0), ((0.6, 0.5), 0.1)]]
     rb = [b.check_tripwire(1, p, t) for p, t in [((0.4, 0.5), 0.0), ((0.6, 0.5), 0.1)]]
     assert (ra[1] != []) == (rb[1] != [])

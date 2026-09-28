@@ -10,8 +10,10 @@ from ibvap.config import Settings
 from ibvap.core.media_gateway import MediaGatewayClient, MockMediaMTXServer
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_mock_mediamtx_server_lifecycle() -> None:
+    """Live loopback integration: real HTTP over TCP against the mock MediaMTX server."""
     server = MockMediaMTXServer(host="127.0.0.1", port=0)
     api_url = await server.start()
     assert api_url.startswith("http://127.0.0.1:")
@@ -62,8 +64,10 @@ async def test_mock_mediamtx_server_lifecycle() -> None:
         await server.stop()
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_media_gateway_client_context_managers() -> None:
+    """Live loopback integration: real HTTP over TCP against the mock MediaMTX server."""
     async with MockMediaMTXServer() as server:
         assert server.port > 0
         async with MediaGatewayClient(api_url=server.api_url) as client:

@@ -106,7 +106,10 @@ def probe_url(
         opts["follow_redirects"] = "0"
     path = parsed_url.path.lower().rstrip("/")
     is_ip_webcam_mjpeg = (
-        path in {"/video", "/videofeed", "/mjpegfeed"} or parsed_url.port in (4747, 8080) or parsed_url.scheme == "mjpeg" or path.endswith((".mjpg", ".mjpeg"))
+        path in {"/video", "/videofeed", "/mjpegfeed"}
+        or parsed_url.port in (4747, 8080)
+        or parsed_url.scheme == "mjpeg"
+        or path.endswith((".mjpg", ".mjpeg"))
     )
 
     container = None
@@ -115,11 +118,18 @@ def probe_url(
         try:
             # IP Webcam / DroidCam serves an endless multipart/x-mixed-replace response.
             # Explicit mpjpeg demuxer avoids format probing delays and network timeouts.
-            container = av.open(open_url, format="mpjpeg", options=opts) if is_ip_webcam_mjpeg else av.open(open_url, options=opts)
+            container = (
+                av.open(open_url, format="mpjpeg", options=opts)
+                if is_ip_webcam_mjpeg
+                else av.open(open_url, options=opts)
+            )
             break
         except Exception as e:
             # Only retry transient I/O / socket busy errors on phone streams
-            if attempt < max_open_attempts - 1 and isinstance(e, (av.error.InvalidDataError, av.error.EOFError, ConnectionResetError)):
+            if attempt < max_open_attempts - 1 and isinstance(
+                e,
+                (av.error.InvalidDataError, av.error.EOFError, ConnectionResetError),  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
+            ):
                 time.sleep(0.4)
                 continue
             raise ProbeError(f"Failed to open: {e}", code="open_failed") from e

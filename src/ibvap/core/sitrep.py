@@ -132,7 +132,9 @@ def generate_military_sitrep(
         vehicles.extend(cam_vehicles)
 
     # Determine Threat Posture
-    if len(intrusions) > 0 or any(m.get("tier") == "RED" or m.get("threat_level") == "CRITICAL" for m in watchlist_matches):
+    if len(intrusions) > 0 or any(
+        m.get("tier") == "RED" or m.get("threat_level") == "CRITICAL" for m in watchlist_matches
+    ):
         threat_posture = "RED"
     elif len(watchlist_matches) > 0 or total_tracks > 5:
         threat_posture = "AMBER"
@@ -169,7 +171,8 @@ def generate_military_sitrep(
     if watchlist_matches:
         for m in watchlist_matches:
             watchlist_lines.append(
-                f"TARGET ALERT: [{m['name'].upper()}] - TIER {m['tier']} ({m['threat_level']}) CONFIDENCE: {int(m['score'] * 100)}% DETECTED AT {m['camera']}"
+                f"TARGET ALERT: [{m['name'].upper()}] - TIER {m['tier']} ({m['threat_level']}) "
+                f"CONFIDENCE: {int(m['score'] * 100)}% DETECTED AT {m['camera']}"
             )
     else:
         watchlist_lines.append("NO WATCHLIST SUSPECT MATCHES DETECTED.")

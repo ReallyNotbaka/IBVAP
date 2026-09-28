@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -12,6 +13,9 @@ from ibvap.core.ssrf import (
     validate_endpoint,
     validate_resolved_ips,
 )
+
+if TYPE_CHECKING:
+    from http.server import HTTPServer
 
 
 def test_blocked_scheme() -> None:
@@ -75,7 +79,7 @@ def test_validate_endpoint_allows_http() -> None:
     assert parsed.hostname == "192.168.1.10"
 
 
-def _redirect_server(target: str) -> tuple[object, int]:
+def _redirect_server(target: str) -> tuple[HTTPServer, int]:
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 

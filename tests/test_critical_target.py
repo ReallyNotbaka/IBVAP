@@ -309,9 +309,10 @@ class MockPersonDetector:
     def __init__(self, bbox_norm=(0.3, 0.2, 0.6, 0.85)) -> None:
         self.model_id = "yolo26n-mock"
         self.runtime = "mock"
+        self.input_size = 640
         self.bbox_norm = bbox_norm
 
-    def detect(self, frame: np.ndarray, frame_idx: int = 0) -> list[Detection]:
+    def detect(self, frame: np.ndarray, frame_id: int = 0) -> list[Detection]:
         return [
             Detection(
                 class_id=0,
@@ -417,7 +418,7 @@ class TestCriticalTargetPipelineIntegration:
 
 class TestObservationsAPIWithCriticalTarget:
     def test_camera_observations_endpoint_returns_critical_identity(self) -> None:
-        """API endpoint /api/v1/cameras/{id}/observations must preserve identity, name, threat level, and lock status."""
+        """Observations endpoint must preserve identity, name, threat level, and lock status."""
         from starlette.testclient import TestClient
 
         from ibvap.api.app import create_app

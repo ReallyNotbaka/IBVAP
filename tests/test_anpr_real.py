@@ -241,7 +241,13 @@ def test_ocr_reader_uses_onnxruntime_engine(monkeypatch: pytest.MonkeyPatch) -> 
             captured_kwargs.update(kwargs)
 
         def predict(self, input: object) -> list:
-            return [{"rec_texts": ["KA01AB1234"], "rec_scores": [0.95], "rec_boxes": [[[0, 0], [100, 0], [100, 30], [0, 30]]]}]
+            return [
+                {
+                    "rec_texts": ["KA01AB1234"],
+                    "rec_scores": [0.95],
+                    "rec_boxes": [[[0, 0], [100, 0], [100, 30], [0, 30]]],
+                }
+            ]
 
     import sys
     import types

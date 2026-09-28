@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
 
 def test_bug_3_ipv6_url_credentials_preserves_brackets() -> None:
@@ -27,7 +29,9 @@ def test_bug_7_evidence_manifest_snapshot_less_clip(tmp_path: object, monkeypatc
 
     ring = PacketRingBuffer(max_seconds=10.0)
     # Monkeypatch the clip path format to point to a non-existent directory
-    monkeypatch.setattr("ibvap.core.evidence.Path", lambda p: Path(str(p).replace("data/evidence", "data/evidence_test_bug7")))
+    monkeypatch.setattr(
+        "ibvap.core.evidence.Path", lambda p: Path(str(p).replace("data/evidence", "data/evidence_test_bug7"))
+    )
     try:
         manifest = ring.manifest_for("ev_nosnap", snap=None, clip=b"testclipdata")
         assert manifest.clip_path is not None
@@ -162,7 +166,7 @@ def test_bug_4_handover_does_not_merge_simultaneous_tracks_on_same_camera() -> N
     assert dossiers[0].dossier_id != dossiers[1].dossier_id
 
 
-def test_bug_6_outside_jail_file_endpoint_rejected_by_api(api_client: object) -> None:
+def test_bug_6_outside_jail_file_endpoint_rejected_by_api(api_client: TestClient) -> None:
     import os
     from pathlib import Path
 
@@ -176,7 +180,7 @@ def test_bug_6_outside_jail_file_endpoint_rejected_by_api(api_client: object) ->
     resolved = p.resolve()
     assert not any(resolved.is_relative_to(r) for r in C._file_jail_roots())
 
-    w = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))
+    w = cv2.VideoWriter(str(p), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))  # pyright: ignore[reportAttributeAccessIssue] # absent from cv2 stubs
     w.write(np.zeros((64, 64, 3), np.uint8))
     w.release()
 
@@ -204,7 +208,7 @@ def test_bug_2_spurious_amber_match_does_not_strip_critical_identity_lock(monkey
     import numpy as np
 
     from ibvap.core.pipeline import MiniPipeline
-    from ibvap.core.watchlist import MatchResult
+    from ibvap.core.watchlist import MatchResult, ThreatLevel
 
     class DummyFaceQuality:
         passed = True
@@ -238,7 +242,7 @@ def test_bug_2_spurious_amber_match_does_not_strip_critical_identity_lock(monkey
                 name="James Bond",
                 score=0.42,
                 tier="AMBER",
-                threat_level="CRITICAL",
+                threat_level=ThreatLevel.CRITICAL,
             )
 
         def record_sighting(self, entry_id: str, ts: float) -> None:
@@ -254,7 +258,10 @@ def test_bug_2_spurious_amber_match_does_not_strip_critical_identity_lock(monkey
         confidence: float
 
     class DummyDetector:
-        def detect(self, frame: object, frame_idx: int = 0) -> list[DummyDet]:
+        model_id = "dummy-detector"
+        input_size = 640
+
+        def detect(self, frame: np.ndarray, frame_id: int = 0) -> list:
             return [
                 DummyDet(bbox_norm=(0.1, 0.1, 0.3, 0.5), class_name="person", class_id=0, confidence=0.9),
                 DummyDet(bbox_norm=(0.6, 0.1, 0.8, 0.5), class_name="person", class_id=0, confidence=0.85),
@@ -324,13 +331,27 @@ def test_bug_2_spurious_amber_match_arbitration_order_invariant(monkeypatch: pyt
     # Track 2: unlocked AMBER match inserted FIRST in dict
     t2 = Track(track_id=2, class_name="person", class_id=0, bbox_norm=(0.6, 0.1, 0.8, 0.5), confidence=0.85)
     t2.last_bio_frame = 5  # more recent bio frame!
-    t2.identity = {"entry_id": "crit-007", "name": "James Bond", "threat_level": "CRITICAL", "tier": "AMBER", "score": 0.42, "locked": False}
+    t2.identity = {
+        "entry_id": "crit-007",
+        "name": "James Bond",
+        "threat_level": "CRITICAL",
+        "tier": "AMBER",
+        "score": 0.42,
+        "locked": False,
+    }
     t2.identity_locked = False
 
     # Track 1: locked CRITICAL match inserted SECOND in dict
     t1 = Track(track_id=1, class_name="person", class_id=0, bbox_norm=(0.1, 0.1, 0.3, 0.5), confidence=0.9)
     t1.last_bio_frame = 1  # older bio frame!
-    t1.identity = {"entry_id": "crit-007", "name": "James Bond", "threat_level": "CRITICAL", "tier": "RED", "score": 0.95, "locked": True}
+    t1.identity = {
+        "entry_id": "crit-007",
+        "name": "James Bond",
+        "threat_level": "CRITICAL",
+        "tier": "RED",
+        "score": 0.95,
+        "locked": True,
+    }
     t1.identity_locked = True
 
     pipe.tracker.tracks = {2: t2, 1: t1}
@@ -343,7 +364,7 @@ def test_bug_2_spurious_amber_match_arbitration_order_invariant(monkeypatch: pyt
     assert t2.identity is None
 
 
-def test_bug_1_camera_disable_stops_worker_and_preserves_disabled_state(api_client: object) -> None:
+def test_bug_1_camera_disable_stops_worker_and_preserves_disabled_state(api_client: TestClient) -> None:
     from ibvap.api.routes import cameras as C
     from ibvap.core.camera_state import CameraState, CameraStateMachine
 
@@ -390,7 +411,7 @@ def test_bug_1_camera_disable_stops_worker_and_preserves_disabled_state(api_clie
         C._STATE_MACHINES.pop(cam_id, None)
 
 
-def test_bug_14_concurrent_reconnect_no_double_spawn(api_client: object) -> None:
+def test_bug_14_concurrent_reconnect_no_double_spawn(api_client: TestClient) -> None:
     import concurrent.futures
     import threading
 

@@ -3,7 +3,9 @@ import time
 import urllib.request
 
 base_url = "http://127.0.0.1:8000/api/v1"
-user_file = "People Walking Free Stock Footage, Royalty-Free No Copyright Content - Montreal Walking Tours (1080p, h264).mp4"
+user_file = (
+    "People Walking Free Stock Footage, Royalty-Free No Copyright Content - Montreal Walking Tours (1080p, h264).mp4"
+)
 user_path = rf'"C:\Users\ReallyNotBaka\Downloads\{user_file}"'
 
 print("1. Testing endpoint /cameras/test with quoted user path...")

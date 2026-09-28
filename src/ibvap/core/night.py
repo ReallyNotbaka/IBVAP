@@ -20,7 +20,9 @@ class NightResult:
 
 
 class NightDetector:
-    def __init__(self, night_threshold: float = 40.0, day_threshold: float = 70.0, temporal_seconds: float = 5.0) -> None:
+    def __init__(
+        self, night_threshold: float = 40.0, day_threshold: float = 70.0, temporal_seconds: float = 5.0
+    ) -> None:
         self.night_threshold = night_threshold
         self.day_threshold = day_threshold
         self.temporal_seconds = temporal_seconds
@@ -61,7 +63,11 @@ class NightDetector:
 
         # Composite illumination score:
         # If the majority of the frame is dark (>60% dark pixels), headlights/torches shouldn't fool it into day
-        composite = 0.50 * p10 + 0.35 * p50 + 0.15 * mean_lum if dark_pixel_ratio > 0.65 else 0.40 * p50 + 0.35 * mean_lum + 0.25 * p10
+        composite = (
+            0.50 * p10 + 0.35 * p50 + 0.15 * mean_lum
+            if dark_pixel_ratio > 0.65
+            else 0.40 * p50 + 0.35 * mean_lum + 0.25 * p10
+        )
 
         return float(np.clip(composite, 0.0, 255.0))
 

@@ -50,7 +50,13 @@ def is_intrusion(
         if dist <= 0.045:
             return True
         # 2. Movement from previous footpoint intersects line segment
-        effective_prev_foot = prev_foot if prev_foot is not None else getattr(track, "prev_footpoint", None) if track is not None else None
+        effective_prev_foot = (
+            prev_foot
+            if prev_foot is not None
+            else getattr(track, "prev_footpoint", None)
+            if track is not None
+            else None
+        )
         if effective_prev_foot is not None and intersect(effective_prev_foot, track_foot, p1, p2):
             return True
         # 3. Trajectory movement intersects line segment. Trajectory stores

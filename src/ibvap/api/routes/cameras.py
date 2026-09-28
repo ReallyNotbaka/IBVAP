@@ -18,7 +18,7 @@ import av
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, UUID4
+from pydantic import UUID4, BaseModel, Field
 
 from ibvap.api.auth import require_api_token
 from ibvap.core.camera_state import CameraState, CameraStateMachine
@@ -86,7 +86,9 @@ class CameraCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     site_id: UUID4
     source_type: Literal["smartphone_ip_webcam", "ip_camera", "video_footage"] = "smartphone_ip_webcam"
-    endpoint: str = Field(min_length=1, max_length=2048, description="Stream URL without credentials, or a local video path")
+    endpoint: str = Field(
+        min_length=1, max_length=2048, description="Stream URL without credentials, or a local video path"
+    )
     protocol: Literal["rtsp", "rtsps", "http", "https", "mjpeg", "hls", "whip", "file"] = "http"
     username: str | None = Field(default=None, max_length=255)
     password: str | None = Field(default=None, max_length=1024)
@@ -122,7 +124,9 @@ class CameraTestResponse(BaseModel):
 
 
 def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
-    policy = _policy_from_request(req.site_cidr_allowlist)
+    # Server-owned policy only: never feed caller-supplied CIDRs into the
+    # SSRF policy (see test_private_endpoint_blocked_despite_request_allowlist).
+    policy = _policy_from_request(None)
     stages: list[dict[str, str]] = []
 
     def stage(name: str, status: str) -> None:
@@ -138,9 +142,15 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
             local_path = _resolve_jailed_file(req.endpoint)
         except HTTPException as exc:
             stage("Validating address", "failed")
-            detail = exc.detail if isinstance(exc.detail, dict) else {"code": "invalid_file_path", "message": "Invalid footage path"}
+            detail = (
+                exc.detail
+                if isinstance(exc.detail, dict)
+                else {"code": "invalid_file_path", "message": "Invalid footage path"}
+            )
             code = str(detail.get("code", "invalid_file_path")) if isinstance(detail, dict) else "invalid_file_path"
-            return CameraTestResponse(result="error", reason_code=code, safe_message="Invalid footage path", stages=stages)
+            return CameraTestResponse(
+                result="error", reason_code=code, safe_message="Invalid footage path", stages=stages
+            )
         stage("Validating address", "ok")
         stage("Checking network permission", "ok")
         stage("Resolving host", "ok")
@@ -158,18 +168,21 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
             first_frame = next(container.decode(stream), None)
             if first_frame is None:
                 raise RuntimeError("No frames decoded")
+            if not isinstance(first_frame, av.VideoFrame):
+                raise RuntimeError("No frames decoded")
             image = first_frame.to_ndarray(format="bgr24")
             stage("Inspecting stream", "ok")
             stage("Decoding first frame", "ok")
             stage("Measuring stability", "ok")
             stage("Preparing preview", "ok")
+            codec_ctx = getattr(stream, "codec_context", None)
             return CameraTestResponse(
                 result="ok",
                 reason_code=None,
                 safe_message="Local video preview ready",
                 stages=stages,
                 probe={
-                    "codec": getattr(stream, "codec_context", None).name if getattr(stream, "codec_context", None) else "unknown",
+                    "codec": codec_ctx.name if codec_ctx is not None else "unknown",
                     "width": image.shape[1],
                     "height": image.shape[0],
                     "fps": float(stream.average_rate) if stream.average_rate else None,
@@ -184,7 +197,12 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
             )
         except Exception:
             stage("Inspecting stream", "failed")
-            return CameraTestResponse(result="error", reason_code="local_file_failed", safe_message="Local footage could not be opened", stages=stages)
+            return CameraTestResponse(
+                result="error",
+                reason_code="local_file_failed",
+                safe_message="Local footage could not be opened",
+                stages=stages,
+            )
         finally:
             if container is not None:
                 with contextlib.suppress(Exception):
@@ -290,7 +308,9 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
     # Stage 6: Inspecting stream
     stage("Inspecting stream", "running")
     try:
-        probe, frames = probe_url(req.endpoint, timeout=3.0, max_frames=2, policy=policy, auth=(req.username, req.password))
+        probe, frames = probe_url(
+            req.endpoint, timeout=3.0, max_frames=2, policy=policy, auth=(req.username, req.password)
+        )
         stage("Inspecting stream", "ok")
         stage("Decoding first frame", "ok")
         stage("Measuring stability", "ok")
@@ -316,7 +336,11 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
         )
     except ProbeError as e:
         stage("Inspecting stream", "failed")
-        code_map = {"no_video": "unsupported_media", "no_frames": "unreachable", "open_failed": "unreachable"}
+        code_map: dict[str, Literal["unreachable", "unsupported_media", "error"]] = {
+            "no_video": "unsupported_media",
+            "no_frames": "unreachable",
+            "open_failed": "unreachable",
+        }
         result = code_map.get(e.code, "error")
         return CameraTestResponse(result=result, reason_code=e.code, safe_message=str(e), stages=stages, probe=None)
     except SSRFError as e:
@@ -340,7 +364,9 @@ async def test_unsaved(req: CameraTestRequest, _auth: bool = Depends(require_api
 
 
 @router.post("", response_model=dict[str, Any], status_code=201)
-async def create_camera(req: CameraCreate, response: Response, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+async def create_camera(
+    req: CameraCreate, response: Response, _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     req.endpoint = req.endpoint.strip().strip('"').strip("'")
     if _is_file_endpoint(req.endpoint, req.protocol):
         req.protocol = "file"
@@ -356,7 +382,9 @@ async def create_camera(req: CameraCreate, response: Response, _auth: bool = Dep
     if file_endpoint:
         endpoint_value = _resolve_jailed_file(req.endpoint)
         if not endpoint_value.exists():
-            raise HTTPException(status_code=400, detail={"code": "missing_file", "message": "Local footage file not found"})
+            raise HTTPException(
+                status_code=400, detail={"code": "missing_file", "message": "Local footage file not found"}
+            )
     else:
         if not is_synthetic:
             raw_ep = req.endpoint.strip()
@@ -364,12 +392,17 @@ async def create_camera(req: CameraCreate, response: Response, _auth: bool = Dep
                 scheme = req.protocol or ("rtsp" if ":554" in raw_ep else "http")
                 raw_ep = f"{scheme}://{raw_ep}"
             req.endpoint = normalize_mjpeg_url(raw_ep)
-        policy = _policy_from_request(req.site_cidr_allowlist)
+        # Server-owned policy only (see _run_test_stages): caller CIDRs must
+        # never authorize private ranges.
+        policy = _policy_from_request(None)
         try:
             if not is_synthetic:
                 parsed = validate_endpoint(req.endpoint, policy)
                 if (req.username or req.password) and "@" in req.endpoint:
-                    raise HTTPException(status_code=400, detail={"code": "credential_in_url", "message": "Credentials must not be in URL"})
+                    raise HTTPException(
+                        status_code=400,
+                        detail={"code": "credential_in_url", "message": "Credentials must not be in URL"},
+                    )
                 if parsed.hostname:
                     await asyncio.to_thread(resolve_and_validate, parsed.hostname, policy, 3.0)
         except SSRFError as e:
@@ -382,7 +415,9 @@ async def create_camera(req: CameraCreate, response: Response, _auth: bool = Dep
         enc_user = encrypt_secret(req.username) if req.username else None
         enc_pass = encrypt_secret(req.password) if req.password else None
     except (RuntimeError, ValueError) as e:
-        raise HTTPException(status_code=400, detail={"code": "credential_storage_unavailable", "message": str(e)}) from e
+        raise HTTPException(
+            status_code=400, detail={"code": "credential_storage_unavailable", "message": str(e)}
+        ) from e
 
     sm = CameraStateMachine(camera_id=cam_id)
     sm.transition(CameraState.VALIDATING, reason="create", safe_message="Validating")
@@ -532,7 +567,9 @@ async def camera_observations(camera_id: str) -> dict[str, Any]:
 
 
 @router.put("/{camera_id}/fence", response_model=dict[str, Any])
-async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+async def set_camera_fence(
+    camera_id: str, req: CameraFenceRequest, _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
 
@@ -561,7 +598,10 @@ async def set_camera_fence(camera_id: str, req: CameraFenceRequest, _auth: bool 
         raise HTTPException(status_code=422, detail={"code": "invalid_fence", "message": error})
 
     if any(not (0.0 <= point[0] <= 1.0 and 0.0 <= point[1] <= 1.0) for point in points):
-        raise HTTPException(status_code=422, detail={"code": "invalid_fence", "message": "Fence points must be normalized between 0 and 1"})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_fence", "message": "Fence points must be normalized between 0 and 1"},
+        )
 
     zone_name = "User line tripwire" if effective_type == "line" else "User fence"
     zone = Zone(
@@ -615,19 +655,39 @@ async def playback_state(camera_id: str) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "playback_unavailable",
+                "message": "Playback controls are only available for video footage",
+            },
+        )
     with _PLAYBACK_LOCK:
-        return dict(_PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}))
+        return dict(
+            _PLAYBACK.setdefault(
+                camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}
+            )
+        )
 
 
 @router.post("/{camera_id}/playback/seek", response_model=dict[str, Any])
-async def playback_seek(camera_id: str, req: PlaybackSeekRequest, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+async def playback_seek(
+    camera_id: str, req: PlaybackSeekRequest, _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "playback_unavailable",
+                "message": "Playback controls are only available for video footage",
+            },
+        )
     with _PLAYBACK_LOCK:
-        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
+        playback = _PLAYBACK.setdefault(
+            camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}
+        )
         duration = playback.get("duration_seconds")
         position = min(req.position_seconds, duration) if duration else req.position_seconds
         playback["position_seconds"] = position
@@ -636,13 +696,23 @@ async def playback_seek(camera_id: str, req: PlaybackSeekRequest, _auth: bool = 
 
 
 @router.post("/{camera_id}/playback/{action}", response_model=dict[str, Any])
-async def playback_action(camera_id: str, action: Literal["pause", "resume", "stop", "restart"], _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+async def playback_action(
+    camera_id: str, action: Literal["pause", "resume", "stop", "restart"], _auth: bool = Depends(require_api_token)
+) -> dict[str, Any]:
     if camera_id not in _CAMERAS:
         raise HTTPException(status_code=404, detail={"code": "camera_not_found", "message": "Camera not found"})
     if not _is_file_camera(camera_id):
-        raise HTTPException(status_code=400, detail={"code": "playback_unavailable", "message": "Playback controls are only available for video footage"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "playback_unavailable",
+                "message": "Playback controls are only available for video footage",
+            },
+        )
     with _PLAYBACK_LOCK:
-        playback = _PLAYBACK.setdefault(camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None})
+        playback = _PLAYBACK.setdefault(
+            camera_id, {"state": "playing", "position_seconds": 0.0, "duration_seconds": None, "fps": None}
+        )
         if action == "pause":
             playback["state"] = "paused"
         elif action == "resume":
@@ -704,7 +774,8 @@ async def test_saved(camera_id: str, _auth: bool = Depends(require_api_token)) -
         protocol=cam.get("protocol"),
         username=username,
         password=password,
-        site_cidr_allowlist=cam.get("_site_cidr_allowlist"),
+        # Stored allowlist is request-originated: do not forward it (server policy only).
+        site_cidr_allowlist=None,
     )
     return await asyncio.to_thread(_run_test_stages, req)
 
@@ -763,7 +834,9 @@ async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_tok
     sm = _STATE_MACHINES.get(camera_id)
     if sm:
         if sm.is_disabled():
-            raise HTTPException(status_code=400, detail={"code": "camera_disabled", "message": "Disabled camera cannot be reconnected"})
+            raise HTTPException(
+                status_code=400, detail={"code": "camera_disabled", "message": "Disabled camera cannot be reconnected"}
+            )
         try:
             sm.transition(CameraState.RECONNECTING, reason="reconnect", safe_message="Reconnecting")
             sm.transition(CameraState.CONNECTING, reason="connect", safe_message="Connecting")

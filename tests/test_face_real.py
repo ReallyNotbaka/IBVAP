@@ -39,7 +39,8 @@ def test_face_detector_with_mock_detection() -> None:
     # Add some texture for laplacian blur
     frame[100:200, 100:200] = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
 
-    # Face row: x=100, y=100, w=100, h=100, right_eye=(125, 130), left_eye=(175, 130), nose=(150, 155), right_mouth=(135, 180), left_mouth=(165, 180), conf=0.85
+    # Face row: x=100, y=100, w=100, h=100, right_eye=(125, 130), left_eye=(175, 130),
+    # nose=(150, 155), right_mouth=(135, 180), left_mouth=(165, 180), conf=0.85
     mock_face_row = np.array(
         [[100.0, 100.0, 100.0, 100.0, 125.0, 130.0, 175.0, 130.0, 150.0, 155.0, 135.0, 180.0, 165.0, 180.0, 0.85]],
         dtype=np.float32,

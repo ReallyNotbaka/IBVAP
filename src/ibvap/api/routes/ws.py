@@ -57,7 +57,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
         "stream_epoch": 0,
         "payload": {
             "status": "development_only",
-            "detail": "WebSocket is a non-production Phase 3 stub. Production clients must use REST polling on /api/v1/events.",
+            "detail": (
+                "WebSocket is a non-production Phase 3 stub. "
+                "Production clients must use REST polling on /api/v1/events."
+            ),
         },
         "message_id": str(uuid.uuid4()),
         "timestamp": time.time(),

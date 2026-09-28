@@ -148,7 +148,7 @@ def test_ssrf_dns_rebinding_av_open_pinned_destination(monkeypatch: pytest.Monke
     def mock_av_open(url: str, **kwargs: Any) -> Any:
         av_opened_urls.append(url)
         # Raise error to exit probe loop after recording target URL
-        raise av.error.InvalidDataError(1, "test probe stop")
+        raise av.error.InvalidDataError(1, "test probe stop")  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
 
     monkeypatch.setattr(av, "open", mock_av_open)
 
@@ -230,7 +230,8 @@ def test_anpr_ocr_throttling_state_bounded_and_evicts_stale() -> None:
     stale_ocr = [
         k
         for k, ts in ocr_last_submitted.items()
-        if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0) or (not isinstance(k, int) and (now_m - ts) > 5.0)
+        if (isinstance(k, int) and k not in active_tids and (now_m - ts) > 5.0)
+        or (not isinstance(k, int) and (now_m - ts) > 5.0)
     ]
     for k in stale_ocr:
         ocr_last_submitted.pop(k, None)
@@ -548,7 +549,7 @@ def test_ssrf_probe_url_disables_ffmpeg_redirects(monkeypatch: pytest.MonkeyPatc
     def mock_av_open(url: str, **kwargs: Any) -> Any:
         options = kwargs.get("options", {})
         captured_opts.update(options)
-        raise av.error.InvalidDataError(1, "mock open exit")
+        raise av.error.InvalidDataError(1, "mock open exit")  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
 
     monkeypatch.setattr(av, "open", mock_av_open)
 

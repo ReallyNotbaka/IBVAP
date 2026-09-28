@@ -156,8 +156,12 @@ async def test_save_event_with_outbox_dedup_idempotent(tmp_path) -> None:
 
     sm = get_sessionmaker(settings)
     async with sm() as session:
-        eid1 = await persistence_module.save_event_with_outbox(session, {"camera_id": "c", "seq": 1}, dedup_key="dupe-1")
-        eid2 = await persistence_module.save_event_with_outbox(session, {"camera_id": "c", "seq": 2}, dedup_key="dupe-1")
+        eid1 = await persistence_module.save_event_with_outbox(
+            session, {"camera_id": "c", "seq": 1}, dedup_key="dupe-1"
+        )
+        eid2 = await persistence_module.save_event_with_outbox(
+            session, {"camera_id": "c", "seq": 2}, dedup_key="dupe-1"
+        )
         assert eid1 == eid2
         await session.commit()
 

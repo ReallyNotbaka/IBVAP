@@ -41,4 +41,6 @@ def test_model_artifact_exists_and_valid(model_name: str, expected_info: dict[st
             hasher.update(chunk)
     actual_hash = hasher.hexdigest().lower()
 
-    assert actual_hash == expected_info["sha256"], f"Model {model_name} hash mismatch: got {actual_hash}, expected {expected_info['sha256']}"
+    assert actual_hash == expected_info["sha256"], (
+        f"Model {model_name} hash mismatch: got {actual_hash}, expected {expected_info['sha256']}"
+    )

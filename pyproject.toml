@@ -54,7 +54,7 @@ dev = [
 ]
 
 [tool.ruff]
-line-length = 160
+line-length = 120
 target-version = "py312"
 cache-dir = ".ruff_cache"
 extend-exclude = [
@@ -79,7 +79,7 @@ known-first-party = ["ibvap", "scripts", "tests"]
 quote-style = "double"
 
 [tool.pyright]
-typeCheckingMode = "standard"
+typeCheckingMode = "basic"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
@@ -94,13 +94,13 @@ reportMissingTypeArgument = false
 reportUnusedImport = false
 reportUnusedVariable = false
 reportPrivateUsage = false
-reportAttributeAccessIssue = false
-reportArgumentType = false
-reportReturnType = false
+reportAttributeAccessIssue = true
+reportArgumentType = true
+reportReturnType = true
 reportOptionalSubscript = false
-reportOptionalMemberAccess = false
+reportOptionalMemberAccess = true
 reportOperatorIssue = false
-reportCallIssue = false
+reportCallIssue = true
 reportPossiblyUnboundVariable = false
 
 [tool.pytest.ini_options]
@@ -128,7 +128,7 @@ source = ["src"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 0
+fail_under = 60
 
 [tool.alembic]
 script_location = "migrations"

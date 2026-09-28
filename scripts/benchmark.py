@@ -121,7 +121,9 @@ def benchmark_onnx_detector(
         prov_options = [{"device_id": 0} if p == "DmlExecutionProvider" else {} for p in providers]
     else:
         prov_options = None
-    session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers, provider_options=prov_options)
+    session = ort.InferenceSession(
+        model_path, sess_options=sess_options, providers=providers, provider_options=prov_options
+    )
     active_provider = session.get_providers()[0]
 
     input_name = session.get_inputs()[0].name
@@ -445,7 +447,8 @@ def generate_markdown_report(results: dict[str, Any]) -> str:
         "",
         "## 2. Execution Latency & Throughput Benchmark Results",
         "",
-        "| Pipeline Component | Runtime / Provider | Resolution | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | Throughput |",
+        "| Pipeline Component | Runtime / Provider | Resolution | p50 (ms) | p95 (ms) | "
+        "| p99 (ms) | Mean (ms) | Throughput |",
         "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
     ]
 
@@ -467,19 +470,22 @@ def generate_markdown_report(results: dict[str, Any]) -> str:
         p50, p95, p99 = face_det["p50_ms"], face_det["p95_ms"], face_det["p99_ms"]
         mean, fps = face_det["mean_ms"], face_det["fps"]
         lines.append(
-            f"| **YuNet Face Detector** | `OpenCV DNN (CPU)` | `640x480x3` | **{p50:.2f}** | **{p95:.2f}** | **{p99:.2f}** | {mean:.2f} | **{fps:.1f} FPS** |"
+            f"| **YuNet Face Detector** | `OpenCV DNN (CPU)` | `640x480x3` | "
+            f"**{p50:.2f}** | **{p95:.2f}** | **{p99:.2f}** | {mean:.2f} | **{fps:.1f} FPS** |"
         )
     if face_rec:
         p50, p95, p99 = face_rec["p50_ms"], face_rec["p95_ms"], face_rec["p99_ms"]
         mean, fps = face_rec["mean_ms"], face_rec["fps"]
         lines.append(
-            f"| **SFace Face Embedder** | `OpenCV DNN (CPU)` | `112x112x3` | **{p50:.2f}** | **{p95:.2f}** | **{p99:.2f}** | {mean:.2f} | **{fps:.1f} FPS** |"
+            f"| **SFace Face Embedder** | `OpenCV DNN (CPU)` | `112x112x3` | "
+            f"**{p50:.2f}** | **{p95:.2f}** | **{p99:.2f}** | {mean:.2f} | **{fps:.1f} FPS** |"
         )
     if tracker:
         p50, p95, p99 = tracker["p50_ms"], tracker["p95_ms"], tracker["p99_ms"]
         mean, fps = tracker["mean_ms"], tracker["fps"]
         lines.append(
-            f"| **CentroidTracker** | `Python / NumPy` | `10 tracks` | **{p50:.4f}** | **{p95:.4f}** | **{p99:.4f}** | {mean:.4f} | **{fps:.1f} Steps/s** |"
+            f"| **CentroidTracker** | `Python / NumPy` | `10 tracks` | "
+            f"**{p50:.4f}** | **{p95:.4f}** | **{p99:.4f}** | {mean:.4f} | **{fps:.1f} Steps/s** |"
         )
     if decoder:
         p50, p95, p99 = decoder["p50_ms"], decoder["p95_ms"], decoder["p99_ms"]
@@ -501,19 +507,23 @@ def generate_markdown_report(results: dict[str, Any]) -> str:
             "",
             "## 3. Real-Time Stream Concurrency & Capacity Analysis",
             "",
-            "Based on real measured latencies at an analysis cadence of **5 FPS** per camera channel (with keyframe decimation):",
+            "Based on real measured latencies at an analysis cadence of **5 FPS** "
+            "per camera channel (with keyframe decimation):",
             "",
             "- **GPU Accelerated (DirectML + RTX 4050 6GB):**",
-            f"  - Inference latency: **{dml['p50_ms'] if dml else 'N/A'} ms** (~{dml_fps:.1f} FPS theoretical single-channel max)",
+            f"  - Inference latency: **{dml['p50_ms'] if dml else 'N/A'} ms** "
+            f"(~{dml_fps:.1f} FPS theoretical single-channel max)",
             f"  - Sustainable concurrent cameras: **~{dml_streams} real-time streams** at 5 FPS analysis rate.",
             "  - GPU VRAM footprint: ~250 MB model + session context (~4% of 6GB VRAM capacity).",
             "",
             "- **CPU Fallback (AMD Ryzen 7 7435HS - 8C / 16T):**",
             f"  - Inference latency: **{cpu['p50_ms'] if cpu else 'N/A'} ms** (~{cpu_fps:.1f} FPS single-channel max)",
-            f"  - Sustainable concurrent cameras: **~{cpu_streams} real-time streams** at 5 FPS analysis rate without GPU offload.",
+            f"  - Sustainable concurrent cameras: **~{cpu_streams} real-time streams** "
+            "at 5 FPS analysis rate without GPU offload.",
             "",
             "- **Media Demuxing & Decoding (PyAV):**",
-            f"  - Demux + software decode throughput: **{dec_fps_str} FPS** (mean frame decode latency **{dec_mean_str} ms**).",
+            f"  - Demux + software decode throughput: **{dec_fps_str} FPS** "
+            f"(mean frame decode latency **{dec_mean_str} ms**).",
             "  - Decoding consumes < 1% CPU per 30 FPS 640x480 H.264 stream.",
             "",
             "- **Multi-Object Tracking (CentroidTracker):**",
@@ -526,11 +536,16 @@ def generate_markdown_report(results: dict[str, Any]) -> str:
             "",
             "| Artifact / Model | Format / Checksum | Status | Verified Capabilities |",
             "| :--- | :--- | :---: | :--- |",
-            "| `models/yolo26n.onnx` | ONNX (10.7 MB) | **VERIFIED** | Real weights loaded, 80 COCO classes, DirectML GPU/CPU. |",
-            "| `models/face_detection_yunet_2023mar.onnx` | ONNX (232 KB) | **VERIFIED** | OpenCV Zoo YuNet, dynamic sizing, 5 landmarks, blur/pose. |",
-            "| `models/face_recognition_sface_2021dec.onnx` | ONNX (38.7 MB) | **VERIFIED** | OpenCV Zoo SFace, 112x112 crop, 128-d cosine matching. |",
-            "| `ibvap.core.tracker.CentroidTracker` | Python | **VERIFIED** | IoU matching, track birth/death, stream epoch tracking. |",
-            "| `ibvap.core.probe.probe_url` | PyAV | **VERIFIED** | Non-blocking H.264 demuxing, PTS handling, SHA256 detection. |",
+            "| `models/yolo26n.onnx` | ONNX (10.7 MB) | **VERIFIED** | "
+            "Real weights loaded, 80 COCO classes, DirectML GPU/CPU. |",
+            "| `models/face_detection_yunet_2023mar.onnx` | ONNX (232 KB) | **VERIFIED** | "
+            "OpenCV Zoo YuNet, dynamic sizing, 5 landmarks, blur/pose. |",
+            "| `models/face_recognition_sface_2021dec.onnx` | ONNX (38.7 MB) | **VERIFIED** | "
+            "OpenCV Zoo SFace, 112x112 crop, 128-d cosine matching. |",
+            "| `ibvap.core.tracker.CentroidTracker` | Python | **VERIFIED** | "
+            "IoU matching, track birth/death, stream epoch tracking. |",
+            "| `ibvap.core.probe.probe_url` | PyAV | **VERIFIED** | "
+            "Non-blocking H.264 demuxing, PTS handling, SHA256 detection. |",
             "",
         ]
     )
@@ -562,7 +577,9 @@ def main() -> None:
     print(f"  OS:      {sys_info.get('os')}")
     print(f"  CPU:     {sys_info.get('cpu')} ({sys_info.get('logical_cores')} cores)")
     print(f"  RAM:     {sys_info.get('ram_gb')} GB")
-    print(f"  GPU:     {sys_info.get('gpu')} ({sys_info.get('vram_mb')} MB VRAM, Driver {sys_info.get('driver_version')})")
+    print(
+        f"  GPU:     {sys_info.get('gpu')} ({sys_info.get('vram_mb')} MB VRAM, Driver {sys_info.get('driver_version')})"
+    )
     print(f"  ORT:     v{sys_info.get('ort_version')} (Providers: {', '.join(sys_info.get('ort_providers', []))})")
     print(f"  OpenCV:  v{sys_info.get('opencv_version')}")
     print(f"  PyAV:    v{sys_info.get('pyav_version')}")

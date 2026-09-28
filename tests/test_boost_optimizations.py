@@ -3,7 +3,8 @@
 Areas covered:
 1. Video Streaming & Decoding: Gated encoding, event subscriber notification, GZip exclusion.
 2. Inference & Threading: Thread-local canvas concurrency, intra_op threads, shared handle concurrency.
-3. Biometrics, ANPR & Tracking: Plate box reuse, YuNet skipping, deque bounding, intrusion caching, exemplar matrix caching.
+3. Biometrics, ANPR & Tracking: Plate box reuse, YuNet skipping, deque bounding, intrusion caching,
+   exemplar matrix caching.
 4. Concurrency & Memory Leaks: Outbox RLock + FIFO eviction, RuleEngine track pruning, pipeline exit timestamp pruning.
 5. Database & API: SQLite PRAGMAs + queue pool, Events API early-exit & reverse scan, Outbox composite indexes.
 """
@@ -112,8 +113,9 @@ def test_detector_canvas_thread_isolation():
     """Adversarial stress test: multiple worker threads must not corrupt each other's letterbox canvas."""
     detector = ONNXDetectorProvider.__new__(ONNXDetectorProvider)
     detector._local = threading.local()
-    detector.model_width = 640
-    detector.model_height = 640
+    # Legacy setup attrs (write-only; current impl sizes via _input_size/_local.canvas).
+    detector.model_width = 640  # pyright: ignore[reportAttributeAccessIssue]
+    detector.model_height = 640  # pyright: ignore[reportAttributeAccessIssue]
 
     errors = []
 
@@ -179,7 +181,9 @@ def test_anpr_reuses_cached_plate_boxes():
     anpr = ANPRPipeline()
     anpr.detector = MagicMock()
     anpr.ocr = MagicMock()
-    anpr.ocr.recognize.return_value = [PlateCandidate(text="KA01AB1234", confidence=0.95, quality=0.9, bbox_norm=(0.0, 0.0, 1.0, 1.0))]
+    anpr.ocr.recognize.return_value = [
+        PlateCandidate(text="KA01AB1234", confidence=0.95, quality=0.9, bbox_norm=(0.0, 0.0, 1.0, 1.0))
+    ]
 
     vehicle_crop = np.zeros((200, 300, 3), dtype=np.uint8)
     cached_boxes = [(0.1, 0.2, 0.8, 0.4)]
@@ -504,7 +508,9 @@ def test_watchlist_store_rapid_saves_flush_preserves_latest(tmp_path):
     loaded = WatchlistStore(storage_path=store_file)
     assert loaded.get_entry("suspect_1") is not None
     assert loaded.get_entry("suspect_2") is not None
-    assert loaded.get_entry("suspect_1").sight_count == 1
+    reloaded_suspect = loaded.get_entry("suspect_1")
+    assert reloaded_suspect is not None
+    assert reloaded_suspect.sight_count == 1
 
 
 def test_events_api_delayed_buffered_events_do_not_displace_live(api_client: TestClient):
