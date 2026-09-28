@@ -13,6 +13,7 @@ dependencies = [
     "sqlalchemy[asyncio]==2.0.52",
     "alembic==1.19.1",
     "asyncpg==0.31.0",
+    "psycopg[binary]==3.2.9",
     "greenlet>=3.0",
     "av==18.1.0",
     "opencv-python==5.0.0.93",
