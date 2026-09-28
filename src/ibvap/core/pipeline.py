@@ -858,6 +858,11 @@ class MiniPipeline:
         except Exception:
             use_av = False
 
+        # Container handles must close even when the decode loop raises:
+        # unclosed PyAV/OpenCV handles GC'd at interpreter exit have aborted
+        # teardown (SIGABRT) on Linux after an otherwise-green run.
+        container = None
+        cap = None
         try:
             if use_av:
                 try:
@@ -868,7 +873,6 @@ class MiniPipeline:
                 else:
                     stream = next((s for s in container.streams if s.type == "video"), None)
                     if stream is None:
-                        container.close()
                         use_av = False
                     else:
                         for frame in container.decode(stream):
@@ -892,10 +896,6 @@ class MiniPipeline:
                                 events.append(ev)
                             if decoded >= max_frames * self.sample_stride + 20 and analysed >= max_frames:
                                 break
-                        container.close()
-                        self.sample_stride = orig_sample_stride
-                        self.face_stride = orig_face_stride
-                        self.enable_face = orig_enable_face
                         return events
             if not use_av:
                 cap = cv2.VideoCapture(path)
@@ -918,8 +918,13 @@ class MiniPipeline:
                     else:
                         # Skipped frame not counted toward max_frames (max_frames = analysed frames)
                         continue
-                cap.release()
         finally:
+            if container is not None:
+                with contextlib.suppress(Exception):
+                    container.close()
+            if cap is not None:
+                with contextlib.suppress(Exception):
+                    cap.release()
             self.sample_stride = orig_sample_stride
             self.face_stride = orig_face_stride
             self.enable_face = orig_enable_face
