@@ -53,8 +53,8 @@ def get_system_info() -> dict[str, Any]:
     try:
         import winreg
 
-        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
-        info["cpu"] = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
+        k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")  # pyright: ignore[reportAttributeAccessIssue] # winreg exists only on Windows; Linux CI sees empty stubs (runtime guarded by try/except)
+        info["cpu"] = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()  # pyright: ignore[reportAttributeAccessIssue] # winreg exists only on Windows (runtime guarded by try/except)
     except Exception:
         info["cpu"] = platform.processor() or "Unknown CPU"
 
@@ -76,7 +76,7 @@ def get_system_info() -> dict[str, Any]:
 
         ms = MEMORYSTATUSEX()
         ms.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)):  # pyright: ignore[reportAttributeAccessIssue] # ctypes.windll exists only on Windows (runtime guarded by try/except)
             info["ram_gb"] = round(ms.ullTotalPhys / (1024**3), 1)
     except Exception:
         pass
