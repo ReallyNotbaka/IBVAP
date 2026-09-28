@@ -201,6 +201,8 @@ def _evict_oldest_locked(out_dir: Path) -> None:
 # to dropped evidence files, never unbounded memory or hot-path stalls.
 
 _EVIDENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evidence-offload")
+
+
 # Non-daemon worker would hang interpreter exit (idle queue-get never returns).
 # wait=True is deliberate: draining at most _EVIDENCE_MAX_PENDING pending
 # encodes on exit preserves the last alerts' evidence instead of dropping it.
