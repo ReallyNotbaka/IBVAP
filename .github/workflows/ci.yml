@@ -51,9 +51,10 @@ jobs:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
           # Dump Python tracebacks on fatal signals (teardown SIGABRT triage).
           PYTHONFAULTHANDLER: "1"
-          # Debug heap: abort loudly AT a corrupting call (with traceback)
-          # instead of mysteriously at teardown. Slower, CI-only.
-          PYTHONMALLOC: "debug"
+          # glibc heap checker: abort loudly AT a native heap corruption
+          # (FFmpeg/numpy buffers) with a diagnostic instead of mysteriously
+          # at teardown. CI-only, no code impact.
+          MALLOC_CHECK_: "3"
           # Fixed hash seed: reproducible GC/teardown order across runs, so a
           # teardown abort is either deterministic (bisectable) or gone.
           PYTHONHASHSEED: "0"
