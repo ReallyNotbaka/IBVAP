@@ -67,13 +67,39 @@ jobs:
       - name: Alembic upgrade head (empty→latest)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
-        run: uv run alembic upgrade head
+        # Surface failures as check annotations (visible without log access)
+        # while preserving the real exit code for gating.
+        run: |
+          set +e
+          uv run alembic upgrade head > /tmp/alembic-upgrade.log 2>&1
+          CODE=$?
+          tail -25 /tmp/alembic-upgrade.log
+          if [ "$CODE" -ne 0 ]; then
+            MSG=$(tail -25 /tmp/alembic-upgrade.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/%0A/g')
+            echo "::error::alembic upgrade head failed (exit $CODE): %0A$MSG"
+          fi
+          exit $CODE
       - name: Alembic downgrade → upgrade (strict)
         env:
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
         run: |
-          uv run alembic downgrade -1
-          uv run alembic upgrade head
+          set +e
+          uv run alembic downgrade -1 > /tmp/alembic-downgrade.log 2>&1
+          CODE=$?
+          tail -25 /tmp/alembic-downgrade.log
+          if [ "$CODE" -ne 0 ]; then
+            MSG=$(tail -25 /tmp/alembic-downgrade.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/%0A/g')
+            echo "::error::alembic downgrade -1 failed (exit $CODE): %0A$MSG"
+            exit $CODE
+          fi
+          uv run alembic upgrade head > /tmp/alembic-reupgrade.log 2>&1
+          CODE=$?
+          tail -5 /tmp/alembic-reupgrade.log
+          if [ "$CODE" -ne 0 ]; then
+            MSG=$(tail -25 /tmp/alembic-reupgrade.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e ':a' -e 'N' -e '$!ba' -e 's/\n/%0A/g')
+            echo "::error::alembic re-upgrade head failed (exit $CODE): %0A$MSG"
+          fi
+          exit $CODE
 
   slow:
     name: slow (nightly)
