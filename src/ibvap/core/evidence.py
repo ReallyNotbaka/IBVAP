@@ -204,7 +204,18 @@ _EVIDENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evide
 # Non-daemon worker would hang interpreter exit (idle queue-get never returns).
 # wait=True is deliberate: draining at most _EVIDENCE_MAX_PENDING pending
 # encodes on exit preserves the last alerts' evidence instead of dropping it.
-atexit.register(lambda: _EVIDENCE_EXECUTOR.shutdown(wait=True, cancel_futures=True))
+def shutdown_evidence_executor() -> None:
+    """Idempotently drain/stop the offload worker (safe to call twice).
+
+    Prefer calling this deterministically (e.g. pytest session teardown)
+    over relying on interpreter-exit ordering: native teardown races at
+    finalization time have aborted processes on some platforms.
+    """
+    with contextlib.suppress(Exception):
+        _EVIDENCE_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+
+
+atexit.register(shutdown_evidence_executor)
 _EVIDENCE_MAX_PENDING = 32
 _EVIDENCE_EVICT_EVERY_N = 16
 _EVIDENCE_QUEUE_LOCK = threading.Lock()

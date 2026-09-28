@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+DIST_INDEX = Path("frontend/dist/index.html")
+needs_built_frontend = pytest.mark.skipif(
+    not DIST_INDEX.exists(),
+    reason="frontend/dist not built in this checkout (backend-only CI serves no SPA)",
+)
 
+
+@needs_built_frontend
 def test_frontend_mounted_and_serves_html(api_client: TestClient) -> None:
     client = api_client
     response = client.get("/")
@@ -14,6 +22,7 @@ def test_frontend_mounted_and_serves_html(api_client: TestClient) -> None:
     assert "<script" in response.text
 
 
+@needs_built_frontend
 def test_frontend_spa_routing_fallbacks(api_client: TestClient) -> None:
     client = api_client
     routes = ["/monitor", "/connect/phone", "/overview", "/alerts", "/health"]

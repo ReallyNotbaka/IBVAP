@@ -111,6 +111,27 @@ def auth_headers() -> dict[str, str]:
     return {"X-API-Token": os.environ.get("IBVAP_API_TOKEN", TEST_API_TOKEN)}
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _orderly_native_teardown() -> Iterator[None]:
+    """Deterministic teardown before interpreter exit.
+
+    Thread pools and DB engines torn down in a controlled order at session
+    end instead of interpreter-finalization GC roulette, which has aborted
+    (SIGABRT) teardown on Linux after an otherwise-green run. Sync on
+    purpose: the asyncio runner is function-scoped, so a session async
+    fixture is a ScopeMismatch.
+    """
+    yield
+    from ibvap.core import evidence as _evidence
+
+    _evidence.shutdown_evidence_executor()
+    import asyncio
+    import gc
+
+    asyncio.run(dispose_engine())
+    gc.collect()
+
+
 @pytest.fixture(scope="session")
 def shared_app():
     """Single FastAPI app instance shared by all API tests in the session."""
