@@ -49,6 +49,8 @@ jobs:
         env:
           IBVAP_DB__URL: postgresql+asyncpg://ibvap:ibvap@localhost:5432/ibvap
           DATABASE_URL: postgresql+psycopg://ibvap:ibvap@localhost:5432/ibvap
+          # Dump Python tracebacks on fatal signals (teardown SIGABRT triage).
+          PYTHONFAULTHANDLER: "1"
         run: uv run pytest -q -m "not slow and not soak and not benchmark and not live and not gpu" --cov=src --cov-report=term-missing --durations=20
       - name: Alembic upgrade head (empty→latest)
         env:
