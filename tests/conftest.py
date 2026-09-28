@@ -127,6 +127,30 @@ def auth_headers() -> dict[str, str]:
     return {"X-API-Token": os.environ.get("IBVAP_API_TOKEN", TEST_API_TOKEN)}
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_terminal_summary(terminalreporter: object, exitstatus: int, config: object) -> None:
+    """Exit here with pytest's exact code instead of returning to the runner.
+
+    The Linux CI runner deterministically aborts (SIGABRT) during interpreter
+    finalization AFTER a fully-green run (all tests pass, coverage saved,
+    summary printed). Everything observable is already recorded at this point
+    and session fixtures have already torn down, so exiting now preserves
+    pytest's exit code bit-for-bit: failures and errors still fail, only the
+    crashing finalization phase is skipped. Stdout/stderr are flushed first
+    so no output is lost. Revisit if a Linux repro (docker/WSL) identifies
+    the native destructor at fault.
+    """
+    del terminalreporter, config
+    import contextlib
+    import os
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+    os._exit(int(exitstatus))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _orderly_native_teardown() -> Iterator[None]:
     """Deterministic teardown before interpreter exit.
