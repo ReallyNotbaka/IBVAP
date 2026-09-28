@@ -69,8 +69,10 @@ jobs:
           echo "--- phase markers ---"
           cat /tmp/pytest-phase.log || true
           if [ "$CODE" -ne 0 ]; then
-            BODY=$(tail -60 /tmp/pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
-            echo "::error::pytest failed (exit $CODE). Tail follows:%0A$BODY"
+            TAIL=$(tail -45 /tmp/pytest.log | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error::pytest failed (exit $CODE). Log tail follows:%0A$TAIL"
+            MARKS=$(cat /tmp/pytest-phase.log 2>/dev/null | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk '{printf "%s%%0A", $0}')
+            echo "::notice::teardown phase markers:%0A$MARKS"
           fi
           exit $CODE
       - name: Alembic upgrade head (empty→latest)
