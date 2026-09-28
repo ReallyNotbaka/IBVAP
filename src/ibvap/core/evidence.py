@@ -202,13 +202,17 @@ def _evict_oldest_locked(out_dir: Path) -> None:
 
 _EVIDENCE_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="evidence-offload")
 # Non-daemon worker would hang interpreter exit (idle queue-get never returns).
+# wait=True is deliberate: draining at most _EVIDENCE_MAX_PENDING pending
+# encodes on exit preserves the last alerts' evidence instead of dropping it.
 atexit.register(lambda: _EVIDENCE_EXECUTOR.shutdown(wait=True, cancel_futures=True))
 _EVIDENCE_MAX_PENDING = 32
 _EVIDENCE_EVICT_EVERY_N = 16
 _EVIDENCE_QUEUE_LOCK = threading.Lock()
 _EVIDENCE_PENDING: deque[Future[None]] = deque()
 _evidence_dropped = 0
-_evidence_saves_since_evict = 0  # worker-thread only
+# Per-output-dir save counters: eviction scans one directory per N saves in
+# THAT directory, so tmp/test dirs cannot starve data/evidence (or vice versa).
+_evidence_saves_since_evict: dict[str, int] = {}  # worker-thread only
 
 
 def get_evidence_dropped() -> int:
@@ -279,17 +283,18 @@ def _evidence_worker_job(
     output_dir: str,
 ) -> None:
     """Background encode+write with amortized FIFO eviction (every N saves)."""
-    global _evidence_saves_since_evict
     with contextlib.suppress(Exception):
         _write_frame_evidence(event_id, frame, bbox_norm, Path(output_dir))
-    _evidence_saves_since_evict += 1
-    if _evidence_saves_since_evict >= _EVIDENCE_EVICT_EVERY_N:
-        _evidence_saves_since_evict = 0
+    dir_key = str(output_dir)
+    count = _evidence_saves_since_evict.get(dir_key, 0) + 1
+    if count >= _EVIDENCE_EVICT_EVERY_N:
+        count = 0
         try:
             with _EVIDENCE_LOCK:
                 _evict_oldest_locked(Path(output_dir))
         except Exception:
             pass
+    _evidence_saves_since_evict[dir_key] = count
 
 
 def validate_event_id(event_id: str) -> str:

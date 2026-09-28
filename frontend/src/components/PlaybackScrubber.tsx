@@ -5,6 +5,7 @@ export interface PlaybackScrubberProps {
   isFootage: boolean;
   playback?: PlaybackState;
   transportBusy: boolean;
+  seekError?: string | null;
   onTransport: (action: "pause" | "resume" | "restart" | "stop") => Promise<void>;
   onSeek?: (positionSeconds: number) => Promise<void>;
   onReconnect?: () => Promise<void>;
@@ -18,6 +19,7 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
   isFootage,
   playback,
   transportBusy,
+  seekError,
   onTransport,
   onSeek,
   onReconnect,
@@ -31,11 +33,31 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
   // fires once on release (debounced), never per-input-event (seek flood fix).
   const [draft, setDraft] = useState<number | null>(null);
   const draftRef = useRef<number | null>(null);
+  // Last committed value: the draft is held until the backend-reported
+  // position catches up to it (avoids snapping back to the stale position
+  // while the seek request is in flight). Epsilon covers step/float noise.
+  const committedRef = useRef(0);
   const commitTimer = useRef<number | null>(null);
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
 
   const shown = draft ?? position;
+
+  useEffect(() => {
+    if (draft !== null && Math.abs(position - committedRef.current) <= 0.15) {
+      draftRef.current = null;
+      setDraft(null);
+    }
+  }, [position, draft]);
+
+  // A failed seek never converges: drop the draft so the slider falls back
+  // to the live position while the error message explains why.
+  useEffect(() => {
+    if (seekError) {
+      draftRef.current = null;
+      setDraft(null);
+    }
+  }, [seekError]);
 
   const commitSeek = useCallback((value: number) => {
     if (commitTimer.current !== null) {
@@ -68,8 +90,10 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
   const handleRelease = useCallback(() => {
     if (draftRef.current !== null) {
       const val = draftRef.current;
+      // Keep the draft rendered until the backend position catches up
+      // (see the committedRef effect above); only the ref moves on.
       draftRef.current = null;
-      setDraft(null);
+      committedRef.current = val;
       commitSeek(val);
     }
   }, [commitSeek]);
@@ -111,6 +135,8 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
             onChange={handleSliderChange}
             onMouseUp={handleRelease}
             onTouchEnd={handleRelease}
+            onPointerUp={handleRelease}
+            onLostPointerCapture={handleRelease}
             onBlur={handleRelease}
             onKeyUp={handleKeyUp}
             onKeyDown={handleKeyDown}
@@ -118,6 +144,11 @@ export const PlaybackScrubber = memo(function PlaybackScrubber({
             aria-label="Seek footage"
           />
           <span>{formatTime(duration)}</span>
+        </div>
+      )}
+      {seekError && (
+        <div className="text-[10px] font-mono text-red-300" role="alert">
+          Seek failed: {seekError}
         </div>
       )}
 

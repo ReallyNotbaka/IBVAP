@@ -213,7 +213,14 @@ def _drain_ocr_futures(
                 continue
         else:
             submitted = getattr(future, "_ocr_submitted_mono", None)
-            age = (now_mono - submitted) if submitted is not None else 0.0
+            if submitted is None:
+                # Defensive: stamp on first sight so the future ages normally.
+                # Production always stamps at submit; only hand-built test
+                # futures arrive unstamped (previously these never reaped).
+                with contextlib.suppress(Exception):
+                    future._ocr_submitted_mono = now_mono  # type: ignore[attr-defined]
+                submitted = now_mono
+            age = now_mono - submitted
             if age >= timeout:
                 with contextlib.suppress(Exception):
                     future.cancel()
@@ -321,6 +328,9 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     # Worker-side OCR caches, epoch-scoped (see _resync_epoch_if_bumped).
     plate_cache: dict[str, Any] = {"detections": [], "plates": [], "at_mono": 0.0}
     ocr_last_submitted: dict[int | tuple[int, float, float], float] = {}
+    # Health-only counters, written by analyze() and read by capture-thread
+    # health samples without a lock: plain-int ops are GIL-atomic, so reads
+    # are at most stale-by-one — acceptable for telemetry, never for logic.
     ocr_timeouts = 0
     # Single-slot analysis handoff drops: frames overwritten before analyze()
     # consumed them. Exposed as queue_drops in health samples (TileHealth).

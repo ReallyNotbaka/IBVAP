@@ -61,6 +61,9 @@ Compromised camera, malicious stream, hostile uploaded media, SSRF/DNS rebinding
 - **Camera worker netns** has egress only to allowlisted `camera CIDR` + `mediamtx` + `postgres`. Cannot reach internet or API secrets.
 - **Parser sandbox** (FFmpeg/paddle) has `Network=None`, seccomp `--cap-drop ALL`, `readOnlyRootfs`.
 - **API** never holds camera creds in env; fetched from encrypted vault on demand.
+- **Demo trust boundary (as implemented):** mutating routes require `X-API-Token`;
+  `GET /evidence/*`, `/cameras/{id}/stream`, and `/observations` are open by design
+  (unguessable UUIDs, LAN-demo posture). Internet exposure requires auth on reads + TLS.
 
 ---
 

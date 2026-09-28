@@ -115,6 +115,7 @@ test('calibration uses selected camera after load', async ({ page }) => {
 
 test('CSV escapes formulas', async ({ page }) => {
   const evil = '=1+1';
+  const evilPadded = ' =1+1';
   const now = Math.floor(Date.now() / 1000);
   await page.route('**/api/v1/cameras', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([CAM_A]) }),
@@ -135,6 +136,16 @@ test('CSV escapes formulas', async ({ page }) => {
           created_at: now,
           explanation: { suspect_name: evil, threat_level: 'HIGH' },
         },
+        {
+          id: 'e-evil-padded',
+          event_type: 'watchlist_match',
+          camera_id: 'cam-a',
+          zone_id: 'z1',
+          track_id: 8,
+          confidence: 0.9,
+          created_at: now,
+          explanation: { suspect_name: evilPadded, threat_level: 'HIGH' },
+        },
       ]),
     }),
   );
@@ -146,6 +157,8 @@ test('CSV escapes formulas', async ({ page }) => {
   expect(filePath).toBeTruthy();
   const csv = fs.readFileSync(filePath as string, 'utf8');
   expect(csv).toContain(`"'${evil}"`);
+  // Leading whitespace does not bypass the formula guard (Excel trims it).
+  expect(csv).toContain(`"'${evilPadded}"`);
 });
 
 test('seek commits once on release (debounced)', async ({ page }) => {

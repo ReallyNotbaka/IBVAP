@@ -72,6 +72,19 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
       revokeObjectUrls(previewsRef.current);
     };
   }, []);
+
+  // The modal stays mounted while closed (returns null): revoke previews and
+  // reset photo state on close so hidden blob URLs are not held indefinitely.
+  const wasOpenRef = useRef(isOpen);
+  useEffect(() => {
+    if (wasOpenRef.current && !isOpen) {
+      revokeObjectUrls(previewsRef.current);
+      setPhotos([]);
+      setPhotoPreviews([]);
+      setPlateThumbnail(null);
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
   const [plateThumbnail, setPlateThumbnail] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -269,6 +282,11 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
         setVehicleDescription("");
         setNotes("");
         setPlateThumbnail(null);
+        // Clear any face-flow photo leftovers so their object URLs are freed
+        // when switching between enroll tabs.
+        revokeObjectUrls(photoPreviews);
+        setPhotos([]);
+        setPhotoPreviews([]);
         setTimeout(() => {
           setActiveTab("list");
           setSuccessMessage("");

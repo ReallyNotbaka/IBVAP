@@ -45,14 +45,28 @@ def _isolate_route_state() -> Iterator[None]:
     (``SW._CAMERAS``/``SW._STATE_MACHINES``) and the in-memory outbox globals
     leak between tests without this guard. Snapshot before, restore after —
     every test observes the pre-test state and leaves no residue behind.
+
+    Plain-data dicts (playback, observations, health, uploads, sites) are
+    deep-copied. ``_ACTIVE_PIPELINES`` holds live ``MiniPipeline`` objects
+    (ONNX sessions, locks — not deepcopyable), so only keys added during the
+    test are removed. Watchlist/sightings singleton stores are NOT covered
+    (follow-up): tests using them must clean up after themselves.
     """
     import copy
 
+    from ibvap.api.routes import sites as _sites
+    from ibvap.api.routes import uploads as _uploads
     from ibvap.events import outbox as _outbox
     from ibvap.services import stream_worker as SW
 
     cameras_snapshot = copy.deepcopy(SW._CAMERAS)
     machines_snapshot = copy.deepcopy(SW._STATE_MACHINES)
+    playback_snapshot = copy.deepcopy(SW._PLAYBACK)
+    observations_snapshot = copy.deepcopy(SW._OBSERVATIONS)
+    health_snapshot = copy.deepcopy(SW._HEALTH)
+    uploads_snapshot = copy.deepcopy(_uploads._UPLOADS)
+    sites_snapshot = copy.deepcopy(_sites._SITES)
+    pipelines_before = set(SW._ACTIVE_PIPELINES)
     with _outbox._LOCK:
         events_snapshot = copy.deepcopy(_outbox._EVENTS)
         outbox_snapshot = copy.deepcopy(_outbox._OUTBOX)
@@ -66,6 +80,18 @@ def _isolate_route_state() -> Iterator[None]:
         SW._CAMERAS.update(cameras_snapshot)
         SW._STATE_MACHINES.clear()
         SW._STATE_MACHINES.update(machines_snapshot)
+        SW._PLAYBACK.clear()
+        SW._PLAYBACK.update(playback_snapshot)
+        SW._OBSERVATIONS.clear()
+        SW._OBSERVATIONS.update(observations_snapshot)
+        SW._HEALTH.clear()
+        SW._HEALTH.update(health_snapshot)
+        _uploads._UPLOADS.clear()
+        _uploads._UPLOADS.update(uploads_snapshot)
+        _sites._SITES.clear()
+        _sites._SITES.update(sites_snapshot)
+        for added in set(SW._ACTIVE_PIPELINES) - pipelines_before:
+            SW._ACTIVE_PIPELINES.pop(added, None)
         with _outbox._LOCK:
             _outbox._EVENTS.clear()
             _outbox._EVENTS.extend(events_snapshot)

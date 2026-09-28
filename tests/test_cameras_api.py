@@ -527,7 +527,7 @@ def test_create_camera_returns_201_with_location(api_client: TestClient) -> None
 
 
 def test_create_camera_rejects_non_uuid_site_id(api_client: TestClient) -> None:
-    """Task 5 contract: site_id is a UUID4 — garbage gets a 422."""
+    """Task 5 contract: site_id is a UUID (any version) — garbage gets a 422."""
     r = api_client.post(
         "/api/v1/cameras",
         json={

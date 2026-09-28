@@ -20,10 +20,11 @@ type AlertTab = "all" | "watchlist" | "intrusions" | "exits" | "system";
 
 // CSV cell escape: quote every field, double embedded quotes, and guard
 // formula injection by prefixing cells starting with = + - @ (or tab/CR)
-// with a single quote so spreadsheets treat them as text.
+// with a single quote so spreadsheets treat them as text. Leading whitespace
+// is ignored for the trigger test (Excel trims it before evaluating).
 export function csvEscape(value: unknown): string {
   const raw = value === null || value === undefined ? "" : String(value);
-  const guarded = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+  const guarded = /^[=+\-@\t\r]/.test(raw.replace(/^\s+/, "")) ? `'${raw}` : raw;
   return `"${guarded.replace(/"/g, '""')}"`;
 }
 

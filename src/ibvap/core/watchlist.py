@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import copy
 import json
 import logging
 import threading
@@ -279,12 +280,18 @@ class WatchlistStore:
             return False
 
     def get_entry(self, entry_id: str) -> WatchlistEntry | None:
+        # Shallow copy: callers must not mutate live store state outside the
+        # lock (sight_count/gallery races). Gallery arrays are shared
+        # read-only; scalar fields are safely detached.
         with self._lock:
-            return self._entries.get(entry_id)
+            entry = self._entries.get(entry_id)
+            return copy.copy(entry) if entry is not None else None
 
     def list_entries(self) -> list[WatchlistEntry]:
+        # Detached copies (see get_entry): the route layer iterates these
+        # without holding the lock.
         with self._lock:
-            return list(self._entries.values())
+            return [copy.copy(e) for e in self._entries.values()]
 
     def record_sighting(self, entry_id: str, timestamp: float) -> None:
         with self._lock:

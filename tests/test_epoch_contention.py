@@ -86,6 +86,59 @@ def test_watchlist_sighting_save_debounced_until_flush(tmp_path: Path) -> None:
     assert debounced.sight_count == 1
 
 
+def test_watchlist_reads_are_detached_copies(tmp_path: Path) -> None:
+    """Mutating a returned entry must not corrupt live store state."""
+    store = _contention_store(tmp_path)
+    store.record_sighting("ABC123", time.time())
+    store.flush()
+
+    got = store.get_entry("ABC123")
+    assert got is not None
+    got.sight_count = 9999
+    got.name = "Tampered"
+
+    live = store.get_entry("ABC123")
+    assert live is not None
+    assert live.sight_count == 1
+    assert live.name == "Contention Car"
+    listed = store.list_entries()
+    assert all(e.sight_count == 1 for e in listed)
+
+
+def test_unstamped_future_stamped_then_reaped() -> None:
+    """Hand-built (unstamped) futures are stamped on first sight, then age."""
+    from ibvap.services.stream_worker import _drain_ocr_futures
+
+    bare: Future = Future()  # never completes, no submit stamp
+    pending: list = [bare]
+
+    results, timeouts = _drain_ocr_futures(pending, now=1000.0)
+    assert results == [] and timeouts == 0
+    assert pending == [bare], "first sight only stamps, never reaps"
+    assert getattr(bare, "_ocr_submitted_mono", None) == 1000.0
+
+    results, timeouts = _drain_ocr_futures(pending, now=1000.0 + 5.0)
+    assert timeouts == 1
+    assert bare.cancelled()
+    assert pending == []
+
+
+def test_evidence_evict_counters_are_per_directory(tmp_path: Path) -> None:
+    """Eviction pacing in one output dir must not starve (or trigger) another."""
+    from ibvap.core import evidence as ev
+
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    frame = np.full((64, 64, 3), 128, dtype=np.uint8)
+    for i in range(ev._EVIDENCE_EVICT_EVERY_N):
+        ev._evidence_worker_job(f"a-{i}", frame, [0.2, 0.2, 0.8, 0.8], str(dir_a))
+    assert ev._evidence_saves_since_evict.get(str(dir_a)) == 0, "dir A evicted on its own Nth save"
+    assert str(dir_b) not in ev._evidence_saves_since_evict
+    ev._evidence_worker_job("b-0", frame, [0.2, 0.2, 0.8, 0.8], str(dir_b))
+    assert ev._evidence_saves_since_evict.get(str(dir_b)) == 1
+    assert ev._evidence_saves_since_evict.get(str(dir_a)) == 0
+
+
 def test_epoch_bump_clears_latch() -> None:
     """An intrusion latch must not survive a stream-epoch bump."""
     from ibvap.core.detector import Detection

@@ -447,8 +447,8 @@ def generate_markdown_report(results: dict[str, Any]) -> str:
         "",
         "## 2. Execution Latency & Throughput Benchmark Results",
         "",
-        "| Pipeline Component | Runtime / Provider | Resolution | p50 (ms) | p95 (ms) | "
-        "| p99 (ms) | Mean (ms) | Throughput |",
+        "| Pipeline Component | Runtime / Provider | Resolution | p50 (ms) | p95 (ms) | p99 (ms) | Mean (ms) | "
+        "Throughput |",
         "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
     ]
 

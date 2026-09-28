@@ -89,6 +89,7 @@ export const CameraTile = memo(function CameraTile({
   const [videoAspect, setVideoAspect] = useState<number | null>(null);
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [transportBusy, setTransportBusy] = useState(false);
+  const [seekError, setSeekError] = useState<string | null>(null);
   const [visionMode, setVisionMode] = useState<TacticalVisionMode>("normal");
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -164,6 +165,7 @@ export const CameraTile = memo(function CameraTile({
     async (pos: number) => {
       const wasPlaying = playback?.state === "playing";
       setTransportBusy(true);
+      setSeekError(null);
       try {
         if (wasPlaying) {
           await controlPlayback(camera.id, "pause");
@@ -173,6 +175,8 @@ export const CameraTile = memo(function CameraTile({
           await controlPlayback(camera.id, "resume");
         }
         await qc.invalidateQueries({ queryKey: ["camera-playback", camera.id] });
+      } catch (err) {
+        setSeekError(err instanceof Error ? err.message : "Seek request failed.");
       } finally {
         setTransportBusy(false);
       }
@@ -906,6 +910,7 @@ export const CameraTile = memo(function CameraTile({
         isFootage={isFootage}
         playback={playback}
         transportBusy={transportBusy}
+        seekError={seekError}
         onTransport={runTransport}
         onSeek={handleSeek}
         onReconnect={handleReconnect}
