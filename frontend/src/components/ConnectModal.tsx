@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { testCamera, createCamera } from "../lib/api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -6,6 +6,7 @@ import {
   CloseIcon,
   CheckCircleIcon,
   AlertTriangleIcon,
+  CameraIcon,
 } from "./Icons";
 
 function isFootagePath(value: string, protocol?: string): boolean {
@@ -19,11 +20,37 @@ function isFootagePath(value: string, protocol?: string): boolean {
   );
 }
 
+export type PresetType = "droidcam" | "ipwebcam" | "rtsp" | "custom";
+
+function extractHostAndPort(rawAddr: string, fallbackPort: string): { host: string; port: string } {
+  let host = rawAddr.trim();
+  let port = fallbackPort.trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end !== -1) {
+      const rest = host.slice(end + 1);
+      if (rest.startsWith(":")) {
+        port = rest.slice(1).replace(/\D/g, "");
+      }
+      host = host.slice(0, end + 1);
+    }
+  } else if (host.includes(":")) {
+    const parts = host.split(":");
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+      host = parts[0];
+      port = parts[1];
+    }
+  }
+  return { host, port };
+}
+
 export const ConnectModal = memo(function ConnectModal() {
   const nav = useNavigate();
   const loc = useLocation();
   const qc = useQueryClient();
   const open = loc.pathname === "/connect/phone";
+
+  const [preset, setPreset] = useState<PresetType>("droidcam");
   const [address, setAddress] = useState("");
   const [port, setPort] = useState("4747");
   const [protocol, setProtocol] = useState("http");
@@ -63,14 +90,31 @@ export const ConnectModal = memo(function ConnectModal() {
     };
   }, [open, nav]);
 
-  const applyProfile = useCallback((presetPort: string, presetProto: string, presetPath: string) => {
-    setPort(presetPort);
-    setProtocol(presetProto);
-    setStreamPath(presetPath);
+  // Apply template defaults without locking or resetting user-entered custom parameters
+  const applyPreset = useCallback((targetPreset: PresetType) => {
+    setPreset(targetPreset);
     setResult(null);
     setSaveError("");
-  }, []);
 
+    if (targetPreset === "droidcam") {
+      setProtocol("http");
+      setPort("4747");
+      setStreamPath("video");
+    } else if (targetPreset === "ipwebcam") {
+      setProtocol("http");
+      setPort("8080");
+      setStreamPath("video");
+    } else if (targetPreset === "rtsp") {
+      setProtocol("rtsp");
+      setPort("554");
+      setStreamPath("stream1");
+    } else if (targetPreset === "custom") {
+      if (!protocol) setProtocol("http");
+      if (!port) setPort("8000");
+    }
+  }, [protocol, port]);
+
+  // Intelligent URL / IP parser that extracts custom ports and protocols freely
   const handleAddressChange = useCallback((raw: string) => {
     const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
     if (isFootagePath(trimmed, protocol)) {
@@ -81,10 +125,13 @@ export const ConnectModal = memo(function ConnectModal() {
       return;
     }
 
+    // Try parsing as full URL or host:port
     let candidate = trimmed;
-    if (!candidate.includes("://") && (candidate.includes(":") || candidate.includes("/"))) {
-      candidate = "http://" + candidate;
+    const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(candidate);
+    if (!hasScheme && (candidate.includes(":") || candidate.includes("/"))) {
+      candidate = (protocol === "rtsp" ? "rtsp://" : "http://") + candidate;
     }
+
     try {
       const parsed = new URL(candidate);
       if (parsed.username) {
@@ -99,36 +146,51 @@ export const ConnectModal = memo(function ConnectModal() {
         setAddress(parsed.hostname);
         if (parsed.port) {
           setPort(parsed.port);
-          if (parsed.port === "4747" || parsed.port === "8080") {
-            setProtocol("http");
-            setStreamPath(parsed.pathname.replace(/^\/+/, "") || "video");
-          } else if (parsed.port === "554") {
-            setProtocol("rtsp");
+          setPreset("custom");
+        }
+        if (hasScheme && parsed.protocol) {
+          const proto = parsed.protocol.replace(":", "").toLowerCase();
+          if (["http", "https", "rtsp", "rtsps"].includes(proto)) {
+            setProtocol(proto);
           }
         }
-        if (trimmed.includes("://") && parsed.protocol && ["http:", "https:", "rtsp:", "rtsps:"].includes(parsed.protocol)) {
-          setProtocol(parsed.protocol.replace(":", ""));
-        }
         const p = parsed.pathname.replace(/^\/+/, "");
-        if (p) setStreamPath(p);
+        if (p) {
+          setStreamPath(p);
+        }
         return;
       }
     } catch {
-      // fallback to plain input
+      // Fallback: standard plain input
     }
     setAddress(trimmed);
   }, [protocol]);
 
+  // Free custom port input handler
   const handlePortChange = useCallback((val: string) => {
     const clean = val.replace(/\D/g, "");
     setPort(clean);
-    if (clean === "4747" || clean === "8080") {
-      setProtocol("http");
-      setStreamPath((prev) => prev || "video");
-    } else if (clean === "554") {
-      setProtocol("rtsp");
-    }
+    setPreset("custom");
   }, []);
+
+  // Quick port shortcut chip
+  const handleSelectQuickPort = useCallback((p: string) => {
+    setPort(p);
+    setPreset("custom");
+  }, []);
+
+  // Real-time live endpoint preview
+  const liveEndpoint = useMemo(() => {
+    const cleanAddr = address.trim().replace(/^["']|["']$/g, "").trim();
+    if (!cleanAddr) return "";
+    if (isFootagePath(cleanAddr, protocol)) return cleanAddr;
+    const { host, port: extractedPort } = extractHostAndPort(cleanAddr, port);
+    const cleanProto = protocol.trim() || "http";
+    const cleanPath = streamPath.trim().replace(/^\/+/, "");
+    const portSection = extractedPort ? `:${extractedPort}` : "";
+    const pathSection = cleanPath ? `/${cleanPath}` : "";
+    return `${cleanProto}://${host}${portSection}${pathSection}`;
+  }, [address, protocol, port, streamPath]);
 
   const doTest = useCallback(async () => {
     const cleanAddress = address.trim().replace(/^["']|["']$/g, "").trim();
@@ -138,29 +200,18 @@ export const ConnectModal = memo(function ConnectModal() {
     if (isFile) {
       endpoint = cleanAddress;
     } else {
-      const cleanPort = port.trim() || "8080";
-      let cleanProtocol = protocol.trim() || "http";
-      let cleanPath = streamPath.trim().replace(/^\/+/, "");
-
-      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanProtocol) {
-        cleanProtocol = "http";
-        setProtocol("http");
-      } else if (cleanPort === "554" && !cleanProtocol) {
-        cleanProtocol = "rtsp";
-        setProtocol("rtsp");
-      }
-      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
-        cleanPath = "video";
-        setStreamPath("video");
-      }
-
-      if (!cleanAddress || !cleanPort || !cleanProtocol) {
-        setResult({ result: "error", safe_message: "Enter the camera IP address and port before testing.", stages: [] });
+      if (!cleanAddress) {
+        setResult({ result: "error", safe_message: "Enter the camera host IP address before testing.", stages: [] });
         setStep(1);
         return;
       }
 
-      endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
+      const cleanPort = port.trim() || (protocol === "rtsp" ? "554" : "8080");
+      const { host, port: finalPort } = extractHostAndPort(cleanAddress, cleanPort);
+      const cleanProtocol = protocol.trim() || "http";
+      const cleanPath = streamPath.trim().replace(/^\/+/, "");
+
+      endpoint = `${cleanProtocol}://${host}:${finalPort}${cleanPath ? `/${cleanPath}` : ""}`;
     }
 
     setLoading(true);
@@ -198,21 +249,19 @@ export const ConnectModal = memo(function ConnectModal() {
       cleanProtocol = "file";
       sourceType = "video_footage";
     } else {
-      const cleanPort = port.trim() || "8080";
-      cleanProtocol = cleanProtocol || ((cleanPort === "4747" || cleanPort === "8080") ? "http" : cleanPort === "554" ? "rtsp" : "http");
-      let cleanPath = streamPath.trim().replace(/^\/+/, "");
-      if ((cleanPort === "4747" || cleanPort === "8080") && !cleanPath) {
-        cleanPath = "video";
-      }
-
-      if (!cleanAddress || !cleanPort || !cleanProtocol) {
-        setSaveError("Enter the camera IP address, port, and protocol before saving.");
+      if (!cleanAddress) {
+        setSaveError("Enter the camera IP address before saving.");
         return;
       }
 
-      endpoint = `${cleanProtocol}://${cleanAddress}:${cleanPort}${cleanPath ? `/${cleanPath}` : ""}`;
-      const isPhone = cleanPort === "4747" || cleanPort === "8080" || cleanPath.toLowerCase().includes("video");
-      cameraName = isPhone ? `Camera (${cleanAddress})` : `RTSP (${cleanAddress})`;
+      const cleanPort = port.trim() || (protocol === "rtsp" ? "554" : "8080");
+      const { host, port: finalPort } = extractHostAndPort(cleanAddress, cleanPort);
+      cleanProtocol = cleanProtocol || (finalPort === "554" ? "rtsp" : "http");
+      const cleanPath = streamPath.trim().replace(/^\/+/, "");
+
+      endpoint = `${cleanProtocol}://${host}:${finalPort}${cleanPath ? `/${cleanPath}` : ""}`;
+      const isPhone = cleanProtocol.startsWith("http") && (finalPort === "4747" || finalPort === "8080" || cleanPath.toLowerCase().includes("video"));
+      cameraName = isPhone ? `Camera (${host})` : `${cleanProtocol.toUpperCase()} (${host}:${finalPort})`;
       sourceType = isPhone ? "smartphone_ip_webcam" : "ip_camera";
     }
 
@@ -253,43 +302,39 @@ export const ConnectModal = memo(function ConnectModal() {
 
   if (!open) return null;
 
-  const activeProfile =
-    port === "4747" && protocol === "http"
-      ? "droidcam"
-      : port === "8080" && protocol === "http"
-      ? "ipwebcam"
-      : port === "554" && protocol === "rtsp"
-      ? "rtsp"
-      : "custom";
-
   return (
     <div
-      className="fixed inset-0 bg-black/65 backdrop-blur-xs grid place-items-center p-4 z-50 modal-backdrop-animate overflow-y-auto"
+      className="fixed inset-0 bg-black/75 backdrop-blur-xs grid place-items-center p-4 z-50 modal-backdrop-animate overflow-y-auto"
       onClick={handleClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="connect-camera-title"
-        className="modal-content-animate liquid-glass-window w-full max-w-md p-6 text-slate-900 dark:text-white my-auto"
+        className="modal-content-animate panel w-full max-w-lg p-5 sm:p-6 text-[#e9e8d9] my-auto border border-[#3b473b] bg-[#1d241e] shadow-2xl rounded-[12px]"
         onClick={handleStopPropagation}
       >
-        {/* Clean Single Header */}
-        <div className="flex items-start justify-between gap-4 pb-4 border-b border-slate-100 dark:border-white/10">
-          <div>
-            <h2 id="connect-camera-title" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              Connect Camera Source
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Enter a local IP address or paste a stream URL
-            </p>
+        {/* Clean Tactical Header */}
+        <div className="flex items-start justify-between gap-4 pb-4 border-b border-[#3b473b]">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-[#242d25] border border-[#3b473b] flex items-center justify-center text-[#d6e476] shrink-0">
+              <CameraIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 id="connect-camera-title" className="text-sm font-semibold tracking-tight text-[#f7f4e9]">
+                Connect Camera Source
+              </h2>
+              <p className="text-xs text-[#a0a796] mt-0.5">
+                Stream phone IP webcam, RTSP CCTV, or custom network feed
+              </p>
+            </div>
           </div>
           <button
             ref={closeButtonRef}
             onClick={handleClose}
             aria-label="Close"
             title="Close"
-            className="h-7 w-7 rounded-lg flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-white/10 hover:text-slate-700 dark:hover:text-white transition-colors cursor-pointer"
+            className="h-8 w-8 rounded-md flex items-center justify-center text-[#a0a796] hover:bg-[#303a31] hover:text-[#f7f4e9] transition-colors cursor-pointer"
           >
             <CloseIcon className="w-4 h-4" />
           </button>
@@ -297,101 +342,180 @@ export const ConnectModal = memo(function ConnectModal() {
 
         {step === 1 && (
           <div className="mt-4 space-y-4">
-            {/* Clean 3-Segment App Profile Selector (Never hardcodes IPs) */}
+            {/* Quick Profile Template Bar */}
             <div>
-              <span className="block text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
-                Stream profile
-              </span>
-              <div className="grid grid-cols-3 gap-1.5 p-1 rounded-full liquid-glass-input">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-[#a0a796]">
+                  Profile Preset
+                </span>
+                <span className="text-[10px] text-[#bdce70] font-mono">
+                  {preset === "droidcam" && "Port 4747 • /video"}
+                  {preset === "ipwebcam" && "Port 8080 • /video"}
+                  {preset === "rtsp" && "Port 554 • /stream1"}
+                  {preset === "custom" && "Custom Port Enabled"}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 rounded-lg bg-[#151a16] border border-[#3b473b]">
                 <button
                   type="button"
-                  onClick={() => applyProfile("4747", "http", "video")}
-                  className={`py-1 px-2 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-                    activeProfile === "droidcam"
-                      ? "liquid-glass-pill !h-7 font-semibold"
-                      : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                  onClick={() => applyPreset("droidcam")}
+                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer text-center ${
+                    preset === "droidcam"
+                      ? "bg-[#242d25] text-[#d6e476] font-semibold border border-[#d6e476]/40 shadow-xs"
+                      : "text-[#c0c5b5] hover:text-[#f7f4e9] hover:bg-[#1d241e]"
                   }`}
                 >
-                  DroidCam :4747
+                  DroidCam
                 </button>
                 <button
                   type="button"
-                  onClick={() => applyProfile("8080", "http", "video")}
-                  className={`py-1 px-2 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-                    activeProfile === "ipwebcam"
-                      ? "liquid-glass-pill !h-7 font-semibold"
-                      : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                  onClick={() => applyPreset("ipwebcam")}
+                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer text-center ${
+                    preset === "ipwebcam"
+                      ? "bg-[#242d25] text-[#d6e476] font-semibold border border-[#d6e476]/40 shadow-xs"
+                      : "text-[#c0c5b5] hover:text-[#f7f4e9] hover:bg-[#1d241e]"
                   }`}
                 >
-                  IP Webcam :8080
+                  IP Webcam
                 </button>
                 <button
                   type="button"
-                  onClick={() => applyProfile("554", "rtsp", "stream1")}
-                  className={`py-1 px-2 rounded-full text-xs font-medium transition-colors cursor-pointer ${
-                    activeProfile === "rtsp"
-                      ? "liquid-glass-pill !h-7 font-semibold"
-                      : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                  onClick={() => applyPreset("rtsp")}
+                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer text-center ${
+                    preset === "rtsp"
+                      ? "bg-[#242d25] text-[#d6e476] font-semibold border border-[#d6e476]/40 shadow-xs"
+                      : "text-[#c0c5b5] hover:text-[#f7f4e9] hover:bg-[#1d241e]"
                   }`}
                 >
-                  RTSP :554
+                  RTSP CCTV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyPreset("custom")}
+                  className={`py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer text-center ${
+                    preset === "custom"
+                      ? "bg-[#242d25] text-[#d6e476] font-semibold border border-[#d6e476]/40 shadow-xs"
+                      : "text-[#c0c5b5] hover:text-[#f7f4e9] hover:bg-[#1d241e]"
+                  }`}
+                >
+                  Custom Port
                 </button>
               </div>
             </div>
 
             {/* IP / Host Input */}
-            <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-              Host or IP address
-              <input
-                value={address}
-                onChange={(e) => handleAddressChange(e.target.value)}
-                placeholder="e.g. 192.168.1.50 or http://..."
-                data-testid="stream-url"
-                autoFocus
-                className="mt-1.5 w-full liquid-glass-input px-3.5 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none"
-              />
-            </label>
-
-            {/* Compact 3-Column Protocol / Port / Path Row */}
-            <div className="grid grid-cols-3 gap-2.5">
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                Protocol
-                <select
-                  value={protocol}
-                  onChange={(e) => setProtocol(e.target.value)}
-                  data-testid="camera-protocol"
-                  className="mt-1.5 w-full liquid-glass-input px-2.5 py-2 text-xs text-slate-900 dark:text-white focus:outline-none"
-                >
-                  <option value="">Select</option>
-                  <option value="http">HTTP</option>
-                  <option value="https">HTTPS</option>
-                  <option value="rtsp">RTSP</option>
-                  <option value="rtsps">RTSPS</option>
-                </select>
+            <div>
+              <label className="block text-xs font-medium text-[#c0c5b5] mb-1.5">
+                Host or IP Address
               </label>
-
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                Port
+              <div className="relative">
                 <input
-                  value={port}
-                  onChange={(e) => handlePortChange(e.target.value)}
-                  placeholder="4747"
-                  inputMode="numeric"
-                  data-testid="camera-port"
-                  className="mt-1.5 w-full liquid-glass-input px-2.5 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+                  value={address}
+                  onChange={(e) => handleAddressChange(e.target.value)}
+                  placeholder="e.g. 192.168.1.50 or 10.106.31.201:8000"
+                  data-testid="stream-url"
+                  autoFocus
+                  className="w-full bg-[#151a16] border border-[#3b473b] focus:border-[#d6e476] rounded-md px-3.5 py-2 text-xs font-mono text-[#f7f4e9] placeholder-[#596055] focus:outline-none transition-colors"
                 />
-              </label>
+              </div>
+              <p className="mt-1 text-[11px] text-[#747a6f]">
+                Tip: You can paste full URLs or enter <span className="font-mono text-[#a0a796]">IP:PORT</span> directly.
+              </p>
+            </div>
 
-              <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
-                Path
-                <input
-                  value={streamPath}
-                  onChange={(e) => setStreamPath(e.target.value)}
-                  placeholder="video"
-                  data-testid="camera-path"
-                  className="mt-1.5 w-full liquid-glass-input px-2.5 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
-                />
-              </label>
+            {/* Protocol, Port & Path Form Fields */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-12 gap-2.5">
+                {/* Protocol Selector */}
+                <div className="col-span-4">
+                  <label className="block text-xs font-medium text-[#c0c5b5] mb-1.5">
+                    Protocol
+                  </label>
+                  <select
+                    value={protocol}
+                    onChange={(e) => {
+                      setProtocol(e.target.value);
+                      setPreset("custom");
+                    }}
+                    data-testid="camera-protocol"
+                    className="w-full bg-[#151a16] border border-[#3b473b] focus:border-[#d6e476] rounded-md px-2.5 py-2 text-xs text-[#f7f4e9] focus:outline-none cursor-pointer"
+                  >
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                    <option value="rtsp">RTSP</option>
+                    <option value="rtsps">RTSPS</option>
+                  </select>
+                </div>
+
+                {/* Custom Port Input */}
+                <div className="col-span-4">
+                  <label className="block text-xs font-medium text-[#c0c5b5] mb-1.5">
+                    Port
+                  </label>
+                  <input
+                    value={port}
+                    onChange={(e) => handlePortChange(e.target.value)}
+                    placeholder="4747"
+                    inputMode="numeric"
+                    maxLength={5}
+                    data-testid="camera-port"
+                    className="w-full bg-[#151a16] border border-[#3b473b] focus:border-[#d6e476] rounded-md px-2.5 py-2 text-xs font-mono text-[#f7f4e9] placeholder-[#596055] focus:outline-none transition-colors"
+                  />
+                </div>
+
+                {/* Path Input */}
+                <div className="col-span-4">
+                  <label className="block text-xs font-medium text-[#c0c5b5] mb-1.5">
+                    Path / Route
+                  </label>
+                  <input
+                    value={streamPath}
+                    onChange={(e) => {
+                      setStreamPath(e.target.value);
+                      setPreset("custom");
+                    }}
+                    placeholder="video"
+                    data-testid="camera-path"
+                    className="w-full bg-[#151a16] border border-[#3b473b] focus:border-[#d6e476] rounded-md px-2.5 py-2 text-xs font-mono text-[#f7f4e9] placeholder-[#596055] focus:outline-none transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Port Shortcuts */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-[10px] text-[#747a6f] uppercase font-mono">Quick Ports:</span>
+                {(["4747", "8080", "554", "8000", "8554", "9000"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => handleSelectQuickPort(p)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono transition-colors cursor-pointer ${
+                      port === p
+                        ? "bg-[#242d25] text-[#d6e476] border border-[#d6e476]/50 font-semibold"
+                        : "bg-[#151a16] text-[#a0a796] border border-[#3b473b] hover:text-[#f7f4e9] hover:border-[#586454]"
+                    }`}
+                  >
+                    :{p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Target Live Stream Preview Box */}
+            <div className="rounded-md bg-[#151a16] border border-[#3b473b] p-2.5">
+              <div className="flex items-center justify-between text-[10px] text-[#a0a796] font-mono mb-1">
+                <span>TARGET ENDPOINT PREVIEW</span>
+                <span className={address.trim() ? "text-[#bdce70]" : "text-[#747a6f]"}>
+                  {address.trim() ? "VALID SYNTAX" : "AWAITING HOST"}
+                </span>
+              </div>
+              <div className="font-mono text-xs text-[#d6e476] break-all select-all">
+                {liveEndpoint || (
+                  <span className="text-[#596055] italic">
+                    {protocol || "http"}://&lt;host&gt;:{port || "4747"}/{streamPath || "video"}
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Inline Options Row: Auth Toggle + Save Checkbox */}
@@ -401,55 +525,62 @@ export const ConnectModal = memo(function ConnectModal() {
                 onClick={handleToggleAuth}
                 data-testid="toggle-auth"
                 aria-expanded={showAuth}
-                className="font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors cursor-pointer"
+                className="font-medium text-[#c0c5b5] hover:text-[#f7f4e9] transition-colors cursor-pointer inline-flex items-center gap-1"
               >
-                {showAuth ? "− Hide authentication" : "+ Add authentication"}
+                <span>{showAuth ? "− Hide credentials" : "+ Add credentials (auth)"}</span>
               </button>
 
-              <label className="inline-flex items-center gap-2 text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+              <label className="inline-flex items-center gap-2 text-[#c0c5b5] cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={!temporary}
                   onChange={(e) => setTemporary(!e.target.checked)}
-                  className="rounded accent-slate-900 dark:accent-white"
+                  className="rounded accent-[#d6e476]"
                 />
-                <span>Save camera</span>
+                <span className="text-xs">Save camera</span>
               </label>
             </div>
 
             {showAuth && (
-              <div className="grid grid-cols-2 gap-2.5 pt-1">
-                <input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Username"
-                  data-testid="username"
-                  className="w-full liquid-glass-input px-3.5 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
-                />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Password"
-                  data-testid="password"
-                  className="w-full liquid-glass-input px-3.5 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
-                />
+              <div className="grid grid-cols-2 gap-2.5 p-3 rounded-md bg-[#151a16] border border-[#3b473b]">
+                <div>
+                  <label className="block text-[11px] text-[#a0a796] mb-1">Username</label>
+                  <input
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="admin"
+                    data-testid="username"
+                    className="w-full bg-[#1d241e] border border-[#3b473b] focus:border-[#d6e476] rounded px-3 py-1.5 text-xs text-[#f7f4e9] placeholder-[#596055] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-[#a0a796] mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    data-testid="password"
+                    className="w-full bg-[#1d241e] border border-[#3b473b] focus:border-[#d6e476] rounded px-3 py-1.5 text-xs text-[#f7f4e9] placeholder-[#596055] focus:outline-none"
+                  />
+                </div>
               </div>
             )}
 
-            <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100 dark:border-white/10">
+            {/* Modal Actions */}
+            <div className="pt-3 flex items-center justify-end gap-2 border-t border-[#3b473b]">
               <button
                 type="button"
                 onClick={handleClose}
-                className="ghost-button"
+                className="btn-instrument px-4 py-1.5"
               >
                 Cancel
               </button>
               <button
                 onClick={doTest}
-                disabled={!address.trim() || !port.trim() || !protocol || loading}
+                disabled={!address.trim() || loading}
                 data-testid="test-connection"
-                className="liquid-glass-cta disabled:opacity-40"
+                className="btn-instrument-active px-5 py-1.5 font-bold disabled:opacity-40"
               >
                 {loading ? "Testing..." : "Test connection"}
               </button>
@@ -459,22 +590,22 @@ export const ConnectModal = memo(function ConnectModal() {
 
         {step === 3 && (
           <div className="mt-4 space-y-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#a0a796]">
               Validating Connection
             </h3>
             <div className="space-y-1.5">
               {(result?.stages ?? [{ name: "Validating address", status: "running" }]).map((s) => (
-                <div key={s.name} className="flex items-center justify-between text-xs py-1.5 border-b border-slate-100 dark:border-white/5 last:border-0">
-                  <span className="text-slate-600 dark:text-slate-300">{s.name}</span>
-                  <span className={s.status === "ok" ? "text-emerald-600 dark:text-emerald-400 font-medium inline-flex items-center gap-1" : s.status === "failed" ? "text-rose-600 dark:text-rose-400 font-medium inline-flex items-center gap-1" : "text-slate-400 font-mono"}>
+                <div key={s.name} className="flex items-center justify-between text-xs py-1.5 border-b border-[#3b473b] last:border-0">
+                  <span className="text-[#c0c5b5]">{s.name}</span>
+                  <span className={s.status === "ok" ? "text-[#bdce70] font-medium inline-flex items-center gap-1" : s.status === "failed" ? "text-[#e27c5c] font-medium inline-flex items-center gap-1" : "text-[#a0a796] font-mono"}>
                     {s.status === "ok" ? (
                       <>
-                        <CheckCircleIcon className="w-3.5 h-3.5" />
+                        <CheckCircleIcon className="w-3.5 h-3.5 text-[#bdce70]" />
                         <span>Ready</span>
                       </>
                     ) : s.status === "failed" ? (
                       <>
-                        <AlertTriangleIcon className="w-3.5 h-3.5" />
+                        <AlertTriangleIcon className="w-3.5 h-3.5 text-[#e27c5c]" />
                         <span>Failed</span>
                       </>
                     ) : (
@@ -485,21 +616,21 @@ export const ConnectModal = memo(function ConnectModal() {
               ))}
             </div>
             {result && (
-              <div data-testid="test-result" className={`rounded-lg p-3 text-xs flex items-start gap-2 ${result.result === "ok" ? "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60" : "bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/60"}`}>
+              <div data-testid="test-result" className={`rounded-lg p-3 text-xs flex items-start gap-2.5 ${result.result === "ok" ? "bg-[#151a16] text-[#bdce70] border border-[#bdce70]/40" : "bg-[#151a16] text-[#e0a26c] border border-[#e0a26c]/40"}`}>
                 {result.result === "ok" ? (
-                  <CheckCircleIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                  <CheckCircleIcon className="w-4 h-4 shrink-0 mt-0.5 text-[#bdce70]" />
                 ) : (
-                  <AlertTriangleIcon className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                  <AlertTriangleIcon className="w-4 h-4 shrink-0 mt-0.5 text-[#e0a26c]" />
                 )}
                 <div>
-                  <span>{result.safe_message}</span>
+                  <span className="font-medium">{result.safe_message}</span>
                   {result.reason_code && <span className="ml-1.5 opacity-75 font-mono">({result.reason_code})</span>}
                 </div>
               </div>
             )}
             {result && result.result !== "ok" && (
-              <div className="pt-2 flex justify-end">
-                <button onClick={handleBackToForm} className="secondary-button">
+              <div className="pt-2 flex justify-end gap-2 border-t border-[#3b473b]">
+                <button onClick={handleBackToForm} className="btn-instrument px-4 py-1.5">
                   Edit connection
                 </button>
               </div>
@@ -509,11 +640,11 @@ export const ConnectModal = memo(function ConnectModal() {
 
         {step === 4 && result?.probe && (
           <div className="mt-4 space-y-3">
-            <div data-testid="test-result" className="rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60 p-2.5 text-xs flex items-center gap-2">
-              <CheckCircleIcon className="w-4 h-4 flex-shrink-0 text-emerald-600 dark:text-emerald-400" />
-              <span>{result.safe_message}</span>
+            <div data-testid="test-result" className="rounded-lg bg-[#151a16] text-[#bdce70] border border-[#bdce70]/40 p-2.5 text-xs flex items-center gap-2">
+              <CheckCircleIcon className="w-4 h-4 shrink-0 text-[#bdce70]" />
+              <span className="font-semibold">{result.safe_message}</span>
             </div>
-            <div className="rounded-lg bg-black p-2 border border-slate-800">
+            <div className="rounded-lg bg-black p-2 border border-[#3b473b]">
               {result.probe.preview_b64 ? (
                 <img src={result.probe.preview_b64} alt="Preview" className="max-h-56 w-full object-contain rounded bg-black" />
               ) : (
@@ -525,22 +656,22 @@ export const ConnectModal = memo(function ConnectModal() {
                   />
                 )
               )}
-              <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-300 mt-2 pt-2 border-t border-white/10 font-mono">
+              <div className="grid grid-cols-3 gap-2 text-[11px] text-[#c0c5b5] mt-2 pt-2 border-t border-[#3b473b] font-mono">
                 <span>Codec: {result.probe.codec}</span>
                 <span>Res: {result.probe.width}×{result.probe.height}</span>
                 <span>FPS: {result.probe.fps ?? "Live"}</span>
               </div>
             </div>
-            <div className="pt-2 flex justify-end gap-2">
-              <button onClick={handleBackToForm} className="ghost-button">
+            <div className="pt-2 flex justify-end gap-2 border-t border-[#3b473b]">
+              <button onClick={handleBackToForm} className="btn-instrument px-4 py-1.5">
                 Edit
               </button>
-              <button onClick={doSave} disabled={saving} data-testid="continue" className="primary-button disabled:opacity-50">
+              <button onClick={doSave} disabled={saving} data-testid="continue" className="btn-instrument-active px-5 py-1.5 font-bold disabled:opacity-50">
                 {saving ? "Adding..." : "Add camera"}
               </button>
             </div>
             {saveError && (
-              <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+              <p role="alert" className="rounded-lg border border-[#e27c5c]/40 bg-[#151a16] p-2.5 text-xs text-[#e27c5c]">
                 {saveError}
               </p>
             )}
