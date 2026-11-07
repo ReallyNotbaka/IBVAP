@@ -112,11 +112,22 @@ class HandoverEngine:
 
                     # 3. Spatio-temporal association for unassigned tracks
                     if not dossier_id:
-                        # Check recent dossiers of same class that were active within handover_window_s
+                        # Only associate into unverified dossiers of same class that recently exited
                         for d in self.dossiers.values():
+                            # Never merge unverified tracks into biometric-locked or high/critical dossiers
+                            if not d.label.startswith(f"{d.subject_type.upper()} #"):
+                                continue
+                            if d.threat_level in ("HIGH", "CRITICAL"):
+                                continue
+
+                            time_since_seen = now - d.last_seen_ts
+                            # Cannot be simultaneously active on source camera (< 3.0s ago)
+                            if time_since_seen < 3.0:
+                                continue
+
                             if (
                                 d.subject_type == class_name
-                                and (now - d.last_seen_ts) <= self.handover_window_s
+                                and time_since_seen <= self.handover_window_s
                                 and cam_name not in d.cameras_visited
                                 and all(s.camera_id != cam_id for s in d.sightings)
                             ):

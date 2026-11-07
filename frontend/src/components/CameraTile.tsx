@@ -98,6 +98,11 @@ export const CameraTile = memo(function CameraTile({
   const selectedBoxRef = useRef<Box | null>(null);
   selectedBoxRef.current = selectedBox;
 
+  // Clear smoothed bounding box coordinates when switching cameras or on new stream epochs
+  useEffect(() => {
+    smoothedCoordsRef.current.clear();
+  }, [camera.id, camera.stream_epoch]);
+
   // Page visibility gate: stop polling when the tab is hidden.
   const [pageVisible, setPageVisible] = useState(
     () => typeof document === "undefined" || document.visibilityState === "visible",
@@ -272,31 +277,33 @@ export const CameraTile = memo(function CameraTile({
   const faces = observations?.faces;
 
   const boxes: Box[] = useMemo(() => {
-    if (smoothedCoordsRef.current.size > 50) {
-      smoothedCoordsRef.current.clear();
-    }
-    return (tracks ?? detections ?? [])
-      .filter((item) => {
-        const isIdentified = "identity" in item && Boolean((item as any).identity?.name);
-        return isIdentified || item.confidence >= 0.50;
-      })
-      .map((item) => {
-        const rawBbox = item.bbox_norm;
-        const trackKey = "track_id" in item && item.track_id !== undefined ? `track-${item.track_id}` : `det-${item.class_name}`;
-        const prev = smoothedCoordsRef.current.get(trackKey);
-        let smoothed = rawBbox;
-        if (prev) {
-          const alpha = 0.12;
-          smoothed = [
-            (1 - alpha) * prev[0] + alpha * rawBbox[0],
-            (1 - alpha) * prev[1] + alpha * rawBbox[1],
-            (1 - alpha) * prev[2] + alpha * rawBbox[2],
-            (1 - alpha) * prev[3] + alpha * rawBbox[3],
-          ];
-        }
-        smoothedCoordsRef.current.set(trackKey, smoothed);
+    const activeKeys = new Set<string>();
+    const filtered = (tracks ?? detections ?? []).filter((item) => {
+      const isIdentified = "identity" in item && Boolean((item as any).identity?.name);
+      return isIdentified || item.confidence >= 0.50;
+    });
 
-        const [x1, y1, x2, y2] = smoothed;
+    const result = filtered.map((item, idx) => {
+      const rawBbox = item.bbox_norm;
+      const trackKey =
+        "track_id" in item && item.track_id !== undefined
+          ? `track-${item.track_id}`
+          : `det-${item.class_name}-${idx}`;
+      activeKeys.add(trackKey);
+      const prev = smoothedCoordsRef.current.get(trackKey);
+      let smoothed = rawBbox;
+      if (prev) {
+        const alpha = 0.70;
+        smoothed = [
+          (1 - alpha) * prev[0] + alpha * rawBbox[0],
+          (1 - alpha) * prev[1] + alpha * rawBbox[1],
+          (1 - alpha) * prev[2] + alpha * rawBbox[2],
+          (1 - alpha) * prev[3] + alpha * rawBbox[3],
+        ];
+      }
+      smoothedCoordsRef.current.set(trackKey, smoothed);
+
+      const [x1, y1, x2, y2] = smoothed;
         const width = x2 - x1;
         const tightened = item.class_name === "person" ? width * 0.88 : width;
         const trackItem =
@@ -381,7 +388,15 @@ export const CameraTile = memo(function CameraTile({
           vehicleClass: isVehicle ? item.class_name : undefined,
           rawClass,
         };
-      })
+      });
+
+    if (smoothedCoordsRef.current.size > 50) {
+      for (const k of Array.from(smoothedCoordsRef.current.keys())) {
+        if (!activeKeys.has(k)) smoothedCoordsRef.current.delete(k);
+      }
+    }
+
+    return result
       .filter(
         (item) =>
           item.label &&
@@ -422,7 +437,7 @@ export const CameraTile = memo(function CameraTile({
         const prev = smoothedCoordsRef.current.get(faceKey);
         let smoothed = rawBbox;
         if (prev) {
-          const alpha = 0.12;
+          const alpha = 0.70;
           smoothed = [
             (1 - alpha) * prev[0] + alpha * rawBbox[0],
             (1 - alpha) * prev[1] + alpha * rawBbox[1],
@@ -775,7 +790,7 @@ export const CameraTile = memo(function CameraTile({
               {fencePoints.length === 0
                 ? "Click video to place Point 1"
                 : fencePoints.length === 1
-                ? "Point 1 set | Click Point 2 for Line Tripwire"
+                ? "Point 1 set • Click Point 2 for Line Tripwire"
                 : fencePoints.length === 2
                 ? "Line Tripwire ready | Click more points for Polygon | Click a point to delete"
                 : `Polygon Zone (${fencePoints.length} points) | Click points to add / delete | Save fence`}

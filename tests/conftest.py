@@ -33,15 +33,8 @@ TEST_API_TOKEN = "ibvap-test-token-task1-p0"
 
 
 def _phase_mark(msg: str) -> None:
-    """DIAGNOSTIC (CI teardown-abort triage — remove once green): append a
-    phase marker to a file (pytest captures stdout/stderr, a file survives)."""
-    try:
-        import tempfile
-
-        with open(f"{tempfile.gettempdir()}/pytest-phase.log", "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except OSError:
-        pass
+    """Diagnostic hook no-op."""
+    pass
 
 
 _atexit_for_phase.register(_phase_mark, "ATEXIT")

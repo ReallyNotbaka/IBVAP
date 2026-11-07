@@ -97,8 +97,11 @@ async def get_events(
 @router.delete("", response_model=dict[str, Any])
 async def delete_events(_auth: bool = Depends(require_api_token)) -> dict[str, Any]:
     # Task 1 P0: mutating route now behind API-token guard.
+    from ibvap.services.persistence import clear_outbox_events_from_db
+
     count = clear_events()
-    return {"status": "cleared", "deleted_count": count}
+    db_count = await clear_outbox_events_from_db()
+    return {"status": "cleared", "deleted_count": count, "db_deleted_count": db_count}
 
 
 @router.get("/outbox", response_model=list[dict[str, Any]])

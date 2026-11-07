@@ -81,6 +81,14 @@ from ibvap.services.stream_worker import (
 router = APIRouter(prefix="/api/v1/cameras", tags=["cameras"])
 logger = structlog.get_logger(__name__)
 
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _track_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
 
 class CameraCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -469,6 +477,7 @@ async def create_camera(
     }
     _CAMERAS[cam_id] = data
     _STATE_MACHINES[cam_id] = sm
+    _CAMERAS[cam_id]["_raw_endpoint"] = str(endpoint_value)
     _CAMERAS[cam_id]["_enc"] = {"username": enc_user, "password": enc_pass}
     _CAMERAS[cam_id]["_site_cidr_allowlist"] = req.site_cidr_allowlist
     if file_endpoint:
@@ -483,7 +492,7 @@ async def create_camera(
     try:
         from ibvap.services.persistence import save_camera_to_db
 
-        asyncio.create_task(save_camera_to_db(data))
+        _track_task(asyncio.create_task(save_camera_to_db(data)))
     except Exception as e:
         logger.debug("save_camera_db_trigger_error", error=str(e))
     # Task 5: creates return 201 + Location of the new resource.
@@ -614,6 +623,12 @@ async def set_camera_fence(
             )
             if hasattr(pipeline, "_active_line_intruders"):
                 pipeline._active_line_intruders.clear()
+        try:
+            from ibvap.services.persistence import save_camera_to_db
+
+            _track_task(asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id])))
+        except Exception:
+            pass
         return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
 
     points = req.line if req.line is not None else req.polygon
@@ -659,7 +674,7 @@ async def set_camera_fence(
     try:
         from ibvap.services.persistence import save_camera_to_db
 
-        asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id]))
+        _track_task(asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id])))
     except Exception:
         pass
     return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
@@ -684,7 +699,7 @@ async def delete_camera_fence(camera_id: str, _auth: bool = Depends(require_api_
     try:
         from ibvap.services.persistence import save_camera_to_db
 
-        asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id]))
+        _track_task(asyncio.create_task(save_camera_to_db(_CAMERAS[camera_id])))
     except Exception:
         pass
     return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
@@ -786,6 +801,12 @@ async def playback_action(
             if not loop.is_closed():
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(event.set)
+        try:
+            from ibvap.services.persistence import delete_camera_from_db
+
+            _track_task(asyncio.create_task(delete_camera_from_db(camera_id)))
+        except Exception:
+            pass
     if action in {"pause", "resume", "restart"}:
         _CAMERAS[camera_id]["observed_state"] = "PAUSED" if action == "pause" else "STREAMING"
     return state
@@ -840,7 +861,7 @@ async def enable_camera(camera_id: str, _auth: bool = Depends(require_api_token)
     try:
         from ibvap.services.persistence import save_camera_to_db
 
-        asyncio.create_task(save_camera_to_db(cam))
+        _track_task(asyncio.create_task(save_camera_to_db(cam)))
     except Exception:
         pass
     return {k: v for k, v in cam.items() if not k.startswith("_")}
@@ -860,7 +881,7 @@ async def disable_camera(camera_id: str, _auth: bool = Depends(require_api_token
     try:
         from ibvap.services.persistence import save_camera_to_db
 
-        asyncio.create_task(save_camera_to_db(cam))
+        _track_task(asyncio.create_task(save_camera_to_db(cam)))
     except Exception:
         pass
     return {k: v for k, v in cam.items() if not k.startswith("_")}
@@ -887,6 +908,12 @@ async def reconnect_camera(camera_id: str, _auth: bool = Depends(require_api_tok
             raise HTTPException(status_code=400, detail={"code": "invalid_transition", "message": str(e)}) from e
     _stop_worker(camera_id)
     _start_camera_worker(camera_id)
+    try:
+        from ibvap.services.persistence import save_camera_to_db
+
+        _track_task(asyncio.create_task(save_camera_to_db(cam)))
+    except Exception:
+        pass
     return {k: v for k, v in cam.items() if not k.startswith("_")}
 
 
@@ -914,7 +941,7 @@ async def delete_camera(camera_id: str, _auth: bool = Depends(require_api_token)
     try:
         from ibvap.services.persistence import delete_camera_from_db
 
-        asyncio.create_task(delete_camera_from_db(camera_id))
+        _track_task(asyncio.create_task(delete_camera_from_db(camera_id)))
     except Exception:
         pass
     return {"status": "deleted", "id": camera_id}

@@ -11,12 +11,12 @@ export function Monitor() {
   useEffect(() => {
     fetch("/api/v1/events")
       .then((r) => r.json())
-      .then((data) => setEvents(Array.isArray(data) ? data : []))
+      .then((data) => setEvents(Array.isArray(data) ? data : (data?.items ?? [])))
       .catch(() => {});
 
     fetch("/api/v1/cameras")
       .then((r) => r.json())
-      .then((data) => setCameras(Array.isArray(data) ? data : []))
+      .then((data) => setCameras(Array.isArray(data) ? data : (data?.items ?? [])))
       .catch(() => {});
   }, []);
 

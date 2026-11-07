@@ -22,7 +22,7 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:v1.20.1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8554 || exit 1"]
       interval: 10s
       retries: 10
       start_period: 15s
@@ -46,6 +46,8 @@ services:
       IBVAP_API_TOKEN: ${IBVAP_API_TOKEN:-ibvap-local-dev-token}
       IBVAP_CREDENTIAL_KEY: ${IBVAP_CREDENTIAL_KEY:-ibvap-local-dev-credential-key-32b}
       IBVAP_DB__ALLOW_SQLITE_FALLBACK: ${IBVAP_DB__ALLOW_SQLITE_FALLBACK:-0}
+      IBVAP_MEDIA__MEDIAMTX_API_URL: http://mediamtx:9997
+      IBVAP_MEDIA__SITE_CIDR_ALLOWLIST: '["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"]'
     volumes:
       - ./data:/app/data
     depends_on:

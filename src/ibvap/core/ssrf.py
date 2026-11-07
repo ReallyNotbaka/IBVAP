@@ -30,6 +30,7 @@ _BLOCKED_NETS = [
     # cloud metadata endpoints
     ipaddress.ip_network("169.254.169.254/32"),
     ipaddress.ip_network("fd00:ec2::254/128"),
+    ipaddress.ip_network("100.64.0.0/10"),  # RFC 6598 CGNAT
 ]
 
 # Control-plane / storage that must never be reachable from camera worker
@@ -133,9 +134,14 @@ def _check_host_and_port(parsed: urllib.parse.ParseResult, policy: SSRFPolicy) -
         raise SSRFError("blocked_port", "Port is not in allowlist")
 
 
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
 def _ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, policy: SSRFPolicy) -> str | None:
     for net in policy.blocked_nets:
         if ip in net:
+            if net == _CGNAT_NET and any(ip in allowed for allowed in policy.site_cidr_allowlist):
+                continue
             return f"blocked_network:{net}"
     for net in _CONTROL_PLANE_NETS:
         if ip in net:
@@ -180,6 +186,16 @@ def validate_resolved_ips(ips: list[str], policy: SSRFPolicy = DEFAULT_POLICY) -
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             raise SSRFError("invalid_ip", f"Resolved IP '{ip_str}' is invalid") from None
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        if (
+            ip.is_unspecified
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+        ):
+            raise SSRFError("blocked_address", f"Resolved address {ip} is blocked (reserved range)")
         blocked = _ip_blocked(ip, policy)
         if blocked:
             raise SSRFError("blocked_address", f"Resolved address {ip} is blocked ({blocked})")

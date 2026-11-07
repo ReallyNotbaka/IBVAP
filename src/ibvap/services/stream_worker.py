@@ -257,7 +257,7 @@ def _notify_stream_subscribers(camera_id: str) -> None:
 
 
 def _connect_endpoint(cam: dict[str, Any]) -> str:
-    endpoint = str(cam["endpoint"])
+    endpoint = str(cam.get("_raw_endpoint") or cam["endpoint"])
     enc: dict[str, Any] = cam.get("_enc") or {}
     if not enc.get("username") and not enc.get("password"):
         return endpoint
@@ -884,7 +884,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         return
 
     # Live path (phones, RTSP cams)
-    endpoint = normalize_mjpeg_url(str(cam["endpoint"]))
+    endpoint = normalize_mjpeg_url(str(cam.get("_raw_endpoint") or cam["endpoint"]))
     parsed_endpoint = urlparse(endpoint)
     path_lower = parsed_endpoint.path.lower().rstrip("/")
     is_mjpeg_stream = (

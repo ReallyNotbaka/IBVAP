@@ -33,6 +33,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # -- runtime (cpu)
 FROM python:3.12-slim-bookworm AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -u 10001 ibvap && mkdir -p /app/data/logs /app/data/frames /app/data/evidence /app/data/uploads /app/data/quarantine && chown -R ibvap:ibvap /app
 WORKDIR /app
 COPY --link --from=build /app/.venv /app/.venv

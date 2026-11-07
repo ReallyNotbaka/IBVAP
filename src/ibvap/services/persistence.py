@@ -77,6 +77,55 @@ async def ensure_default_hierarchy(settings: Settings | None = None) -> uuid.UUI
             return DEFAULT_SITE_ID
 
 
+async def save_site_to_db(site_data: dict[str, Any]) -> None:
+    """Persist a site record into the database."""
+    try:
+        site_id_raw = site_data.get("id")
+        if not site_id_raw:
+            return
+        site_uuid = uuid.UUID(str(site_id_raw))
+
+        org_id_raw = site_data.get("organization_id")
+        try:
+            org_uuid = uuid.UUID(str(org_id_raw)) if org_id_raw else None
+        except (ValueError, TypeError):
+            org_uuid = None
+
+        sm = get_sessionmaker()
+        async with sm() as session:
+            # Ensure org exists for FK
+            if org_uuid:
+                org_res = await session.execute(select(Organization).where(Organization.id == org_uuid))
+                if org_res.scalar_one_or_none() is None:
+                    session.add(Organization(id=org_uuid, name=f"Org-{str(org_uuid)[:8]}"))
+                    await session.flush()
+            else:
+                org_res = await session.execute(select(Organization).limit(1))
+                first_org = org_res.scalar_one_or_none()
+                if first_org is None:
+                    first_org = Organization(name="Default Border Command")
+                    session.add(first_org)
+                    await session.flush()
+                org_uuid = first_org.id
+
+            res = await session.execute(select(Site).where(Site.id == site_uuid))
+            existing = res.scalar_one_or_none()
+            if existing is not None:
+                existing.name = str(site_data.get("name", existing.name))
+                existing.timezone = str(site_data.get("timezone", existing.timezone))
+            else:
+                new_site = Site(
+                    id=site_uuid,
+                    organization_id=org_uuid,
+                    name=str(site_data.get("name", "Site")),
+                    timezone=str(site_data.get("timezone", "UTC")),
+                )
+                session.add(new_site)
+            await session.commit()
+    except Exception as e:
+        logger.warning("save_site_to_db_error", error=str(e), site_id=site_data.get("id"))
+
+
 async def save_camera_to_db(cam_data: dict[str, Any]) -> None:
     """Persist or update camera metadata in the database."""
     try:
@@ -99,6 +148,7 @@ async def save_camera_to_db(cam_data: dict[str, Any]) -> None:
             "zones": cam_data.get("zones"),
             "temporary": cam_data.get("temporary", False),
             "site_cidr_allowlist": cam_data.get("_site_cidr_allowlist"),
+            "_raw_endpoint": cam_data.get("_raw_endpoint"),
         }
 
         sm = get_sessionmaker()
@@ -196,6 +246,19 @@ async def save_outbox_event_to_db(entry: OutboxEntry) -> None:
             await session.commit()
     except Exception as e:
         logger.warning("save_outbox_event_error", error=str(e), event_id=entry.id)
+
+
+async def clear_outbox_events_from_db() -> int:
+    """Clear all outbox events from the durable database."""
+    try:
+        sm = get_sessionmaker()
+        async with sm() as session:
+            res = await session.execute(delete(DBOutbox))
+            await session.commit()
+            return int(getattr(res, "rowcount", 0) or 0)
+    except Exception as e:
+        logger.warning("clear_outbox_events_error", error=str(e))
+        return 0
 
 
 _PENDING_MIRRORS_KEY = "ibvap_outbox_pending_mirrors"
@@ -365,6 +428,8 @@ async def init_persistence(settings: Settings | None = None) -> None:
                     cam_data["fence"] = meta["fence"]
                 if meta.get("zones"):
                     cam_data["zones"] = meta["zones"]
+                if meta.get("_raw_endpoint"):
+                    cam_data["_raw_endpoint"] = meta["_raw_endpoint"]
 
                 _CAMERAS[cam_id] = cam_data
 
@@ -423,6 +488,22 @@ async def init_persistence(settings: Settings | None = None) -> None:
                         logger.debug("restore_skipped_non_dict_payload", outbox_id=str(se.id))
 
             logger.info("events_restored_from_db", count=len(saved_events))
+
+        # Restore sites from database into _SITES
+        try:
+            from ibvap.api.routes.sites import _SITES
+
+            async with sm() as session:
+                sites_res = await session.execute(select(Site))
+                for s in sites_res.scalars():
+                    _SITES[str(s.id)] = {
+                        "id": str(s.id),
+                        "organization_id": str(s.organization_id),
+                        "name": s.name,
+                        "timezone": s.timezone,
+                    }
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error("persistence_initialization_error", error=str(e))

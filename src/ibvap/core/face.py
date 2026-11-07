@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import os
 import pathlib
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -237,6 +238,7 @@ class FaceDetector:
         self.model_path = model_path
         self.conf_threshold = conf_threshold
         self._detector: cv2.FaceDetectorYN | None = None
+        self._lock = threading.Lock()
 
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceDetectorYN"):
@@ -268,6 +270,12 @@ class FaceDetector:
                 except Exception:
                     self._detector = None
 
+    @property
+    def _safe_lock(self) -> threading.Lock:
+        if not hasattr(self, "_lock") or self._lock is None:
+            self._lock = threading.Lock()
+        return self._lock
+
     def detect(self, frame: np.ndarray) -> list[FaceDetection]:
         """Detect faces in frame and return normalized bounding boxes and quality metrics."""
         if self._detector is None or frame.size == 0:
@@ -278,8 +286,9 @@ class FaceDetector:
             return []
 
         try:
-            self._detector.setInputSize((w, h))
-            _, faces = self._detector.detect(frame)
+            with self._safe_lock:
+                self._detector.setInputSize((w, h))
+                _, faces = self._detector.detect(frame)
         except Exception:
             return []
 
@@ -349,6 +358,7 @@ class FaceRecognizer:
     def __init__(self, model_path: str = "models/face_recognition_sface_2021dec.onnx") -> None:
         self.model_path = model_path
         self._recognizer: cv2.FaceRecognizerSF | None = None
+        self._lock = threading.Lock()
 
         p = pathlib.Path(model_path)
         if p.exists() and hasattr(cv2, "FaceRecognizerSF"):
@@ -358,6 +368,12 @@ class FaceRecognizer:
                 self._recognizer = cv2.FaceRecognizerSF.create(str(p), "")
             except Exception:
                 self._recognizer = None
+
+    @property
+    def _safe_lock(self) -> threading.Lock:
+        if not hasattr(self, "_lock") or self._lock is None:
+            self._lock = threading.Lock()
+        return self._lock
 
     def align_crop(self, frame: np.ndarray, face_row: np.ndarray | FaceDetection) -> np.ndarray:
         """Warp and align detected face to standard 112x112 portrait using 5 landmarks."""
@@ -375,7 +391,8 @@ class FaceRecognizer:
             row_arr = np.asarray(face_row, dtype=np.float32)
 
         try:
-            aligned = self._recognizer.alignCrop(frame, row_arr)
+            with self._safe_lock:
+                aligned = self._recognizer.alignCrop(frame, row_arr)
             return aligned
         except Exception:
             return np.zeros((112, 112, 3), dtype=np.uint8)
@@ -391,7 +408,8 @@ class FaceRecognizer:
             aligned_crop = cv2.resize(aligned_crop, (112, 112))
 
         try:
-            feat = self._recognizer.feature(aligned_crop)
+            with self._safe_lock:
+                feat = self._recognizer.feature(aligned_crop)
             arr = np.asarray(feat, dtype=np.float32)
             if not np.all(np.isfinite(arr)):
                 return np.zeros((1, 128), dtype=np.float32)
@@ -405,13 +423,14 @@ class FaceRecognizer:
             return 0.0
 
         try:
-            score = float(
-                self._recognizer.match(
-                    np.asarray(feat1, dtype=np.float32),
-                    np.asarray(feat2, dtype=np.float32),
-                    cv2.FaceRecognizerSF_FR_COSINE,
+            with self._safe_lock:
+                score = float(
+                    self._recognizer.match(
+                        np.asarray(feat1, dtype=np.float32),
+                        np.asarray(feat2, dtype=np.float32),
+                        cv2.FaceRecognizerSF_FR_COSINE,
+                    )
                 )
-            )
             return score
         except Exception:
             return 0.0

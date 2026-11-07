@@ -116,6 +116,9 @@ def activate_model(payload: ActivateModelRequest, _auth: bool = Depends(require_
     }
 
 
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
 @router.post("/download")
 async def start_model_download(
     payload: DownloadModelRequest, _auth: bool = Depends(require_api_token)
@@ -130,8 +133,10 @@ async def start_model_download(
     if prog.status == "downloading":
         return {"status": "in_progress", "model_name": model_name}
 
-    # Spawn background download task (non-blocking)
-    asyncio.create_task(manager.start_download(model_name))
+    # Spawn background download task (non-blocking, tracked against premature GC)
+    task = asyncio.create_task(manager.start_download(model_name))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
     return {"status": "started", "model_name": model_name}
 
 

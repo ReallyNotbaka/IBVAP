@@ -161,7 +161,7 @@ export const RadarCalibrationModal = memo(function RadarCalibrationModal({
   ];
 
   const polygonPointsStr =
-    points.length >= 3 ? points.map(([x, y]) => `${x * 100}%,${y * 100}%`).join(" ") : "";
+    points.length >= 3 ? points.map(([x, y]) => `${x * 100},${y * 100}`).join(" ") : "";
 
   return (
     <div
@@ -248,7 +248,7 @@ export const RadarCalibrationModal = memo(function RadarCalibrationModal({
               )}
 
               {/* Homography Calibration SVG Layer */}
-              <svg className="absolute inset-0 w-full h-full pointer-events-none">
+              <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
                 {/* Ground Polygon Fill */}
                 {polygonPointsStr && (
                   <polygon
@@ -256,6 +256,7 @@ export const RadarCalibrationModal = memo(function RadarCalibrationModal({
                     fill="rgba(16, 185, 129, 0.15)"
                     stroke="rgba(52, 211, 153, 0.8)"
                     strokeWidth="2"
+                    vectorEffect="non-scaling-stroke"
                     strokeDasharray="4 2"
                   />
                 )}
@@ -265,21 +266,23 @@ export const RadarCalibrationModal = memo(function RadarCalibrationModal({
                   <>
                     {/* Near to Far left */}
                     <line
-                      x1={`${points[0][0] * 100}%`}
-                      y1={`${points[0][1] * 100}%`}
-                      x2={`${points[3][0] * 100}%`}
-                      y2={`${points[3][1] * 100}%`}
+                      x1={points[0][0] * 100}
+                      y1={points[0][1] * 100}
+                      x2={points[3][0] * 100}
+                      y2={points[3][1] * 100}
                       stroke="rgba(59, 130, 246, 0.6)"
                       strokeWidth="1.5"
+                      vectorEffect="non-scaling-stroke"
                     />
                     {/* Near to Far right */}
                     <line
-                      x1={`${points[1][0] * 100}%`}
-                      y1={`${points[1][1] * 100}%`}
-                      x2={`${points[2][0] * 100}%`}
-                      y2={`${points[2][1] * 100}%`}
+                      x1={points[1][0] * 100}
+                      y1={points[1][1] * 100}
+                      x2={points[2][0] * 100}
+                      y2={points[2][1] * 100}
                       stroke="rgba(245, 158, 11, 0.6)"
                       strokeWidth="1.5"
+                      vectorEffect="non-scaling-stroke"
                     />
                   </>
                 )}

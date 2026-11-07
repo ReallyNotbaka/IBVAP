@@ -30,9 +30,7 @@ def _is_dev_or_test_env() -> bool:
     env_val = os.getenv("IBVAP_ENV", "").lower()
     if env_val:
         return env_val in {"dev", "development", "test", "testing"}
-    if os.getenv("PYTEST_CURRENT_TEST"):
-        return True
-    return True
+    return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
 def _synthetic_allowed() -> bool:
@@ -49,8 +47,9 @@ def _cached_jail_roots() -> tuple[Path, ...]:
     for candidate in ("data/uploads", "data/quarantine", "tests/fixtures"):
         with contextlib.suppress(Exception):
             roots.append(Path(candidate).resolve())
-    with contextlib.suppress(Exception):
-        roots.append(Path(tempfile.gettempdir()).resolve())
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        with contextlib.suppress(Exception):
+            roots.append(Path(tempfile.gettempdir()).resolve())
     return tuple(roots)
 
 

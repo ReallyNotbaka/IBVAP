@@ -67,6 +67,22 @@ def _get_memory_telemetry() -> dict[str, Any]:
     avail_mb = 8192
     percent = 50.0
 
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        total_mb = int(vm.total // (1024 * 1024))
+        avail_mb = int(vm.available // (1024 * 1024))
+        percent = float(vm.percent)
+        return {
+            "memory_total_mb": total_mb,
+            "memory_avail_mb": avail_mb,
+            "memory_used_mb": max(0, total_mb - avail_mb),
+            "memory_percent": percent,
+        }
+    except Exception:
+        pass
+
     if sys.platform == "win32":
         try:
             m = _MEM()
@@ -173,17 +189,35 @@ async def health(request: Request) -> HealthResponse:
         process_uptime_seconds=round(time.time() - _START_TIME, 1),
     )
 
+    db_status = "ok"
+    try:
+        from ibvap.db import get_engine
+
+        engine = get_engine()
+        db_status = f"{engine.name}-connected"
+    except Exception:
+        db_status = "sqlite-fallback"
+
+    storage_stat = "Normal"
+    try:
+        from ibvap.core.remote import storage_pressure
+
+        storage_stat = storage_pressure()
+    except Exception:
+        pass
+
     return HealthResponse(
         status="ok",
         version="0.1.0",
         timestamp=datetime.now(UTC).isoformat(),
         checks={
             "api": "ok",
-            "database": "pending-postgres",
+            "database": db_status,
             "media": "pyav-18.1.0",
             "media_gateway": media_gateway_status,
             "gpu": "directml-active" if gpu["directml_available"] else "cpu-only",
             "memory": f"{mem['memory_percent']}% ({mem['memory_used_mb']}/{mem['memory_total_mb']} MB)",
+            "storage_pressure": str(storage_stat),
         },
         system=sys_telemetry,
     )
@@ -206,7 +240,7 @@ async def capabilities(request: Request) -> CapabilitiesResponse:
         media={
             "gateway": gateway_desc,
             "decoder": "PyAV 18.1.0 (FFmpeg 8.x)",
-            "opencv": "5.0.0.93",
+            "opencv": "4.10.0.84",
         },
         detectors={
             "primary": "YOLO26 BLOCKED until Enterprise grant or RF-DETR ratified (see docs/adr/0004)",

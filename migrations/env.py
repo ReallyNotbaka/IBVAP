@@ -26,9 +26,11 @@ def _url() -> str:
     # allow env override (tests set IBVAP_DB_URL)
     env_url = os.getenv("IBVAP_DB__URL") or os.getenv("DATABASE_URL")
     if env_url:
-        # if caller passed asyncpg URL, downgrade to psycopg for alembic sync
-        return env_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
-    return str(config.get_main_option("sqlalchemy.url") or "")
+        # if caller passed async URL, downgrade to sync driver for alembic sync
+        url = env_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
+        return url.replace("sqlite+aiosqlite://", "sqlite://")
+    main_url = str(config.get_main_option("sqlalchemy.url") or "")
+    return main_url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("sqlite+aiosqlite://", "sqlite://")
 
 
 def run_migrations_offline() -> None:

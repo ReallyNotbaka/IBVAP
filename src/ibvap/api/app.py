@@ -73,6 +73,9 @@ def _load_dotenv_if_runtime() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _load_dotenv_if_runtime()
+    from ibvap.events.outbox import set_main_event_loop
+
+    set_main_event_loop(asyncio.get_running_loop())
     # Task 5: honor the injected cfg (placed on app.state by create_app) so
     # operator/test overrides are respected instead of rebuilt from env.
     settings = getattr(app.state, "settings", None) or Settings()
@@ -96,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             exc_info=True,
         )
     yield
+    set_main_event_loop(None)
     # Task 5: shutdown cleanup — stop camera workers, then release the DB engine.
     try:
         from ibvap.db import dispose_engine

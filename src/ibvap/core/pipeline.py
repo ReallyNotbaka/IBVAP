@@ -511,6 +511,15 @@ class MiniPipeline:
             # stored dict keeps a reference to the live polygon list, so
             # in-place edits stay visible; identity check catches reassignment.
             cached_zones = self.rule_engine.zones
+            settings_loiter_cd = 10.0
+            try:
+                from ibvap.core.dispatcher import get_settings
+
+                settings_loiter_cd = get_settings().loiter_cooldown_seconds
+                self.rule_engine.cooldown_seconds = settings_loiter_cd
+            except Exception:
+                pass
+
             if self._rule_zone_id != zone_id or not cached_zones or cached_zones[0].get("polygon") is not zone.polygon:
                 self.rule_engine.zones = [{"id": zone_id, "polygon": zone.polygon}]
                 self._rule_zone_id = zone_id
@@ -528,9 +537,10 @@ class MiniPipeline:
                         "model_id": model_id,
                     }
                     _attach_frame_evidence(event, frame, trk.bbox_norm)
+                    loiter_bucket = int(now_ts // settings_loiter_cd)
                     transactional_write(
                         event,
-                        dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}",
+                        dedup_key=f"{camera_id}:loiter:{zone_id}:{trk.track_id}:{stream_epoch}:{loiter_bucket}",
                     )
                     self.events_created += 1
                     if primary_event is None:

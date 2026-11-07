@@ -23,9 +23,12 @@ class SiteCreate(BaseModel):
 
 @router.post("", response_model=dict[str, Any])
 async def create_site(req: SiteCreate, _auth: bool = Depends(require_api_token)) -> dict[str, Any]:
+    from ibvap.services.persistence import save_site_to_db
+
     sid = str(uuid.uuid4())
     data = {"id": sid, "name": req.name, "organization_id": req.organization_id, "timezone": req.timezone}
     _SITES[sid] = data
+    await save_site_to_db(data)
     return data
 
 

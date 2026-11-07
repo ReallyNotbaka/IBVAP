@@ -1,18 +1,21 @@
 import json
+import os
+import pathlib
 import time
 import urllib.request
 
 base_url = "http://127.0.0.1:8000/api/v1"
-user_file = (
-    "People Walking Free Stock Footage, Royalty-Free No Copyright Content - Montreal Walking Tours (1080p, h264).mp4"
-)
-user_path = rf'"C:\Users\ReallyNotBaka\Downloads\{user_file}"'
+token = os.getenv("IBVAP_API_TOKEN", "ibvap-local-dev-token")
+headers = {"Content-Type": "application/json", "X-API-Token": token}
 
-print("1. Testing endpoint /cameras/test with quoted user path...")
+sample_fixture = pathlib.Path("tests/fixtures/sample.mp4")
+user_path = os.getenv("TEST_FOOTAGE_PATH", str(sample_fixture.resolve()))
+
+print("1. Testing endpoint /cameras/test with footage path...")
 req = urllib.request.Request(
     f"{base_url}/cameras/test",
     data=json.dumps({"endpoint": user_path}).encode(),
-    headers={"Content-Type": "application/json"},
+    headers=headers,
 )
 with urllib.request.urlopen(req) as resp:
     res = json.loads(resp.read().decode())
@@ -21,9 +24,9 @@ with urllib.request.urlopen(req) as resp:
     print("Probe info:", res.get("probe"))
     assert res["result"] == "ok"
 
-print("\n2. Creating camera with quoted user path...")
+print("\n2. Creating camera with footage path...")
 create_data = {
-    "name": "Montreal Walking Tours Footage",
+    "name": "E2E Test Video Footage",
     "site_id": "00000000-0000-0000-0000-000000000001",
     "source_type": "video_footage",
     "protocol": "file",
@@ -33,7 +36,7 @@ create_data = {
 req = urllib.request.Request(
     f"{base_url}/cameras",
     data=json.dumps(create_data).encode(),
-    headers={"Content-Type": "application/json"},
+    headers=headers,
 )
 with urllib.request.urlopen(req) as resp:
     cam = json.loads(resp.read().decode())
@@ -66,7 +69,7 @@ with urllib.request.urlopen(req) as resp:
     assert b"--frame" in chunk or len(chunk) > 0
 
 print("\n6. Cleaning up / deleting camera...")
-req = urllib.request.Request(f"{base_url}/cameras/{cam_id}", method="DELETE")
+req = urllib.request.Request(f"{base_url}/cameras/{cam_id}", headers=headers, method="DELETE")
 with urllib.request.urlopen(req) as resp:
     del_res = json.loads(resp.read().decode())
     print("Delete result:", del_res)

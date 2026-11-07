@@ -6,6 +6,7 @@ Phase 3 slice uses in-mem list but preserves same API: atomic write of event+out
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 import uuid
@@ -17,6 +18,16 @@ MAX_EVENTS = 10_000
 MAX_OUTBOX = 10_000
 
 _LOCK = threading.RLock()
+_MAIN_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_event_loop(loop: asyncio.AbstractEventLoop | None) -> None:
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
+def get_main_event_loop() -> asyncio.AbstractEventLoop | None:
+    return _MAIN_LOOP
 
 
 @dataclass
@@ -86,15 +97,32 @@ def transactional_write(
             if evicted_out.dedup_key and _DEDUP_OUTBOX_INDEX.get(evicted_out.dedup_key) is evicted_out:
                 _DEDUP_OUTBOX_INDEX.pop(evicted_out.dedup_key, None)
 
-    # Non-blocking async C2 webhook dispatch outside lock
+    # Non-blocking async C2 webhook dispatch and durable DB outbox persist
     try:
-        import asyncio
-
         from ibvap.core.dispatcher import dispatch_c2_webhook
+        from ibvap.services.persistence import save_outbox_event_to_db
 
-        loop = asyncio.get_running_loop()
-        if loop.is_running():
-            loop.create_task(dispatch_c2_webhook(event))
+        main_loop = get_main_event_loop()
+        if main_loop is not None and main_loop.is_running():
+            try:
+                curr_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                curr_loop = None
+
+            if curr_loop is main_loop:
+                main_loop.create_task(dispatch_c2_webhook(event))
+                main_loop.create_task(save_outbox_event_to_db(entry))
+            else:
+                asyncio.run_coroutine_threadsafe(dispatch_c2_webhook(event), main_loop)
+                asyncio.run_coroutine_threadsafe(save_outbox_event_to_db(entry), main_loop)
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.create_task(dispatch_c2_webhook(event))
+                    loop.create_task(save_outbox_event_to_db(entry))
+            except RuntimeError:
+                pass
     except (RuntimeError, Exception):
         pass
 

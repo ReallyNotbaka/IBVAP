@@ -227,7 +227,15 @@ class ONNXDetectorProvider:
         best_sec_local_idx = np.argmax(sec_scores, axis=1)
         best_sec_scores = np.max(sec_scores, axis=1)
 
-        mask = best_sec_scores >= self._conf_threshold
+        effective_conf = self._conf_threshold
+        try:
+            from ibvap.core.dispatcher import get_settings
+
+            effective_conf = get_settings().detection_confidence_threshold
+        except Exception:
+            pass
+
+        mask = best_sec_scores >= effective_conf
         if not np.any(mask):
             return []
 
@@ -246,7 +254,7 @@ class ONNXDetectorProvider:
         # classes (e.g., person near a car or riding a bicycle) do not falsely suppress each other.
         class_offsets = (valid_class_ids * 10000.0).astype(np.float32)
         boxes_for_nms = np.column_stack((x1_lb + class_offsets, y1_lb, w, h))
-        indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, self._conf_threshold, self._iou_threshold)  # pyright: ignore[reportArgumentType] # cv2 stubs type bboxes as Sequence[Rect2d]; ndarray accepted at runtime
+        indices = cv2.dnn.NMSBoxes(boxes_for_nms, valid_scores, effective_conf, self._iou_threshold)  # pyright: ignore[reportArgumentType] # cv2 stubs type bboxes as Sequence[Rect2d]; ndarray accepted at runtime
         if len(indices) == 0:
             return []
 

@@ -16,7 +16,7 @@ dependencies = [
     "psycopg[binary]==3.2.9",
     "greenlet>=3.0",
     "av==18.1.0",
-    "opencv-python==5.0.0.93",
+    "opencv-contrib-python==4.10.0.84",
     "numpy==2.3.5",
     "pillow==12.3.0",
     "pyyaml==6.0.2",
@@ -28,6 +28,8 @@ dependencies = [
     "onnxruntime-directml==1.24.4; sys_platform == 'win32'",
     "onnxruntime==1.24.4; sys_platform != 'win32'",
     "aiosqlite==0.22.1",
+    "cryptography>=43.0.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
