@@ -560,3 +560,27 @@ def test_create_camera_accepts_default_and_v7_site_ids(api_client: TestClient) -
         )
         assert r.status_code == 201, r.text
         c.delete(f"/api/v1/cameras/{r.json()['id']}")
+
+
+def test_unsaved_test_reports_auth_failed_on_401(api_client: TestClient, monkeypatch: Any) -> None:
+    from ibvap.api.routes import cameras as cameras_mod
+    from ibvap.core import probe as probe_mod
+
+    monkeypatch.setenv("IBVAP_MEDIA__SITE_CIDR_ALLOWLIST", '["192.168.1.0/24"]')
+
+    def fake_probe(*args: Any, **kwargs: Any) -> Any:
+        raise probe_mod.ProbeError("Camera authentication failed (check username and password)", code="auth_failed")
+
+    monkeypatch.setattr(cameras_mod, "probe_url", fake_probe)
+
+    resp = api_client.post(
+        "/api/v1/cameras/test",
+        json={"endpoint": "http://192.168.1.50:8080/video", "protocol": "http", "username": "bad", "password": "bad"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["result"] == "auth_failed"
+    assert data["reason_code"] == "auth_failed"
+    auth_stages = [s for s in data["stages"] if s["name"] == "Authenticating"]
+    assert auth_stages, "No Authenticating stage found"
+    assert auth_stages[-1]["status"] == "failed"

@@ -29,7 +29,7 @@ from ibvap.events.outbox import (
 )
 from ibvap.events.outbox import _LOCK as OUTBOX_LOCK
 from ibvap.models import Camera as DBCamera
-from ibvap.models import Organization, Site
+from ibvap.models import CredentialReference, Organization, Site
 from ibvap.models import Outbox as DBOutbox
 from ibvap.services.stream_worker import (
     _CAMERAS,
@@ -129,6 +129,28 @@ async def save_camera_to_db(cam_data: dict[str, Any]) -> None:
                     meta=meta,
                 )
                 session.add(new_cam)
+
+            enc = cam_data.get("_enc") or {}
+            enc_user = enc.get("username")
+            enc_pass = enc.get("password")
+            cred_res = await session.execute(
+                select(CredentialReference).where(CredentialReference.camera_id == cam_uuid)
+            )
+            existing_cred = cred_res.scalar_one_or_none()
+            if enc_user or enc_pass:
+                if existing_cred is not None:
+                    existing_cred.username_enc = enc_user
+                    existing_cred.password_enc = enc_pass
+                else:
+                    session.add(
+                        CredentialReference(
+                            camera_id=cam_uuid,
+                            username_enc=enc_user,
+                            password_enc=enc_pass,
+                        )
+                    )
+            elif existing_cred is not None:
+                await session.delete(existing_cred)
 
             await session.commit()
             logger.debug("camera_saved_to_db", camera_id=str(cam_uuid))
@@ -305,6 +327,8 @@ async def init_persistence(settings: Settings | None = None) -> None:
         async with sm() as session:
             res = await session.execute(select(DBCamera))
             saved_cameras = res.scalars().all()
+            cred_rows = (await session.execute(select(CredentialReference))).scalars().all()
+            cred_map = {str(c.camera_id): c for c in cred_rows}
 
             for cam in saved_cameras:
                 cam_id = str(cam.id)
@@ -315,6 +339,12 @@ async def init_persistence(settings: Settings | None = None) -> None:
                 if meta.get("temporary"):
                     continue  # skip temporary camera test feeds
 
+                cred = cred_map.get(cam_id)
+                enc_dict = {
+                    "username": cred.username_enc if cred else None,
+                    "password": cred.password_enc if cred else None,
+                }
+                has_creds = bool(enc_dict["username"] or enc_dict["password"])
                 cam_data: dict[str, Any] = {
                     "id": cam_id,
                     "name": cam.name,
@@ -325,9 +355,10 @@ async def init_persistence(settings: Settings | None = None) -> None:
                     "stream_epoch": cam.stream_epoch,
                     "desired_state": cam.desired_state,
                     "observed_state": cam.observed_state,
-                    "has_credentials": False,
+                    "has_credentials": has_creds,
                     "temporary": False,
                     "created_at": cam.created_at.timestamp() if cam.created_at else time.time(),
+                    "_enc": enc_dict,
                 }
 
                 if meta.get("fence"):

@@ -108,7 +108,7 @@ export const OverlayCanvas = memo(function OverlayCanvas({
   const fBracket = `geometric-bracket-shadow-${uid}`;
   const fSelected = `selected-target-glow-${uid}`;
   const fCritical = `critical-target-glow-${uid}`;
-  const fRoi = `roi-intruder-glow-${uid}`;
+  const fRoi = "roi-intruder-glow";
 
   const filteredBoxes = useMemo(
     () =>
@@ -338,7 +338,7 @@ export const OverlayCanvas = memo(function OverlayCanvas({
                   fontSize={isFace ? 1.3 : b.isAlert ? 1.9 : b.isPlate ? 1.7 : 1.8}
                   fontWeight={b.isAlert ? 700 : b.isPlate ? 700 : 600}
                   letterSpacing={b.isPlate ? "0.04em" : "0.02em"}
-                  fontFamily={b.isPlate ? "ui-monospace, SFMono-Regular, Menlo, monospace" : "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif"}
+                  fontFamily={b.isPlate ? "ui-monospace, Consolas, monospace" : "Avenir Next, Segoe UI, system-ui, sans-serif"}
                 >
                   <tspan
                     fill={b.isAlert ? "#ffffff" : theme.accent}
@@ -346,9 +346,9 @@ export const OverlayCanvas = memo(function OverlayCanvas({
                   >
                     {formattedLabel}
                   </tspan>
-                  {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"> #{b.trackId}</tspan>}
+                  {hasTrack && <tspan fill={b.isAlert ? "#fecaca" : "#94a3b8"} fontFamily="ui-monospace, Consolas, monospace"> #{b.trackId}</tspan>}
                   {showConfidence && b.confidence !== undefined && (
-                    <tspan fill={b.isAlert ? "#fed7aa" : "#cbd5e1"} fontSize={isFace ? 1.1 : 1.5} fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace">
+                    <tspan fill={b.isAlert ? "#fed7aa" : "#cbd5e1"} fontSize={isFace ? 1.1 : 1.5} fontFamily="ui-monospace, Consolas, monospace">
                       {" "}
                       {Math.round(b.confidence * 100)}%
                     </tspan>

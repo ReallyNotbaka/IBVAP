@@ -79,7 +79,7 @@ export const TacticalVisionSelector = memo(function TacticalVisionSelector({
 
   return (
     <div
-      className="flex items-center bg-black/70 backdrop-blur-md rounded-lg border border-white/10 p-0.5"
+      className="flex items-center bg-black/65 backdrop-blur-md rounded-md border border-white/10 p-0.5"
       onClick={(e) => e.stopPropagation()}
       title="Tactical Vision Enhancement Mode"
     >
@@ -90,10 +90,10 @@ export const TacticalVisionSelector = memo(function TacticalVisionSelector({
             key={m.id}
             type="button"
             onClick={() => onChange(m.id)}
-            className={`px-1.5 py-0.5 text-[9px] font-mono font-bold rounded transition-all cursor-pointer ${
+            className={`px-1.5 py-0.5 text-[9px] font-mono font-semibold rounded-xs transition-colors cursor-pointer ${
               active
-                ? "bg-emerald-500/90 text-slate-950 shadow-sm"
-                : "text-slate-400 hover:text-slate-200 hover:bg-white/10"
+                ? "bg-white text-slate-950"
+                : "text-slate-300 hover:text-white hover:bg-white/10"
             }`}
             aria-label={`Select ${m.label}`}
           >

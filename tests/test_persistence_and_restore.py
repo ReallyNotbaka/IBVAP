@@ -9,6 +9,7 @@ from ibvap.config import DBConfig, Settings
 from ibvap.db import dispose_engine, get_sessionmaker
 from ibvap.events.outbox import OutboxEntry
 from ibvap.models import Camera as DBCamera
+from ibvap.models import CredentialReference
 from ibvap.models import Outbox as DBOutbox
 from ibvap.services.persistence import (
     delete_camera_from_db,
@@ -45,6 +46,7 @@ async def test_persistence_camera_lifecycle_and_restore(tmp_path):
         "desired_state": "STREAMING",
         "observed_state": "STREAMING",
         "fence": {"polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]], "enabled": True},
+        "_enc": {"username": "enc_admin", "password": "enc_password"},
     }
 
     # 2. Save camera to DB
@@ -71,6 +73,9 @@ async def test_persistence_camera_lifecycle_and_restore(tmp_path):
     restored = _CAMERAS[cam_id]
     assert restored["name"] == "North Gate Thermal"
     assert restored["fence"]["polygon"] == [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+    assert restored["_enc"]["username"] == "enc_admin"
+    assert restored["_enc"]["password"] == "enc_password"
+    assert restored["has_credentials"] is True
     assert cam_id in _STATE_MACHINES
 
     # 6. Delete camera
@@ -78,6 +83,10 @@ async def test_persistence_camera_lifecycle_and_restore(tmp_path):
     async with sm() as session:
         res = await session.execute(select(DBCamera).where(DBCamera.id == uuid.UUID(cam_id)))
         assert res.scalar_one_or_none() is None
+        cred_chk = await session.execute(
+            select(CredentialReference).where(CredentialReference.camera_id == uuid.UUID(cam_id))
+        )
+        assert cred_chk.scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio

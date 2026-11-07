@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -53,8 +56,23 @@ _TITLE_MAP: dict[int, str] = {
 }
 
 
+def _load_dotenv_if_runtime() -> None:
+    """Load .env into os.environ when running outside pytest so direct uvicorn runs pick up .env."""
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        return
+    with contextlib.suppress(Exception):
+        from pathlib import Path
+
+        from dotenv import load_dotenv
+
+        root = Path(__file__).resolve().parents[3]
+        load_dotenv(root / ".env", override=False)
+        load_dotenv(".env", override=False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    _load_dotenv_if_runtime()
     # Task 5: honor the injected cfg (placed on app.state by create_app) so
     # operator/test overrides are respected instead of rebuilt from env.
     settings = getattr(app.state, "settings", None) or Settings()
@@ -94,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    _load_dotenv_if_runtime()
     cfg = settings or Settings()
     app = FastAPI(
         title="IBVAP — Intelligent Border Video Analytics Platform",
@@ -259,8 +278,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     return app
-
-
-# Task 5: no import-time create_app() — serve via the factory
-# (uvicorn ibvap.api.app:create_app --factory) so Settings/lang/env are read
-# at serve time, not import time.

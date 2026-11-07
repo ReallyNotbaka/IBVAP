@@ -18,6 +18,8 @@ import { SettingsModal } from "../components/SettingsModal";
 
 type AlertTab = "all" | "watchlist" | "intrusions" | "exits" | "system";
 
+const NOISY_FOV_TYPES = new Set(["target_entered", "target_exited", "target_lost"]);
+
 // CSV cell escape: quote every field, double embedded quotes, and guard
 // formula injection by prefixing cells starting with = + - @ (or tab/CR)
 // with a single quote so spreadsheets treat them as text. Leading whitespace
@@ -64,8 +66,10 @@ export function Alerts() {
 
   // Grouping & deduplication of rapid boundary crossing / exit events
   const processedEvents = useMemo(() => {
-    // Exclude acknowledged events
-    const active = rawEvents.filter((ev) => !acknowledgedIds.has(ev.id));
+    // Exclude acknowledged events and noisy FOV routine events
+    const active = rawEvents
+      .filter((ev) => !acknowledgedIds.has(ev.id))
+      .filter((ev) => !NOISY_FOV_TYPES.has((ev.event_type || "").toLowerCase()));
 
     if (!dedupEnabled) {
       return active.map((ev) => ({ event: ev, count: 1, latestTime: ev.created_at || Date.now() / 1000 }));
@@ -238,7 +242,7 @@ export function Alerts() {
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-5">
       {/* Header with Stats & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200/80 dark:border-white/10 pb-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200/80 dark:border-white/10 pb-5">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/50 text-rose-600 dark:text-rose-400 shadow-sm">
             <BellIcon className="w-5 h-5" />
@@ -247,7 +251,7 @@ export function Alerts() {
             <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-2">
               Operational Alerts Console
               {tabCounts.all > 0 && (
-                <span className="rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300 text-xs px-2.5 py-0.5 font-mono font-bold border border-rose-200 dark:border-rose-900/60">
+                <span className="rounded-md bg-rose-500/15 text-rose-600 dark:text-rose-400 text-xs px-2.5 py-0.5 font-mono font-bold border border-rose-500/30">
                   {tabCounts.all} Active
                 </span>
               )}
@@ -271,7 +275,7 @@ export function Alerts() {
 
           <button
             onClick={() => refetch()}
-            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-xs transition-colors cursor-pointer"
+            className="btn-instrument"
           >
             Refresh
           </button>
@@ -279,26 +283,26 @@ export function Alerts() {
           <button
             onClick={handleExportCSV}
             disabled={filteredEvents.length === 0}
-            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40 shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+            className="btn-instrument"
             title="Export filtered alerts to CSV incident report"
           >
-            <DownloadIcon className="w-3.5 h-3.5" />
+            <DownloadIcon className="w-3.5 h-3.5 text-slate-400" />
             <span>Export CSV</span>
           </button>
 
           <button
             onClick={() => setSettingsOpen(true)}
-            className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+            className="btn-instrument"
             title="Configure C2 Webhook Relay & Sensitivity Parameters"
           >
-            <SettingsIcon className="w-3.5 h-3.5" />
+            <SettingsIcon className="w-3.5 h-3.5 text-slate-400" />
             <span>C2 & Settings</span>
           </button>
 
           <button
             onClick={handleClearAll}
             disabled={isClearing || processedEvents.length === 0}
-            className="rounded-lg bg-rose-50 dark:bg-rose-950/80 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+            className="btn-instrument !text-rose-500 dark:!text-rose-400 hover:!border-rose-500/40"
           >
             {isClearing ? "Clearing..." : "Clear Alerts"}
           </button>
@@ -327,21 +331,17 @@ export function Alerts() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as AlertTab)}
-              className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                isActive
-                  ? "bg-slate-900 dark:bg-white text-white dark:text-slate-950 shadow-sm"
-                  : "text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200"
-              }`}
+              className={isActive ? "btn-instrument-active" : "btn-instrument"}
             >
               <Icon className="w-3.5 h-3.5" />
               <span>{tab.label}</span>
               <span
-                className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono font-bold ${
+                className={`rounded px-1.5 py-0.2 text-[10px] font-mono font-bold ${
                   isActive
-                    ? "bg-white/20 dark:bg-black/20 text-white dark:text-slate-950"
+                    ? "bg-white/25 text-white"
                     : tab.count > 0
-                    ? "bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200"
-                    : "bg-slate-100 dark:bg-slate-800/40 text-slate-400 dark:text-slate-500"
+                    ? "bg-slate-200 dark:bg-white/10 text-slate-800 dark:text-slate-200"
+                    : "bg-slate-100 dark:bg-white/5 text-slate-400"
                 }`}
               >
                 {tab.count}
@@ -352,14 +352,14 @@ export function Alerts() {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-wrap items-center gap-3 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl border border-slate-200/80 dark:border-white/10 p-3 rounded-2xl shadow-xs">
+      <div className="panel p-3 flex flex-wrap items-center gap-3">
         <div className="flex-1 min-w-[200px]">
           <input
             type="text"
             placeholder="Search alerts by suspect, track ID, camera, or rule..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-slate-400 dark:focus:border-slate-600"
+            className="w-full bg-slate-50 dark:bg-black/30 border border-slate-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500"
           />
         </div>
 
@@ -368,7 +368,7 @@ export function Alerts() {
             value={selectedCamera}
             onChange={(e) => setSelectedCamera(e.target.value)}
             aria-label="Filter by camera feed"
-            className="bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+            className="btn-instrument cursor-pointer"
           >
             <option value="all">All Cameras ({cameras.length})</option>
             {cameras.map((c) => (
@@ -382,7 +382,7 @@ export function Alerts() {
             value={threatFilter}
             onChange={(e) => setThreatFilter(e.target.value)}
             aria-label="Filter by threat priority"
-            className="bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+            className="btn-instrument cursor-pointer"
           >
             <option value="all">All Priorities</option>
             <option value="CRITICAL">Critical Only</option>
@@ -400,14 +400,14 @@ export function Alerts() {
             Loading operational activity feed...
           </div>
         ) : isError ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-12 text-center dark:border-amber-900/60 dark:bg-amber-950/20">
+          <div className="panel border-amber-500/30 bg-amber-500/5 p-12 text-center">
             <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-200">Alerts are unavailable</h3>
             <p className="mx-auto mt-2 max-w-sm text-xs text-amber-700 dark:text-amber-300">The activity feed could not be loaded. Your filters are still here.</p>
             <button type="button" onClick={() => void refetch()} className="mt-4 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white dark:bg-white dark:text-slate-950 cursor-pointer">Try again</button>
           </div>
         ) : filteredEvents.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white/60 dark:bg-slate-900/60 backdrop-blur-xl p-12 text-center space-y-2 shadow-xs">
-            <div className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mb-1 border border-emerald-200 dark:border-emerald-900/50">
+          <div className="panel p-12 text-center space-y-2">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 mb-1 border border-emerald-200 dark:border-emerald-900/50">
               <ShieldCheckIcon className="w-5 h-5" />
             </div>
             <h3 className="text-sm font-semibold text-slate-800 dark:text-slate-200">
@@ -448,7 +448,7 @@ export function Alerts() {
             return (
               <div
                 key={ev.id}
-                className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border p-4 backdrop-blur-xl transition-all shadow-xs ${borderStyle}`}
+                className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-3.5 transition-all shadow-xs ${borderStyle}`}
               >
                 <div className="flex items-start gap-3.5">
                   <div className="mt-0.5 flex-shrink-0">
@@ -491,7 +491,7 @@ export function Alerts() {
                       </span>
 
                       {count > 1 && (
-                        <span className="rounded-full bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-2 py-0.5 text-[10px] font-mono font-bold">
+                        <span className="rounded-md bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 px-1.5 py-0.5 text-[10px] font-mono font-bold border border-slate-300/50 dark:border-white/10">
                           ×{count} occurrences
                         </span>
                       )}
@@ -502,8 +502,8 @@ export function Alerts() {
                       </span>
 
                       {ev.zone_id && (
-                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                          • Zone: {ev.zone_id}
+                        <span className="rounded bg-slate-100 dark:bg-slate-800 px-1.5 py-0.2 text-[10px] font-mono text-slate-600 dark:text-slate-400">
+                          Zone: {ev.zone_id}
                         </span>
                       )}
 
@@ -544,17 +544,17 @@ export function Alerts() {
                   {(ev.snapshot_url || ev.crop_url) && (
                     <button
                       onClick={() => setSelectedEvidenceEvent(ev)}
-                      className="rounded-lg border border-indigo-200 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 px-2.5 py-1 text-xs font-semibold shadow-xs transition-colors cursor-pointer flex items-center gap-1"
+                      className="btn-instrument !h-7 !px-2.5"
                       title="View forensic snapshots and target crop"
                     >
-                      <ImageIcon className="w-3.5 h-3.5" />
+                      <ImageIcon className="w-3.5 h-3.5 text-indigo-400" />
                       <span>Evidence</span>
                     </button>
                   )}
 
                   <button
                     onClick={() => handleAcknowledge(ev.id)}
-                    className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-xs transition-colors cursor-pointer"
+                    className="btn-instrument !h-7 !px-2.5"
                     title="Dismiss alert"
                   >
                     Acknowledge

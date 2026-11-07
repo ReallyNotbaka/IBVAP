@@ -9,6 +9,7 @@ Note: don't use float seconds for media timing, stick to time_base + pts.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import time
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse, urlunparse
 
 import av
+import cv2
 
 from ibvap.core.credentials import build_authenticated_url
 from ibvap.core.ssrf import DEFAULT_POLICY, SSRFPolicy, pin_stream_url
@@ -31,7 +33,7 @@ def normalize_mjpeg_url(url: str) -> str:
     try:
         parsed = urlparse(clean)
         path = parsed.path.lower().rstrip("/")
-        if parsed.port in (4747, 8080, 8000, 8081) and not path:
+        if parsed.port in (4747, 8080, 8000, 8081, 8082, 8008, 8888) and not path:
             return urlunparse(parsed._replace(path="/video"))
     except Exception:
         pass
@@ -64,6 +66,7 @@ class FrameProbe:
     is_keyframe: bool
     sha256: str  # for frozen-frame detection
     decode_ms: float
+    preview_b64: str | None = None
 
 
 def probe_url(
@@ -125,10 +128,15 @@ def probe_url(
             )
             break
         except Exception as e:
+            err_lower = str(e).lower()
+            if any(tok in err_lower for tok in ("401", "403", "unauthorized", "forbidden", "authentication")):
+                raise ProbeError(
+                    "Camera authentication failed (check username and password)", code="auth_failed"
+                ) from e
             # Only retry transient I/O / socket busy errors on phone streams
             if attempt < max_open_attempts - 1 and isinstance(
                 e,
-                (av.error.InvalidDataError, av.error.EOFError, ConnectionResetError),  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
+                (av.error.InvalidDataError, av.error.EOFError, ConnectionResetError),  # pyright: ignore[reportAttributeAccessIssue]
             ):
                 time.sleep(0.4)
                 continue
@@ -194,13 +202,20 @@ def probe_url(
                 break
             for frame in packet.decode():
                 t0 = time.monotonic()
-                # compute sha for frozen detection (downsampled hash).
-                # Avoid arr.tobytes() full-frame copy (~6MB @1080p); hash a
-                # small strided sample via buffer view instead.
+                preview_b64: str | None = None
                 try:
                     arr = frame.to_ndarray(format="rgb24")
                     sample = arr[::16, ::16]
                     h = hashlib.sha256(memoryview(sample).cast("B")[:4096]).hexdigest()[:16]
+                    if not frames:
+                        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+                        if bgr.shape[1] > 640:
+                            scale = 640.0 / bgr.shape[1]
+                            bgr = cv2.resize(bgr, (640, max(1, int(bgr.shape[0] * scale))))
+                        ok, enc = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+                        if ok:
+                            b64_str = base64.b64encode(enc.tobytes()).decode("ascii")
+                            preview_b64 = f"data:image/jpeg;base64,{b64_str}"
                 except Exception:
                     try:
                         h = hashlib.sha256(arr.tobytes()[:4096]).hexdigest()[:16]
@@ -218,6 +233,7 @@ def probe_url(
                         is_keyframe=bool(frame.key_frame),
                         sha256=h,
                         decode_ms=dt,
+                        preview_b64=preview_b64,
                     )
                 )
                 if len(frames) >= max_frames:

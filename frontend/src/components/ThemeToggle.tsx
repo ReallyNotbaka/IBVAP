@@ -61,12 +61,6 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
       }
     };
 
-    if (next) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-
     if ("startViewTransition" in document && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       document.startViewTransition(updateTheme);
     } else {
@@ -81,17 +75,18 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
       type="button"
       onClick={toggleTheme}
       data-testid="theme-toggle"
-      className={`relative flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full border border-neutral-200/90 dark:border-white/10 bg-neutral-100/90 dark:bg-slate-800 text-amber-600 dark:text-neutral-200 shadow-sm hover:scale-105 active:scale-95 transition-all duration-300 cursor-pointer overflow-hidden ${className}`}
+      className={`relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 dark:border-white/10 bg-transparent hover:bg-slate-100 dark:hover:bg-white/[0.06] text-slate-600 dark:text-slate-300 transition-colors cursor-pointer overflow-hidden ${className}`}
       title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
       aria-label={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
     >
       <svg
         viewBox="0 0 24 24"
-        width="20"
-        height="20"
-        className="w-5 h-5 transition-transform duration-500 ease-out"
+        width="15"
+        height="15"
+        className="w-3.5 h-3.5 transition-transform duration-300 ease-out"
         style={{
           transform: isDark ? "rotate(40deg)" : "rotate(0deg)",
+          transition: "transform 420ms cubic-bezier(0.22, 1, 0.36, 1)",
         }}
       >
         <mask id={maskId}>
@@ -101,9 +96,6 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
             cy={isDark ? "8" : "-6"}
             r="6"
             fill="black"
-            style={{
-              transition: "cx 400ms cubic-bezier(0.4, 0, 0.2, 1), cy 400ms cubic-bezier(0.4, 0, 0.2, 1)",
-            }}
           />
         </mask>
 
@@ -113,12 +105,8 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
           r={isDark ? "6" : "4.5"}
           fill="currentColor"
           mask={`url(#${maskId})`}
-          style={{
-            transition: "r 400ms cubic-bezier(0.4, 0, 0.2, 1)",
-          }}
         />
 
-        {/* Sun Rays - collapse into crescent moon */}
         <g
           stroke="currentColor"
           strokeWidth="2"
@@ -127,7 +115,7 @@ export function ThemeToggle({ idPrefix = "header", className = "" }: ThemeToggle
             opacity: isDark ? 0 : 1,
             transform: isDark ? "scale(0.2) rotate(90deg)" : "scale(1) rotate(0deg)",
             transformOrigin: "center",
-            transition: "all 400ms cubic-bezier(0.4, 0, 0.2, 1)",
+            transition: "transform 420ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease-out",
           }}
         >
           <line x1="12" y1="1.5" x2="12" y2="3.5" />

@@ -3,6 +3,7 @@
 
 Provides single-command and one-click launch capabilities:
 - Auto-bootstraps .env from .env.example if missing
+- Loads .env into os.environ for auth, credential encryption, and DB fallback
 - Ensures data/ directories exist
 - Validates model assets
 - Displays operational dashboard banner
@@ -61,7 +62,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def bootstrap_environment(root: Path) -> bool:
-    """Ensure essential directories, environment config, and frontend dist exist."""
+    """Ensure essential directories and environment config exist."""
     env_created = False
     env_file = root / ".env"
     env_example = root / ".env.example"
@@ -98,7 +99,17 @@ def ensure_frontend_bundle(root: Path) -> bool:
         return False
 
     print("[Launcher] Building frontend bundle...")
-    result = subprocess.run([npm, "run", "build"], cwd=str(frontend_dir), capture_output=True, text=True)
+    build_env = os.environ.copy()
+    if "IBVAP_API_TOKEN" in build_env:
+        build_env.setdefault("VITE_IBVAP_API_TOKEN", build_env["IBVAP_API_TOKEN"])
+    result = subprocess.run(
+        [npm, "run", "build"],
+        cwd=str(frontend_dir),
+        env=build_env,
+        capture_output=True,
+        text=True,
+        shell=(os.name == "nt"),
+    )
     if result.returncode == 0:
         print("[Launcher] Frontend bundle built successfully.")
         return True
@@ -119,7 +130,6 @@ def detect_hardware() -> str:
 
         providers = ort.get_available_providers()
         if "DmlExecutionProvider" in providers:
-            # Check if NVIDIA GPU exists
             with contextlib.suppress(Exception):
                 out = subprocess.check_output(
                     ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -174,15 +184,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     root = Path(__file__).resolve().parent
 
-    # Default private CIDR allowlist for local IP camera streaming (DroidCam, IP Webcam, RTSP)
-    os.environ.setdefault(
-        "IBVAP_MEDIA__SITE_CIDR_ALLOWLIST",
-        '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]',
-    )
-
     env_created = bootstrap_environment(root)
     if env_created:
         print("[Launcher] Initialized .env configuration from .env.example (local SQLite mode).")
+
+    # Load .env into os.environ so auth, credential encryption, and DB fallback see configured values
+    with contextlib.suppress(Exception):
+        from dotenv import load_dotenv
+
+        load_dotenv(root / ".env", override=False)
+
+    # Ensure sensible local runtime defaults if not provided in .env or environment
+    os.environ.setdefault("IBVAP_API_TOKEN", "ibvap-local-dev-token")
+    os.environ.setdefault("VITE_IBVAP_API_TOKEN", os.environ["IBVAP_API_TOKEN"])
+    os.environ.setdefault("IBVAP_CREDENTIAL_KEY", "ibvap-local-dev-credential-key-32b")
+    os.environ.setdefault("IBVAP_DB__ALLOW_SQLITE_FALLBACK", "1")
+    os.environ.setdefault(
+        "IBVAP_MEDIA__SITE_CIDR_ALLOWLIST",
+        '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"]',
+    )
 
     # Verify frontend dist and build automatically when possible.
     frontend_ready = ensure_frontend_bundle(root)

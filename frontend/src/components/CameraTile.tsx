@@ -220,6 +220,7 @@ export const CameraTile = memo(function CameraTile({
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: false,
     staleTime: 150,
+    notifyOnChangeProps: ["data"],
     retry: 1,
     enabled: pageVisible,
   });
@@ -647,7 +648,6 @@ export const CameraTile = memo(function CameraTile({
   return (
     <div
       data-testid={`live-player-${camera.id}`}
-      style={tileStyle}
       className={`tile group relative select-none transition-all duration-300 ${
         isSolo ? "ring-2 ring-slate-400 dark:ring-slate-300 shadow-2xl scale-[1.002]" : ""
       }`}
@@ -659,11 +659,11 @@ export const CameraTile = memo(function CameraTile({
       <TacticalVisionSVGDefs />
 
       {/* Refined Video Top Header */}
-      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between text-xs text-white z-20 pointer-events-none">
-        <div className="flex items-center gap-2 bg-black/70 border border-white/10 rounded-full px-3 py-1 backdrop-blur-md shadow-sm">
-          <span className={`h-2 w-2 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.8)] ${sourceUnavailable ? "bg-rose-400" : sourceReconnecting ? "bg-amber-400 animate-pulse" : "bg-emerald-400 animate-pulse"}`} />
+      <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between text-xs text-white z-20 pointer-events-none opacity-90 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-2 hud-badge pointer-events-auto">
+          <span className={`h-2 w-2 rounded-full ${sourceUnavailable ? "bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.8)]" : sourceReconnecting ? "bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(245,158,11,0.8)]" : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"}`} />
           <span className="font-semibold text-white text-[11px] tracking-tight">{camera.name}</span>
-          <span className="text-[10px] text-slate-300 font-mono font-medium">
+          <span className="text-[10px] text-slate-300 font-mono">
             [{runtimeLabel}]
           </span>
         </div>
@@ -674,7 +674,7 @@ export const CameraTile = memo(function CameraTile({
 
           {nightInfo?.is_night && (
             <div
-              className="flex items-center gap-1.5 bg-indigo-950/80 border border-indigo-500/40 rounded-full px-2.5 py-1 backdrop-blur-md text-[10px] font-mono text-indigo-200 shadow-sm"
+              className="flex items-center gap-1.5 hud-badge !border-indigo-500/40 !bg-indigo-950/80 text-[10px] font-mono text-indigo-200"
               title={nightTitle}
             >
               <MoonIcon className="w-3 h-3 text-indigo-300 animate-pulse" />
@@ -684,7 +684,7 @@ export const CameraTile = memo(function CameraTile({
 
           {observations?.night?.limitation && observations.night.limitation.includes("low visibility") && (
             <div
-              className="flex items-center gap-1.5 bg-amber-950/80 border border-amber-500/40 rounded-full px-2.5 py-1 backdrop-blur-md text-[10px] font-mono text-amber-200 shadow-sm"
+              className="flex items-center gap-1.5 hud-badge !border-amber-500/40 !bg-amber-950/80 text-[10px] font-mono text-amber-200"
               title={observations.night.limitation}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />
@@ -693,7 +693,7 @@ export const CameraTile = memo(function CameraTile({
           )}
 
           {targetCount > 0 && (
-            <div className="flex items-center gap-1.5 bg-black/70 border border-white/10 rounded-full px-2.5 py-1 backdrop-blur-md text-[11px] font-mono text-slate-200 shadow-sm">
+            <div className="flex items-center gap-1.5 hud-badge text-[10px] font-mono text-slate-200">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />
               <span>
                 {targetCount} {targetCount === 1 ? "Target" : "Targets"}
@@ -704,7 +704,7 @@ export const CameraTile = memo(function CameraTile({
           {onSolo && (
             <button
               onClick={handleSoloClick}
-              className="flex items-center justify-center h-6 w-6 rounded-full bg-black/60 hover:bg-black/90 border border-white/15 text-white/80 hover:text-white transition-all text-[11px] cursor-pointer"
+              className="flex items-center justify-center h-6.5 w-6.5 rounded-md bg-black/70 hover:bg-black/90 border border-white/15 text-white/80 hover:text-white transition-all text-[11px] cursor-pointer shadow-md"
               title={isSolo ? "Exit Theater Solo Mode" : "Expand to Theater Solo Mode"}
               aria-label={isSolo ? "Exit Theater Solo Mode" : "Expand to Theater Solo Mode"}
             >
@@ -730,8 +730,8 @@ export const CameraTile = memo(function CameraTile({
             <img
               ref={imgRef}
               src={streamUrl}
-              alt={camera.name}
-              className="w-full h-full object-contain block select-none transition-[filter] duration-200"
+              alt="" aria-label={camera.name}
+              className="w-full h-full object-contain block select-none transition-[filter] duration-200 text-transparent"
               style={getTacticalFilterStyle(visionMode)}
               decoding="async"
               draggable={false}
@@ -764,21 +764,21 @@ export const CameraTile = memo(function CameraTile({
 
           {/* Transient MJPEG retry indicator */}
           {retryingStream && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-3 py-1 rounded-full bg-black/85 border border-amber-400/50 text-amber-200 text-[10px] font-mono shadow-lg backdrop-blur-md whitespace-nowrap">
-              Retrying stream… attempt {errorCount}/{MJPEG_MAX_RETRIES}
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-3 py-1 rounded-md bg-black/90 border border-amber-500/50 text-amber-300 text-[10px] font-mono shadow-lg backdrop-blur-md whitespace-nowrap">
+              RETRYING STREAM [{errorCount}/{MJPEG_MAX_RETRIES}]
             </div>
           )}
 
           {/* Fence Drawing Status Banner */}
           {fenceDrawing && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-3 py-1 rounded-full bg-black/85 border border-amber-400/50 text-amber-200 text-[10px] font-mono shadow-lg backdrop-blur-md whitespace-nowrap">
+            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none px-3 py-1 rounded-md bg-black/90 border border-indigo-500/50 text-indigo-200 text-[10px] font-mono shadow-lg backdrop-blur-md whitespace-nowrap">
               {fencePoints.length === 0
                 ? "Click video to place Point 1"
                 : fencePoints.length === 1
-                ? "Point 1 set • Click Point 2 for Line Tripwire"
+                ? "Point 1 set | Click Point 2 for Line Tripwire"
                 : fencePoints.length === 2
-                ? "Line Tripwire ready • Click more points for Polygon • Click a point to delete"
-                : `Polygon Zone (${fencePoints.length} points) • Click points to add / delete • Save fence`}
+                ? "Line Tripwire ready | Click more points for Polygon | Click a point to delete"
+                : `Polygon Zone (${fencePoints.length} points) | Click points to add / delete | Save fence`}
             </div>
           )}
 
@@ -829,15 +829,28 @@ export const CameraTile = memo(function CameraTile({
               )}
 
               {fencePoints.length === 2 && (
-                <line
-                  x1={fencePoints[0][0] * 100}
-                  y1={fencePoints[0][1] * 100}
-                  x2={fencePoints[1][0] * 100}
-                  y2={fencePoints[1][1] * 100}
-                  stroke={fenceDrawing ? "#facc15" : "#a855f7"}
-                  strokeWidth="2.5"
-                  filter="url(#fence-line-glow)"
-                />
+                <g>
+                  <line
+                    x1={fencePoints[0][0] * 100}
+                    y1={fencePoints[0][1] * 100}
+                    x2={fencePoints[1][0] * 100}
+                    y2={fencePoints[1][1] * 100}
+                    stroke={fenceDrawing ? "#facc15" : "#a855f7"}
+                    strokeWidth="2.5"
+                    filter="url(#fence-line-glow)"
+                  />
+                  <text
+                    x={((fencePoints[0][0] + fencePoints[1][0]) / 2) * 100}
+                    y={((fencePoints[0][1] + fencePoints[1][1]) / 2) * 100 - 2}
+                    fill={fenceDrawing ? "#fef08a" : "#e9d5ff"}
+                    fontSize="2.2"
+                    fontWeight="700"
+                    textAnchor="middle"
+                    fontFamily="ui-monospace, Consolas, monospace"
+                  >
+                    TRIPWIRE LINE
+                  </text>
+                </g>
               )}
 
               {fencePoints.map(([x, y], idx) => (
@@ -845,10 +858,10 @@ export const CameraTile = memo(function CameraTile({
                   <circle
                     cx={x * 100}
                     cy={y * 100}
-                    r={fenceDrawing ? 3.5 : 2.5}
+                    r={fenceDrawing ? 3.2 : 2.2}
                     fill={idx === 0 && fenceDrawing ? "#22c55e" : fenceDrawing ? "#eab308" : "#c084fc"}
                     stroke="#000"
-                    strokeWidth="1"
+                    strokeWidth="0.8"
                     className={fenceDrawing ? "pointer-events-auto cursor-pointer" : ""}
                     onClick={
                       fenceDrawing && onRemoveFencePoint
@@ -859,6 +872,18 @@ export const CameraTile = memo(function CameraTile({
                         : undefined
                     }
                   />
+                  <text
+                    x={x * 100}
+                    y={y * 100 + 0.9}
+                    fill="#000000"
+                    fontSize="2.2"
+                    fontWeight="800"
+                    textAnchor="middle"
+                    fontFamily="ui-monospace, Consolas, monospace"
+                    className="pointer-events-none select-none"
+                  >
+                    {idx + 1}
+                  </text>
                 </g>
               ))}
             </svg>

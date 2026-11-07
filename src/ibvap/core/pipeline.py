@@ -84,10 +84,12 @@ class MiniPipeline:
         sample_stride: int = 1,
         max_face_size: int | None = None,
         skip_face_without_person: bool = False,
+        enable_fov_events: bool = False,
     ) -> None:
         self.camera_id = camera_id
         self.stream_epoch = stream_epoch
         self.detector_handle = detector_handle
+        self.enable_fov_events = enable_fov_events
         if detector is not None:
             self.detector: DetectorProvider | None = detector
         elif detector_handle is not None:
@@ -562,7 +564,7 @@ class MiniPipeline:
                 self._track_outside_count[trk.track_id] = 0
                 last_alert = self._last_intrusion_alert_time.get((zone_id, trk.track_id), 0.0)
                 # Debounce: alert once per continuous presence, or after at least 4s cooldown
-                if trk.track_id not in self.alerted_tracks and (now_ts - last_alert) >= 4.0:
+                if trk.track_id not in self.alerted_tracks and (now_ts - last_alert) >= 8.0:
                     self.alerted_tracks.add(trk.track_id)
                     self._last_intrusion_alert_time[(zone_id, trk.track_id)] = now_ts
                     dedup = f"{camera_id}:{zone_id}:{trk.track_id}:{stream_epoch}:{int(now_ts // 10)}"
@@ -680,32 +682,33 @@ class MiniPipeline:
             if primary_event is None:
                 primary_event = ev_end
 
-        # 2. Target entered FOV (only for tracks with confidence >= 0.48 not already reported as zone intrusions)
-        for entry in new_entries:
-            if (
-                entry.class_name in intrusion_classes
-                and entry.track_id not in intrusion_track_ids
-                and entry.confidence >= 0.48
-            ):
-                dedup = f"{camera_id}:entered:{entry.track_id}:{stream_epoch}"
-                ev_enter = {
-                    "camera_id": camera_id,
-                    "stream_epoch": stream_epoch,
-                    "event_type": "target_entered",
-                    "zone_id": zone_id,
-                    "track_id": entry.track_id,
-                    "bbox_norm": entry.bbox_norm,
-                    "confidence": entry.confidence,
-                    "explanation": {
-                        "rule": "target_entered_fov",
-                        "zone": zone_name,
-                        "observed": f"{entry.class_name} #{entry.track_id} entered camera field of view",
-                        "threshold": "fov_entry",
-                    },
-                    "model_id": model_id,
-                }
-                transactional_write(ev_enter, dedup_key=dedup)
-                self.events_created += 1
+        # 2. Target entered FOV (only when explicitly enabled; disabled by default to prevent log spam)
+        if self.enable_fov_events:
+            for entry in new_entries:
+                if (
+                    entry.class_name in intrusion_classes
+                    and entry.track_id not in intrusion_track_ids
+                    and entry.confidence >= 0.48
+                ):
+                    dedup = f"{camera_id}:entered:{entry.track_id}:{stream_epoch}"
+                    ev_enter = {
+                        "camera_id": camera_id,
+                        "stream_epoch": stream_epoch,
+                        "event_type": "target_entered",
+                        "zone_id": zone_id,
+                        "track_id": entry.track_id,
+                        "bbox_norm": entry.bbox_norm,
+                        "confidence": entry.confidence,
+                        "explanation": {
+                            "rule": "target_entered_fov",
+                            "zone": zone_name,
+                            "observed": f"{entry.class_name} #{entry.track_id} entered camera field of view",
+                            "threshold": "fov_entry",
+                        },
+                        "model_id": model_id,
+                    }
+                    transactional_write(ev_enter, dedup_key=dedup)
+                    self.events_created += 1
         # 3. Watchlist Suspect Identified (tactical alert when track is locked
         # to a suspect or a critical target is identified)
         for trk in tracks:
@@ -781,31 +784,32 @@ class MiniPipeline:
                     if primary_event is None:
                         primary_event = ev_end
 
-            # FOV exit for confirmed tracks
-            last_fov_exit = self._last_exit_alert_time.get((-1, term.track_id), 0.0)
-            if term.hits >= 3 and term.confidence >= 0.45 and (now_ts - last_fov_exit) >= 3.0:
-                self._last_exit_alert_time[(-1, term.track_id)] = now_ts
-                dedup = f"{camera_id}:exited:{term.track_id}:{stream_epoch}"
-                ev_exit = {
-                    "camera_id": camera_id,
-                    "stream_epoch": stream_epoch,
-                    "event_type": "target_exited",
-                    "zone_id": zone_id,
-                    "track_id": term.track_id,
-                    "bbox_norm": term.bbox_norm,
-                    "confidence": term.confidence,
-                    "explanation": {
-                        "rule": "target_exited_fov",
-                        "zone": zone_name,
-                        "observed": f"{term.class_name} #{term.track_id} exited camera field of view",
-                        "threshold": "fov_exit",
-                    },
-                    "model_id": model_id,
-                }
-                transactional_write(ev_exit, dedup_key=dedup)
-                self.events_created += 1
-                if primary_event is None:
-                    primary_event = ev_exit
+            # FOV exit for confirmed tracks (only when explicitly enabled)
+            if self.enable_fov_events:
+                last_fov_exit = self._last_exit_alert_time.get((-1, term.track_id), 0.0)
+                if term.hits >= 3 and term.confidence >= 0.45 and (now_ts - last_fov_exit) >= 3.0:
+                    self._last_exit_alert_time[(-1, term.track_id)] = now_ts
+                    dedup = f"{camera_id}:exited:{term.track_id}:{stream_epoch}"
+                    ev_exit = {
+                        "camera_id": camera_id,
+                        "stream_epoch": stream_epoch,
+                        "event_type": "target_exited",
+                        "zone_id": zone_id,
+                        "track_id": term.track_id,
+                        "bbox_norm": term.bbox_norm,
+                        "confidence": term.confidence,
+                        "explanation": {
+                            "rule": "target_exited_fov",
+                            "zone": zone_name,
+                            "observed": f"{term.class_name} #{term.track_id} exited camera field of view",
+                            "threshold": "fov_exit",
+                        },
+                        "model_id": model_id,
+                    }
+                    transactional_write(ev_exit, dedup_key=dedup)
+                    self.events_created += 1
+                    if primary_event is None:
+                        primary_event = ev_exit
 
             self.prune_track(term.track_id)
 

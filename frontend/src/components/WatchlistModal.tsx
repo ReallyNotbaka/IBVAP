@@ -345,7 +345,7 @@ export function WatchlistModal({ isOpen, onClose, initialTarget }: WatchlistModa
             </div>
             <div>
               <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-                Unified Watchlist & Hotlist Registry
+                Biometric Watchlist & Hotlist Registry
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Register persons of interest and vehicle license plate hotlists across all camera streams

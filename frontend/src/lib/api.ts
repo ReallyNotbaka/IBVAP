@@ -66,7 +66,7 @@ export type TestResult = {
   reason_code?: string;
   safe_message: string;
   stages: TestStage[];
-  probe?: { width: number; height: number; fps: number | null; codec: string };
+  probe?: { width: number; height: number; fps: number | null; codec: string; preview_b64?: string | null };
 };
 
 export type ThreatLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";

@@ -91,7 +91,7 @@ export const EvidenceModal = memo(function EvidenceModal({
               </span>
             </div>
             <p className="text-xs text-slate-400 font-mono">
-              Event ID: <span className="text-slate-200">{event.id}</span> • {dtgTime}
+              Event ID: <span className="text-slate-200">{event.id}</span> | {dtgTime}
             </p>
           </div>
 
@@ -159,7 +159,7 @@ export const EvidenceModal = memo(function EvidenceModal({
                 className="max-h-[440px] max-w-full rounded-xl object-contain shadow-lg"
               />
               <div className="absolute bottom-4 left-4 bg-black/80 backdrop-blur-md px-3 py-1 rounded-md text-[11px] font-mono text-slate-300 border border-white/10 pointer-events-none">
-                {cameraName || `Camera ${event.camera_id.slice(0, 8)}`} • {activeView.toUpperCase()}
+                {cameraName || `Camera ${event.camera_id.slice(0, 8)}`} | {activeView.toUpperCase()}
               </div>
             </div>
           ) : (
@@ -219,7 +219,7 @@ export const EvidenceModal = memo(function EvidenceModal({
               </span>
             ) : null}
             <span>{event.explanation.observed || event.explanation.rule || "Perimeter event observed"}</span>
-            {event.zone_id && <span className="text-slate-500"> • Zone: {event.zone_id}</span>}
+            {event.zone_id && <span className="text-slate-500"> | Zone: {event.zone_id}</span>}
           </div>
         )}
 

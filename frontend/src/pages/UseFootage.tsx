@@ -2,14 +2,14 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { createCamera, finalizeUpload, uploadFootage } from "../lib/api";
-import { VideoIcon, UploadIcon } from "../components/Icons";
+import { UploadIcon } from "../components/Icons";
 
 export function UseFootage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [customPath, setCustomPath] = useState("");
-  const [status, setStatus] = useState("Choose a video file or enter a file path.");
+  const [status, setStatus] = useState("Select a video file to analyze.");
   const [statusKind, setStatusKind] = useState<"info" | "error">("info");
   const [isBusy, setIsBusy] = useState(false);
 
@@ -42,9 +42,7 @@ export function UseFootage() {
           site_cidr_allowlist: [],
           temporary: true,
         });
-        setStatus("Refreshing camera list...");
         await queryClient.invalidateQueries({ queryKey: ["cameras"] });
-        setStatus(`Footage ready: ${name}`);
         navigate("/");
       } catch (error) {
         const message = error instanceof Error && error.message ? error.message : "Unable to use the selected footage.";
@@ -83,9 +81,7 @@ export function UseFootage() {
         temporary: true,
       });
 
-      setStatus("Refreshing camera list...");
       await queryClient.invalidateQueries({ queryKey: ["cameras"] });
-      setStatus(`Footage ready: ${file!.name}`);
       navigate("/");
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : "Unable to use the selected footage.";
@@ -97,28 +93,16 @@ export function UseFootage() {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center min-h-[calc(100vh-8rem)] py-8 px-4 w-full">
-      <div className="w-full max-w-xl rounded-2xl border border-slate-200/80 dark:border-white/10 bg-white dark:bg-slate-900/95 backdrop-blur-xl p-8 shadow-xl transition-all">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 shadow-sm">
-            <VideoIcon className="w-5 h-5 text-slate-700 dark:text-slate-300" />
-          </div>
-          <div>
-            <h1 className="text-[20px] font-bold tracking-tight text-slate-900 dark:text-slate-100">
-              Use video footage
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Analyze recorded video clip as a live camera source
-            </p>
-          </div>
-        </div>
-
-        <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          Upload a local video clip or enter its local file path to process through the vision pipeline.
+    <div className="flex-1 flex flex-col items-center justify-center min-h-[calc(100vh-5rem)] p-4 w-full">
+      <div className="liquid-glass-window w-full max-w-md p-7">
+        <h1 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+          Use video footage
+        </h1>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          Upload a recorded video clip or specify a local file path.
         </p>
 
-        {/* Option 1: File Browse */}
-        <label className="mt-5 block rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-950/60 p-5 text-sm text-slate-600 dark:text-slate-300 cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+        <label className="mt-4 block liquid-glass-input border-dashed p-4 text-xs text-slate-600 dark:text-slate-300 cursor-pointer hover:border-blue-400 transition-colors">
           <input
             type="file"
             accept=".mp4,.mov,.avi,.mkv,.webm,video/*"
@@ -130,68 +114,64 @@ export function UseFootage() {
               setStatus("Ready to upload.");
             }}
           />
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
               <UploadIcon className="w-4 h-4 text-slate-400 flex-shrink-0" />
-              <span className="truncate">{file ? file.name : "Choose a video file"}</span>
+              <span className="truncate">{file ? file.name : "Choose a video file (MP4, MOV, MKV)"}</span>
             </div>
-            <span className="rounded-full bg-slate-200 dark:bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-700 dark:text-slate-300 flex-shrink-0">
+            <span className="liquid-glass-pill !h-7 !px-3 text-[11px] font-medium flex-shrink-0">
               Browse
             </span>
           </div>
         </label>
 
-        {/* Divider */}
-        <div className="my-4 flex items-center gap-3">
-          <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
-          <span className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">OR ENTER FILE PATH</span>
-          <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+        <div className="my-3.5 flex items-center gap-3">
+          <div className="flex-1 border-t border-slate-100 dark:border-white/10" />
+          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-medium">or local path</span>
+          <div className="flex-1 border-t border-slate-100 dark:border-white/10" />
         </div>
 
-        {/* Option 2: Path text input */}
-        <div>
-          <input
-            type="text"
-            placeholder="C:\Users\...\video.mp4"
-            value={customPath}
-            onChange={(e) => {
-              setCustomPath(e.target.value);
-              if (e.target.value) setFile(null);
-              setStatusKind("info");
-              setStatus("Ready to configure footage.");
-            }}
-            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3.5 py-2.5 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-          />
-        </div>
-
-        <div className="mt-5 flex gap-3">
-          <button
-            type="button"
-            onClick={handleUseFootage}
-            disabled={(!file && !customPath.trim()) || isBusy}
-            className="primary-button flex-1 disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
-          >
-            {isBusy ? "Processing..." : statusKind === "error" ? "Try again" : "Use footage"}
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate("/")}
-            className="secondary-button border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
-          >
-            Cancel
-          </button>
-        </div>
+        <input
+          type="text"
+          placeholder="path/to/footage.mp4"
+          value={customPath}
+          onChange={(e) => {
+            setCustomPath(e.target.value);
+            if (e.target.value) setFile(null);
+            setStatusKind("info");
+            setStatus("Ready to configure footage.");
+          }}
+          className="w-full liquid-glass-input px-3.5 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none"
+        />
 
         <div
           role="status"
           aria-live="polite"
-          className={`mt-5 rounded-xl border p-3 text-xs font-mono ${
+          className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
             statusKind === "error"
               ? "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300"
-              : "border-slate-200/80 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60 text-slate-600 dark:text-slate-400"
+              : "border-slate-100 bg-slate-50 text-slate-500 dark:border-white/5 dark:bg-slate-950 dark:text-slate-400"
           }`}
         >
           {status}
+        </div>
+
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-white/10 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            className="ghost-button"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleUseFootage}
+            disabled={(!file && !customPath.trim()) || isBusy}
+            className="liquid-glass-cta disabled:opacity-40"
+          >
+            {isBusy ? "Processing..." : statusKind === "error" ? "Try again" : "Use footage"}
+          </button>
         </div>
       </div>
     </div>

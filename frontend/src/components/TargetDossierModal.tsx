@@ -133,14 +133,14 @@ export const TargetDossierModal = memo(function TargetDossierModal({
                         </span>
                       </div>
                       <div className="text-xs text-slate-400 font-mono mt-0.5">
-                        Class: {activeDossier.subject_type.toUpperCase()} • Cameras Visited:{" "}
+                        Class: {activeDossier.subject_type.toUpperCase()} | Cameras Visited:{" "}
                         {activeDossier.cameras_visited.join(" → ")}
                       </div>
                     </div>
                   </div>
 
                   <span
-                    className={`px-2.5 py-1 rounded-full font-mono text-xs font-bold border uppercase ${
+                    className={`px-2.5 py-1 rounded-md font-mono text-xs font-bold border uppercase ${
                       activeDossier.threat_level === "CRITICAL"
                         ? "bg-rose-950/60 border-rose-500 text-rose-300"
                         : "bg-slate-800 border-white/20 text-slate-300"

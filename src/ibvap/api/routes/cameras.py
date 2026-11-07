@@ -310,14 +310,14 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
     stage("Connecting", "ok")
 
     # Stage 5: Authenticating
-    stage("Authenticating", "ok")
+    stage("Authenticating", "running")
 
     # Stage 6: Inspecting stream
-    stage("Inspecting stream", "running")
     try:
         probe, frames = probe_url(
             req.endpoint, timeout=3.0, max_frames=2, policy=policy, auth=(req.username, req.password)
         )
+        stage("Authenticating", "ok")
         stage("Inspecting stream", "ok")
         stage("Decoding first frame", "ok")
         stage("Measuring stability", "ok")
@@ -337,11 +337,22 @@ def _run_test_stages(req: CameraTestRequest) -> CameraTestResponse:
                 "warnings": probe.warnings,
                 "frames_decoded": len(frames),
                 "first_frame_pts": frames[0].pts if frames else None,
+                "preview_b64": frames[0].preview_b64 if frames else None,
                 "redacted_endpoint": redact_url(req.endpoint),
                 "resolved_ips": ips,
             },
         )
     except ProbeError as e:
+        if e.code == "auth_failed":
+            stage("Authenticating", "failed")
+            return CameraTestResponse(
+                result="auth_failed",
+                reason_code="auth_failed",
+                safe_message=str(e),
+                stages=stages,
+                probe=None,
+            )
+        stage("Authenticating", "ok")
         stage("Inspecting stream", "failed")
         code_map: dict[str, Literal["unreachable", "unsupported_media", "error"]] = {
             "no_video": "unsupported_media",
@@ -594,7 +605,13 @@ async def set_camera_fence(
         _CAMERAS[camera_id]["fence"] = None
         pipeline = _ACTIVE_PIPELINES.get(camera_id)
         if pipeline is not None:
-            pipeline.zone = DEFAULT_ZONE
+            pipeline.zone = Zone(
+                id=DEFAULT_ZONE.id,
+                name=DEFAULT_ZONE.name,
+                polygon=DEFAULT_ZONE.polygon,
+                enabled=False,
+                fence_type=DEFAULT_ZONE.fence_type,
+            )
             if hasattr(pipeline, "_active_line_intruders"):
                 pipeline._active_line_intruders.clear()
         return {k: v for k, v in _CAMERAS[camera_id].items() if not k.startswith("_")}
@@ -655,7 +672,13 @@ async def delete_camera_fence(camera_id: str, _auth: bool = Depends(require_api_
     _CAMERAS[camera_id]["fence"] = None
     pipeline = _ACTIVE_PIPELINES.get(camera_id)
     if pipeline is not None:
-        pipeline.zone = DEFAULT_ZONE
+        pipeline.zone = Zone(
+            id=DEFAULT_ZONE.id,
+            name=DEFAULT_ZONE.name,
+            polygon=DEFAULT_ZONE.polygon,
+            enabled=False,
+            fence_type=DEFAULT_ZONE.fence_type,
+        )
         if hasattr(pipeline, "_active_line_intruders"):
             pipeline._active_line_intruders.clear()
     try:

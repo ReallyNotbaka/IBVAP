@@ -65,7 +65,7 @@ export const MilitarySitrepModal = memo(function MilitarySitrepModal({
               </span>
             </div>
             <p className="text-xs text-slate-400 font-mono mt-0.5">
-              STANAG Automated Incident Intelligence • DTG: {sitrep?.dtg || "--"}
+              STANAG Automated Incident Intelligence | DTG: {sitrep?.dtg || "--"}
             </p>
           </div>
 

@@ -301,7 +301,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
         skip_face_without_person=True,
     )
     saved_fence = cam.get("fence")
-    if isinstance(saved_fence, dict) and isinstance(saved_fence.get("polygon"), list):
+    if isinstance(saved_fence, dict) and isinstance(saved_fence.get("polygon"), list) and saved_fence["polygon"]:
         f_type = str(saved_fence.get("fence_type", "line" if len(saved_fence["polygon"]) == 2 else "polygon"))
         pipeline.zone = Zone(
             id=f"zone-{camera_id[:8]}",
@@ -309,6 +309,14 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             polygon=saved_fence["polygon"],
             enabled=bool(saved_fence.get("enabled", True)),
             fence_type=f_type,
+        )
+    else:
+        pipeline.zone = Zone(
+            id=DEFAULT_ZONE.id,
+            name=DEFAULT_ZONE.name,
+            polygon=DEFAULT_ZONE.polygon,
+            enabled=False,
+            fence_type=DEFAULT_ZONE.fence_type,
         )
     _ACTIVE_PIPELINES[camera_id] = pipeline
 
@@ -388,6 +396,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
     last_night_result = None
     last_night_time = 0.0
+    night_thumb_buf = np.empty((180, 320, 3), dtype=np.uint8)
 
     def analyze() -> None:
         nonlocal analysis_frame, analysis_fps_counter, last_analysis_fps, last_analysis_fps_calc
@@ -602,8 +611,8 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
 
                 now_ts = time.time()
                 if last_night_result is None or (now_ts - last_night_time) >= 0.5:
-                    thumb = cv2.resize(current, (320, 180), interpolation=cv2.INTER_NEAREST)
-                    last_night_result = night_detector.update(thumb, timestamp=now_ts)
+                    cv2.resize(current, (320, 180), dst=night_thumb_buf, interpolation=cv2.INTER_NEAREST)
+                    last_night_result = night_detector.update(night_thumb_buf, timestamp=now_ts)
                     last_night_time = now_ts
                 night = last_night_result
 
@@ -880,7 +889,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     path_lower = parsed_endpoint.path.lower().rstrip("/")
     is_mjpeg_stream = (
         path_lower in {"/video", "/videofeed", "/mjpegfeed"}
-        or parsed_endpoint.port in (4747, 8080)
+        or parsed_endpoint.port in (4747, 8080, 8000, 8081, 8082, 8008, 8888)
         or cam.get("source_type") == "smartphone_ip_webcam"
         or cam.get("protocol") == "mjpeg"
         or (parsed_endpoint.scheme in ("http", "mjpeg") and path_lower.endswith((".mjpg", ".mjpeg")))
@@ -909,7 +918,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
     if is_mjpeg_stream:
         open_kwargs["format"] = "mpjpeg"
 
-    reconnect_delay = 1.0
+    reconnect_delay = 0.3
     decode_errors = 0
     reconnect_count = 0
     fps_window_start = time.perf_counter()
@@ -932,7 +941,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             if stop.is_set() or (sm and sm.is_disabled()) or cam.get("desired_state") == "DISABLED":
                 break
             cam["observed_state"] = "STREAMING"
-            reconnect_delay = 1.0
+            reconnect_delay = 0.3
 
             for packet in container.demux(stream):
                 if stop.is_set():
@@ -947,16 +956,50 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                     clean_jpeg = packet_bytes[soi_idx : eoi_idx + 2]
                     if len(clean_jpeg) > 100:
                         is_valid_jpeg = True
+                        with condition:
+                            _FRAMES[camera_id] = clean_jpeg
+                            _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
+                            condition.notify_all()
                         if _STREAM_CLIENT_COUNT.get(camera_id, 0) > 0:
-                            with condition:
-                                _FRAMES[camera_id] = clean_jpeg
-                                _FRAME_VERSIONS[camera_id] = _FRAME_VERSIONS.get(camera_id, 0) + 1
-                                condition.notify_all()
                             _notify_stream_subscribers(camera_id)
+
+                # Fast-path for MJPEG: each packet is an independent JPEG keyframe.
+                # If the analysis thread is still busy with the previous frame, skip
+                # redundant CPU decode + YUV->BGR24 conversion so the socket stays drained
+                # and the browser MJPEG feed runs at full native 30-60 FPS with zero lag.
+                if is_valid_jpeg and frame_number > 0:
+                    with analysis_lock:
+                        analysis_busy = analysis_frame is not None
+                    if analysis_busy:
+                        analysis_overwrites += 1
+                        frame_number += 1
+                        fps_window_count += 1
+                        now_perf = time.perf_counter()
+                        if now_perf - fps_window_start >= 1.0:
+                            measured_source_fps = round(fps_window_count / (now_perf - fps_window_start), 1)
+                            fps_window_count = 0
+                            fps_window_start = now_perf
+                        samples = _HEALTH.setdefault(camera_id, [])
+                        samples.append(
+                            {
+                                "_ts": time.time(),
+                                "last_frame_age_ms": 0,
+                                "source_fps": measured_source_fps,
+                                "analysis_fps": round(last_analysis_fps or measured_source_fps, 1),
+                                "inference_ms": round(last_inference_ms, 1),
+                                "queue_drops": analysis_overwrites,
+                                "ocr_timeouts": ocr_timeouts,
+                                "decode_errors": decode_errors,
+                                "reconnect_count": reconnect_count,
+                                "stream_epoch": cam["stream_epoch"],
+                            }
+                        )
+                        del samples[:-10]
+                        continue
 
                 try:
                     frames = packet.decode()
-                except (av.error.InvalidDataError, av.error.CorruptDataError):  # pyright: ignore[reportAttributeAccessIssue] # av.error exists at runtime; missing from pyright stubs
+                except (av.error.InvalidDataError, av.error.CorruptDataError):  # pyright: ignore[reportAttributeAccessIssue]
                     decode_errors += 1
                     continue
                 except Exception:
@@ -970,7 +1013,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
                     h, w = image.shape[:2]
 
                     if not is_valid_jpeg:
-                        if _STREAM_CLIENT_COUNT.get(camera_id, 0) > 0:
+                        if _STREAM_CLIENT_COUNT.get(camera_id, 0) > 0 or camera_id not in _FRAMES:
                             preview = (
                                 cv2.resize(image, (1280, int(h * 1280 / w)), interpolation=cv2.INTER_LINEAR)
                                 if w > 1280
@@ -1033,7 +1076,7 @@ def _camera_worker(camera_id: str, stop: threading.Event) -> None:
             cam["observed_state"] = "RECONNECTING"
             if stop.wait(reconnect_delay):
                 break
-            reconnect_delay = min(reconnect_delay * 1.5, 5.0)
+            reconnect_delay = min(reconnect_delay * 1.5, 3.0)
         finally:
             if container is not None:
                 with contextlib.suppress(Exception):

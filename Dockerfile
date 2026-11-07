@@ -4,6 +4,17 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
+# -- frontend build
+FROM node:22-bookworm-slim AS frontend-build
+WORKDIR /frontend
+COPY --link frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+COPY --link frontend/ ./
+ARG VITE_IBVAP_API_TOKEN=ibvap-local-dev-token
+ENV VITE_IBVAP_API_TOKEN=${VITE_IBVAP_API_TOKEN}
+RUN npm run build
+
 # -- deps (cached unless manifests change)
 FROM base AS deps
 COPY --link pyproject.toml uv.lock ./
@@ -22,14 +33,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # -- runtime (cpu)
 FROM python:3.12-slim-bookworm AS runtime
-RUN useradd -m -u 10001 ibvap && mkdir -p /app/data/logs /app/data/frames && chown -R ibvap:ibvap /app
+RUN useradd -m -u 10001 ibvap && mkdir -p /app/data/logs /app/data/frames /app/data/evidence /app/data/uploads /app/data/quarantine && chown -R ibvap:ibvap /app
 WORKDIR /app
 COPY --link --from=build /app/.venv /app/.venv
 COPY --link --from=build /app/src /app/src
 COPY --link --from=build /app/migrations /app/migrations
 COPY --link --from=build /app/alembic.ini /app/alembic.ini
 COPY --link --from=build /app/config /app/config
-# frontend will be built separately and copied in prod
+COPY --link models /app/models
+COPY --link --from=frontend-build /frontend/dist /app/frontend/dist
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER ibvap
 EXPOSE 8000
