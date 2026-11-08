@@ -30,7 +30,9 @@ def _url() -> str:
         url = env_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
         return url.replace("sqlite+aiosqlite://", "sqlite://")
     main_url = str(config.get_main_option("sqlalchemy.url") or "")
-    return main_url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace("sqlite+aiosqlite://", "sqlite://")
+    return main_url.replace("postgresql+asyncpg://", "postgresql+psycopg://").replace(
+        "sqlite+aiosqlite://", "sqlite://"
+    )
 
 
 def run_migrations_offline() -> None:

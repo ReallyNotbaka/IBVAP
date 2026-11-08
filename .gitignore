@@ -40,6 +40,7 @@ server*.log
 frontend/ui-inspection-output/
 frontend/scripts/
 docs/superpowers/
+*ARGON*
 
 # Secrets
 config/local.yaml
